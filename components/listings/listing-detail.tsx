@@ -6,12 +6,23 @@ import { useRouter } from "next/navigation"
 import { ArrowLeft, Loader2, Save, Trash2 } from "lucide-react"
 import { ImageUploader } from "@/components/listings/image-uploader"
 import { ListingEditorForm } from "@/components/listings/listing-editor-form"
+import { OneClickPublishBar } from "@/components/listings/one-click-publish-bar"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useAuth } from "@/components/auth/auth-provider"
 import { fetchListing, persistListing, removeListing } from "@/lib/listings/repository"
-import { getPublishTargets, listingIsReadyToPublish } from "@/lib/listings/publish"
+import { listingIsReadyToPublish } from "@/lib/listings/publish"
 import type { Listing } from "@/lib/types"
 import { cn } from "@/lib/utils"
+
+function normalizeListing(row: Listing): Listing {
+  return {
+    ...row,
+    fieldConfidence: row.fieldConfidence ?? {},
+    specifics: row.specifics ?? {},
+    keywords: row.keywords ?? [],
+    targetMarketplaces: row.targetMarketplaces ?? [],
+  }
+}
 
 export function ListingDetail({ listingId }: { listingId: string }) {
   const { user } = useAuth()
@@ -31,7 +42,7 @@ export function ListingDetail({ listingId }: { listingId: string }) {
         if (!row || (user && row.userId !== user.id)) {
           setListing(null)
         } else {
-          setListing(row)
+          setListing(normalizeListing(row))
         }
       } finally {
         if (mounted) setLoading(false)
@@ -58,7 +69,7 @@ export function ListingDetail({ listingId }: { listingId: string }) {
         updatedAt: new Date().toISOString(),
       }
       const saved = await persistListing(next)
-      setListing(saved)
+      setListing(normalizeListing(saved))
       setMessage("Listing saved.")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed")
@@ -89,8 +100,6 @@ export function ListingDetail({ listingId }: { listingId: string }) {
     )
   }
 
-  const targets = getPublishTargets(listing)
-
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -108,6 +117,9 @@ export function ListingDetail({ listingId }: { listingId: string }) {
           <p className="mt-1 text-sm text-muted-foreground">
             Status: {listing.status}
             {listing.aiGenerated ? " · AI generated" : ""}
+            {listing.analysisMeta
+              ? ` · ${listing.analysisMeta.imagesAnalyzed} photos analyzed`
+              : ""}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -140,37 +152,7 @@ export function ListingDetail({ listingId }: { listingId: string }) {
       />
 
       <ListingEditorForm listing={listing} onChange={setListing} disabled={saving} />
-
-      <section className="rounded-2xl border border-border bg-card/70 p-5">
-        <h2 className="font-display text-lg font-semibold">Marketplace publish</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Architecture is ready. Connect adapters in a later phase to push this listing live.
-        </p>
-        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {targets.map((target) => (
-            <div
-              key={target.id}
-              className="flex items-center justify-between rounded-xl border border-border px-3 py-2.5"
-            >
-              <div className="flex items-center gap-2">
-                <span
-                  className="h-2 w-2 rounded-full"
-                  style={{ backgroundColor: target.color }}
-                />
-                <span className="text-sm font-medium">{target.name}</span>
-              </div>
-              <button
-                type="button"
-                disabled
-                className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground"
-                title="Coming soon"
-              >
-                Publish
-              </button>
-            </div>
-          ))}
-        </div>
-      </section>
+      <OneClickPublishBar listing={listing} disabled={saving} />
     </div>
   )
 }

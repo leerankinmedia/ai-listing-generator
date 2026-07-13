@@ -96,7 +96,7 @@ export function DashboardOverview() {
             {firstName}&apos;s workspace
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            AI listing generator is live
+            Production AI listing engine is live
             {isDemo ? " · running in demo auth mode" : ""}.
           </p>
         </div>

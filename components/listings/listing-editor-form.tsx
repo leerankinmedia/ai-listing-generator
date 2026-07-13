@@ -1,11 +1,13 @@
 "use client"
 
 import { useMemo } from "react"
+import { ConfidenceMeter } from "@/components/listings/confidence-meter"
+import { CompsPricingPanel } from "@/components/listings/comps-pricing-panel"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { MARKETPLACES } from "@/lib/marketplaces"
-import type { Listing, MarketplaceId } from "@/lib/types"
+import type { DetectedFieldKey, Listing, MarketplaceId } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 interface ListingEditorFormProps {
@@ -22,6 +24,26 @@ const CONDITIONS = [
   "Fair",
   "Poor",
 ]
+
+function FieldHeader({
+  label,
+  htmlFor,
+  fieldKey,
+  listing,
+}: {
+  label: string
+  htmlFor: string
+  fieldKey: DetectedFieldKey
+  listing: Listing
+}) {
+  const conf = listing.fieldConfidence?.[fieldKey]
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <Label htmlFor={htmlFor}>{label}</Label>
+      <ConfidenceMeter confidence={conf?.confidence} />
+    </div>
+  )
+}
 
 export function ListingEditorForm({
   listing,
@@ -41,6 +63,17 @@ export function ListingEditorForm({
     patch({ specifics: { ...listing.specifics, ...partial } })
   }
 
+  function patchFieldValue(fieldKey: DetectedFieldKey, value: string) {
+    const prev = listing.fieldConfidence?.[fieldKey]
+    if (!prev) return
+    patch({
+      fieldConfidence: {
+        ...listing.fieldConfidence,
+        [fieldKey]: { ...prev, value },
+      },
+    })
+  }
+
   function toggleMarketplace(id: MarketplaceId) {
     const exists = listing.targetMarketplaces.includes(id)
     patch({
@@ -56,67 +89,104 @@ export function ListingEditorForm({
         <div>
           <h2 className="font-display text-lg font-semibold">Listing details</h2>
           <p className="text-sm text-muted-foreground">
-            Edit anything before saving. Fields are ready for future marketplace publish.
+            Every field is editable. Confidence scores reflect Vision certainty.
           </p>
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="title">SEO title</Label>
+          <FieldHeader
+            label="SEO title"
+            htmlFor="title"
+            fieldKey="title"
+            listing={listing}
+          />
           <Input
             id="title"
             value={listing.title}
             disabled={disabled}
             maxLength={120}
-            onChange={(e) => patch({ title: e.target.value })}
+            onChange={(e) => {
+              patch({ title: e.target.value })
+              patchFieldValue("title", e.target.value)
+            }}
             placeholder="Brand + item + key attributes"
           />
-          <p className="text-xs text-muted-foreground">{listing.title.length}/120</p>
+          <p className="text-xs text-muted-foreground">
+            {listing.title.length}/120
+            {listing.fieldConfidence?.title?.rationale
+              ? ` · ${listing.fieldConfidence.title.rationale}`
+              : ""}
+          </p>
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="description">Description</Label>
+          <FieldHeader
+            label="Description"
+            htmlFor="description"
+            fieldKey="description"
+            listing={listing}
+          />
           <Textarea
             id="description"
             value={listing.description}
             disabled={disabled}
             rows={10}
-            onChange={(e) => patch({ description: e.target.value })}
-            placeholder="Full marketplace-ready description"
+            onChange={(e) => {
+              patch({ description: e.target.value })
+              patchFieldValue("description", e.target.value)
+            }}
+            placeholder="Professional marketplace description"
             className="min-h-[200px]"
           />
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label htmlFor="price">Suggested price (USD)</Label>
-            <Input
-              id="price"
-              type="number"
-              min={0}
-              step="0.01"
-              value={listing.price || ""}
-              disabled={disabled}
-              onChange={(e) => patch({ price: Number(e.target.value) || 0 })}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="category">Category</Label>
-            <Input
-              id="category"
-              value={listing.specifics.category ?? ""}
-              disabled={disabled}
-              onChange={(e) => patchSpecifics({ category: e.target.value })}
-              placeholder="Men > Outerwear > Jackets"
-            />
-          </div>
+        <div className="space-y-2">
+          <FieldHeader
+            label="Category"
+            htmlFor="category"
+            fieldKey="category"
+            listing={listing}
+          />
+          <Input
+            id="category"
+            value={listing.specifics.category ?? ""}
+            disabled={disabled}
+            onChange={(e) => {
+              patchSpecifics({ category: e.target.value })
+              patchFieldValue("category", e.target.value)
+            }}
+            placeholder="Men > Outerwear > Jackets"
+          />
         </div>
       </section>
 
+      <CompsPricingPanel
+        comps={listing.comps}
+        price={listing.price}
+        disabled={disabled}
+        onPriceChange={(price) => {
+          patch({
+            price,
+            fieldConfidence: {
+              ...listing.fieldConfidence,
+              price: {
+                value: String(price),
+                confidence:
+                  listing.fieldConfidence?.price?.confidence ??
+                  listing.comps?.confidence ??
+                  1,
+                rationale: listing.fieldConfidence?.price?.rationale,
+              },
+            },
+          })
+        }}
+      />
+
       <section className="space-y-4">
         <div>
-          <h2 className="font-display text-lg font-semibold">Item specifics</h2>
+          <h2 className="font-display text-lg font-semibold">Detected attributes</h2>
           <p className="text-sm text-muted-foreground">
-            Structured attributes mapped for eBay-style and fashion marketplaces.
+            Vision detections across every uploaded photo, with confidence per field.
           </p>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -127,25 +197,49 @@ export function ListingEditorForm({
               ["color", "Color"],
               ["material", "Material"],
               ["style", "Style"],
+              ["pattern", "Pattern"],
+              ["gender", "Gender"],
             ] as const
           ).map(([key, label]) => (
             <div key={key} className="space-y-2">
-              <Label htmlFor={key}>{label}</Label>
+              <FieldHeader
+                label={label}
+                htmlFor={key}
+                fieldKey={key}
+                listing={listing}
+              />
               <Input
                 id={key}
                 value={listing.specifics[key] ?? ""}
                 disabled={disabled}
-                onChange={(e) => patchSpecifics({ [key]: e.target.value })}
+                onChange={(e) => {
+                  patchSpecifics({ [key]: e.target.value })
+                  patchFieldValue(key, e.target.value)
+                }}
               />
+              {listing.fieldConfidence?.[key]?.rationale && (
+                <p className="text-[11px] text-muted-foreground">
+                  {listing.fieldConfidence[key]?.rationale}
+                </p>
+              )}
             </div>
           ))}
+
           <div className="space-y-2">
-            <Label htmlFor="condition">Condition</Label>
+            <FieldHeader
+              label="Condition"
+              htmlFor="condition"
+              fieldKey="condition"
+              listing={listing}
+            />
             <select
               id="condition"
               disabled={disabled}
               value={listing.specifics.condition ?? "Good"}
-              onChange={(e) => patchSpecifics({ condition: e.target.value })}
+              onChange={(e) => {
+                patchSpecifics({ condition: e.target.value })
+                patchFieldValue("condition", e.target.value)
+              }}
               className="flex h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {CONDITIONS.map((c) => (
@@ -156,15 +250,35 @@ export function ListingEditorForm({
             </select>
           </div>
         </div>
+
+        <div className="space-y-2">
+          <FieldHeader
+            label="Flaws"
+            htmlFor="flaws"
+            fieldKey="flaws"
+            listing={listing}
+          />
+          <Textarea
+            id="flaws"
+            value={listing.specifics.flaws ?? ""}
+            disabled={disabled}
+            rows={3}
+            onChange={(e) => {
+              patchSpecifics({ flaws: e.target.value })
+              patchFieldValue("flaws", e.target.value)
+            }}
+            placeholder="Stains, wear, repairs, missing parts…"
+          />
+        </div>
       </section>
 
       <section className="space-y-3">
-        <div>
-          <Label htmlFor="keywords">Keywords</Label>
-          <p className="mb-2 text-sm text-muted-foreground">
-            Comma-separated tags for search and future channel mapping.
-          </p>
-        </div>
+        <FieldHeader
+          label="Keywords"
+          htmlFor="keywords"
+          fieldKey="keywords"
+          listing={listing}
+        />
         <Textarea
           id="keywords"
           value={keywordsText}
@@ -185,7 +299,7 @@ export function ListingEditorForm({
         <div>
           <h2 className="font-display text-lg font-semibold">Publish targets</h2>
           <p className="text-sm text-muted-foreground">
-            Select marketplaces for future one-click crosslisting. Publishing ships in a later phase.
+            Select channels for one-click publish.
           </p>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">

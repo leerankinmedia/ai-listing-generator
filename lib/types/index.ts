@@ -1,7 +1,5 @@
 /**
- * Shared domain types for ListWise.
- * Designed so Phase 2+ features (AI listings, crosslisting, inventory, analytics)
- * can plug in without restructuring the app.
+ * Shared domain types for ListWise production listing engine.
  */
 
 export type MarketplaceId =
@@ -33,6 +31,29 @@ export type ItemCondition =
   | "Fair"
   | "Poor"
 
+export type DetectedFieldKey =
+  | "brand"
+  | "category"
+  | "size"
+  | "color"
+  | "material"
+  | "style"
+  | "pattern"
+  | "gender"
+  | "condition"
+  | "flaws"
+  | "title"
+  | "description"
+  | "price"
+  | "keywords"
+
+export interface FieldConfidence {
+  value: string
+  confidence: number
+  /** Short rationale from Vision / comps analysis */
+  rationale?: string
+}
+
 export interface MarketplaceConnection {
   marketplaceId: MarketplaceId
   status: ConnectionStatus
@@ -43,12 +64,16 @@ export interface MarketplaceConnection {
 
 export interface ListingImage {
   id: string
-  /** Public URL, data URL, or storage path */
   url: string
-  /** Optional storage object key for Supabase Storage */
   storagePath?: string
   sortOrder: number
   isPrimary?: boolean
+  /** Per-image Vision summary after analysis */
+  analysis?: {
+    summary?: string
+    detectedFlaws?: string[]
+    confidence?: number
+  }
 }
 
 export interface ListingSpecifics {
@@ -57,10 +82,26 @@ export interface ListingSpecifics {
   color?: string
   material?: string
   style?: string
+  pattern?: string
+  gender?: string
   condition?: ItemCondition | string
   category?: string
-  /** Free-form key/value extras for marketplace-specific fields */
+  /** Visible defects / wear notes */
+  flaws?: string
   extras?: Record<string, string>
+}
+
+export interface SoldCompsEstimate {
+  suggestedPrice: number
+  lowPrice: number
+  highPrice: number
+  currency: string
+  confidence: number
+  /** How the estimate was derived */
+  method: "ai_market_comps" | "ebay_sold_api" | "manual"
+  rationale: string
+  comparableSummary?: string
+  sampleSize?: number
 }
 
 export interface Listing {
@@ -72,13 +113,19 @@ export interface Listing {
   currency: string
   keywords: string[]
   specifics: ListingSpecifics
+  /** Confidence for every AI-detected / generated field (0–1) */
+  fieldConfidence: Partial<Record<DetectedFieldKey, FieldConfidence>>
+  comps?: SoldCompsEstimate
   images: ListingImage[]
   status: ListingStatus
-  /** Future publish targets — adapters fill these in later phases */
   marketplaceListings: MarketplaceListingRef[]
-  /** Which marketplaces the seller intends to publish to */
   targetMarketplaces: MarketplaceId[]
   aiGenerated: boolean
+  analysisMeta?: {
+    imagesAnalyzed: number
+    model: string
+    analyzedAt: string
+  }
   createdAt: string
   updatedAt: string
 }
@@ -93,7 +140,6 @@ export interface MarketplaceListingRef {
   errorMessage?: string
 }
 
-/** Payload adapters will consume when publishing */
 export interface PublishReadyListing {
   listing: Listing
   marketplaceId: MarketplaceId
@@ -103,6 +149,19 @@ export interface PublishReadyListing {
     price: number
     specifics: ListingSpecifics
   }>
+}
+
+export interface OneClickPublishRequest {
+  listingId: string
+  marketplaceIds: MarketplaceId[]
+}
+
+export interface OneClickPublishResult {
+  marketplaceId: MarketplaceId
+  ok: boolean
+  status: "published" | "queued" | "skipped" | "error"
+  message: string
+  listingRef?: MarketplaceListingRef
 }
 
 export interface InventoryItem {
@@ -153,4 +212,6 @@ export interface GeneratedListingDraft {
   currency: string
   keywords: string[]
   specifics: ListingSpecifics
+  fieldConfidence: Partial<Record<DetectedFieldKey, FieldConfidence>>
+  comps: SoldCompsEstimate
 }

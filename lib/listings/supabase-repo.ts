@@ -10,11 +10,14 @@ type ListingRow = {
   currency: string
   keywords: string[]
   specifics: Listing["specifics"]
+  field_confidence: Listing["fieldConfidence"]
+  comps: Listing["comps"]
   images: Listing["images"]
   status: Listing["status"]
   marketplace_listings: Listing["marketplaceListings"]
   target_marketplaces: Listing["targetMarketplaces"]
   ai_generated: boolean
+  analysis_meta: Listing["analysisMeta"]
   created_at: string
   updated_at: string
 }
@@ -29,11 +32,14 @@ function rowToListing(row: ListingRow): Listing {
     currency: row.currency,
     keywords: row.keywords ?? [],
     specifics: row.specifics ?? {},
+    fieldConfidence: row.field_confidence ?? {},
+    comps: row.comps ?? undefined,
     images: row.images ?? [],
     status: row.status,
     marketplaceListings: row.marketplace_listings ?? [],
     targetMarketplaces: row.target_marketplaces ?? [],
     aiGenerated: row.ai_generated,
+    analysisMeta: row.analysis_meta ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -52,11 +58,14 @@ function listingToRow(listing: Listing): Omit<ListingRow, "created_at" | "update
     currency: listing.currency,
     keywords: listing.keywords,
     specifics: listing.specifics,
+    field_confidence: listing.fieldConfidence ?? {},
+    comps: listing.comps,
     images: listing.images,
     status: listing.status,
     marketplace_listings: listing.marketplaceListings,
     target_marketplaces: listing.targetMarketplaces,
     ai_generated: listing.aiGenerated,
+    analysis_meta: listing.analysisMeta,
     created_at: listing.createdAt,
     updated_at: listing.updatedAt,
   }

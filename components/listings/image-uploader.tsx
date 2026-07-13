@@ -125,7 +125,7 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
         </p>
         <p className="mt-1 max-w-sm text-sm text-muted-foreground">
           Drag and drop up to {MAX_LISTING_IMAGES} product photos, or tap to browse.
-          AI analyzes up to 8 for generation.
+          AI analyzes every photo for generation.
         </p>
         <p className="mt-3 text-xs font-medium text-muted-foreground">
           {images.length} / {MAX_LISTING_IMAGES} uploaded

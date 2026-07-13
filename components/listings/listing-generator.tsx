@@ -5,13 +5,11 @@ import { useRouter } from "next/navigation"
 import { Loader2, Sparkles, Save } from "lucide-react"
 import { ImageUploader } from "@/components/listings/image-uploader"
 import { ListingEditorForm } from "@/components/listings/listing-editor-form"
+import { OneClickPublishBar } from "@/components/listings/one-click-publish-bar"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/components/auth/auth-provider"
 import { dataUrlToBlob } from "@/lib/listings/images"
-import {
-  createEmptyListing,
-  withImages,
-} from "@/lib/listings/local-db"
+import { createEmptyListing, withImages } from "@/lib/listings/local-db"
 import { persistListing } from "@/lib/listings/repository"
 import { listingIsReadyToPublish } from "@/lib/listings/publish"
 import type { GeneratedListingOutput } from "@/lib/listings/schema"
@@ -27,19 +25,20 @@ export function ListingGenerator() {
   const [listing, setListing] = useState<Listing | null>(null)
   const [generating, setGenerating] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [mode, setMode] = useState<"openai" | "demo" | null>(null)
+  const [progress, setProgress] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [model, setModel] = useState<string | null>(null)
 
   async function handleGenerate() {
     if (!user || images.length === 0) return
     setError(null)
     setGenerating(true)
+    setProgress(`Analyzing all ${images.length} photo${images.length === 1 ? "" : "s"}…`)
 
     try {
       const formData = new FormData()
-      // Send up to 8 compressed images for Vision; keep all in the listing
-      const forVision = images.slice(0, 8)
-      for (const [index, image] of forVision.entries()) {
+      // Send every image to the production engine
+      for (const [index, image] of images.entries()) {
         const blob = dataUrlToBlob(image.url)
         formData.append("images", blob, `photo-${index + 1}.jpg`)
       }
@@ -54,7 +53,9 @@ export function ListingGenerator() {
       }
 
       const draft = payload.draft as GeneratedListingOutput
-      setMode(payload.mode)
+      setModel(payload.model ?? "gpt-4o")
+
+      const fieldConfidence = draft.fieldConfidence as Listing["fieldConfidence"]
 
       const base = createEmptyListing(user.id)
       const next = withImages(base, images, {
@@ -64,13 +65,22 @@ export function ListingGenerator() {
         currency: draft.currency,
         keywords: draft.keywords,
         specifics: draft.specifics,
+        fieldConfidence,
+        comps: draft.comps,
         aiGenerated: true,
         status: "draft",
+        analysisMeta: {
+          imagesAnalyzed: payload.imagesAnalyzed ?? images.length,
+          model: payload.model ?? "gpt-4o",
+          analyzedAt: new Date().toISOString(),
+        },
       })
       setListing(next)
       setStep("review")
+      setProgress(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generation failed")
+      setProgress(null)
     } finally {
       setGenerating(false)
     }
@@ -101,14 +111,14 @@ export function ListingGenerator() {
     <div className="mx-auto max-w-5xl space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-accent">AI Listing Generator</p>
+          <p className="text-sm font-medium text-accent">Production listing engine</p>
           <h1 className="font-display text-3xl font-semibold tracking-tight">
             {step === "upload" ? "Upload photos" : "Review & edit"}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {step === "upload"
-              ? "Drop product photos and let ListWise draft a marketplace-ready listing."
-              : "Tune the AI draft, then save. Publishing to marketplaces comes next."}
+              ? "Every photo is analyzed with OpenAI Vision — attributes, flaws, comps, and copy."
+              : "Edit any field, check confidence scores, then save or one-click publish."}
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -117,7 +127,7 @@ export function ListingGenerator() {
               step === "upload" ? "font-semibold text-foreground" : undefined
             }
           >
-            1. Photos
+            1. Analyze
           </span>
           <span aria-hidden>→</span>
           <span
@@ -125,17 +135,10 @@ export function ListingGenerator() {
               step === "review" ? "font-semibold text-foreground" : undefined
             }
           >
-            2. Edit & save
+            2. Edit & publish
           </span>
         </div>
       </div>
-
-      {mode === "demo" && step === "review" && (
-        <p className="rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-sm">
-          Demo Vision mode — add <code className="text-xs">OPENAI_API_KEY</code>{" "}
-          for live image analysis. You can still edit and save this draft.
-        </p>
-      )}
 
       {step === "upload" && (
         <div className="animate-rise space-y-5">
@@ -144,8 +147,14 @@ export function ListingGenerator() {
             onChange={setImages}
             disabled={generating}
           />
+          {progress && (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin text-accent" />
+              {progress}
+            </p>
+          )}
           {error && (
-            <p className="text-sm text-destructive" role="alert">
+            <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive" role="alert">
               {error}
             </p>
           )}
@@ -159,12 +168,13 @@ export function ListingGenerator() {
               {generating ? (
                 <>
                   <Loader2 className="animate-spin" />
-                  Analyzing photos…
+                  Running Vision engine…
                 </>
               ) : (
                 <>
                   <Sparkles />
-                  Generate listing
+                  Analyze {images.length || ""} photo
+                  {images.length === 1 ? "" : "s"}
                 </>
               )}
             </Button>
@@ -174,6 +184,17 @@ export function ListingGenerator() {
 
       {step === "review" && listing && (
         <div className="animate-rise space-y-6">
+          {listing.analysisMeta && (
+            <p className="rounded-xl border border-border bg-card/60 px-4 py-3 text-sm text-muted-foreground">
+              Analyzed {listing.analysisMeta.imagesAnalyzed} photo
+              {listing.analysisMeta.imagesAnalyzed === 1 ? "" : "s"} with{" "}
+              <span className="font-medium text-foreground">
+                {model ?? listing.analysisMeta.model}
+              </span>
+              . Confidence shown on every field.
+            </p>
+          )}
+
           <ImageUploader
             images={images}
             onChange={(next) => {
@@ -187,6 +208,7 @@ export function ListingGenerator() {
             onChange={setListing}
             disabled={saving}
           />
+          <OneClickPublishBar listing={{ ...listing, images }} disabled={saving} />
           {error && (
             <p className="text-sm text-destructive" role="alert">
               {error}

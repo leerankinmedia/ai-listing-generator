@@ -89,6 +89,7 @@ export function createEmptyListing(userId: string): Listing {
     currency: "USD",
     keywords: [],
     specifics: {},
+    fieldConfidence: {},
     images: [],
     status: "draft",
     marketplaceListings: [],

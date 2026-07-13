@@ -2,41 +2,39 @@
 
 AI-powered crosslisting for professional multi-marketplace sellers.
 
-## Phase 1
+## Phase 3 — Production AI Listing Engine
 
-- Premium landing page
-- Login / Sign up (Supabase + demo auth fallback)
-- Dashboard shell with marketplace registry
-- Dark mode + responsive navigation
-
-## Phase 2
-
-- AI Listing Generator with drag-and-drop upload (up to 24 photos)
-- OpenAI Vision analysis → SEO title, description, specifics, price, keywords
-- Editable draft before save
-- Persist listings (Supabase when configured, IndexedDB demo fallback)
-- Publish-ready listing shape for future marketplace adapters
+- Upload up to **24** photos (drag-and-drop, mobile-first)
+- **Every image** analyzed with OpenAI Vision (`gpt-4o`)
+- Detects brand, category, size, color, material, style, pattern, gender, condition, flaws
+- Generates SEO title, professional description, item specifics, keywords
+- **Sold comps** pricing with low / suggested / high range
+- **Confidence score** on every detected / generated field
+- Fully editable before save
+- Persist to Supabase (or IndexedDB fallback)
+- **One-click publish** orchestration ready for marketplace adapters
 
 ## Setup
 
 ```bash
 pnpm install
 cp .env.example .env.local
+# Required: OPENAI_API_KEY
 pnpm dev
 ```
 
-### Environment
+Apply migrations:
+- `supabase/migrations/001_listings.sql`
+- `supabase/migrations/002_listing_engine.sql`
 
-| Variable | Purpose |
-| --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` / `ANON_KEY` | Auth + listings table |
-| `OPENAI_API_KEY` | Live Vision generation |
-| `NEXT_PUBLIC_DEMO_AUTH` | Force local demo auth |
+## Engine pipeline
 
-Without Supabase/OpenAI credentials, demo auth + demo Vision drafts still work for UI walkthroughs.
-
-Apply `supabase/migrations/001_listings.sql` in your Supabase project for production persistence.
+1. Batch Vision detection across all photos  
+2. Merge attributes by confidence / consensus  
+3. Generate copy from verified attributes  
+4. Estimate sold-comps pricing (`CompsProvider` — AI now, eBay sold API later)  
+5. Review → save → one-click publish queue  
 
 ## Stack
 
-Next.js · TypeScript · Tailwind CSS · Supabase · OpenAI · next-themes
+Next.js · TypeScript · Tailwind CSS · Supabase · OpenAI Vision · next-themes

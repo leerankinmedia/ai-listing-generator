@@ -19,21 +19,31 @@ AI-powered crosslisting for professional multi-marketplace sellers.
 ```bash
 pnpm install
 cp .env.example .env.local
-# Required: OPENAI_API_KEY
-pnpm dev
 ```
 
-Apply migrations:
-- `supabase/migrations/001_listings.sql`
-- `supabase/migrations/002_listing_engine.sql`
+### Connect Supabase (production)
 
-## Engine pipeline
+1. In Supabase → **Project Settings → API**, copy:
+   - **Project URL** → `NEXT_PUBLIC_SUPABASE_URL`
+   - **Publishable** (or legacy **anon**) key → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - **Secret** (or legacy **service_role**) key → `SUPABASE_SERVICE_ROLE_KEY`
+2. Paste those into `.env.local` (never commit this file).
+3. Set `NEXT_PUBLIC_DEMO_AUTH=false`.
+4. Apply SQL migrations in order (SQL Editor → New query → Run each file):
+   - `supabase/migrations/001_listings.sql`
+   - `supabase/migrations/002_listing_engine.sql`
+   - `supabase/migrations/003_production_schema.sql`
+5. Restart `pnpm dev`. Sign up a real user (not demo).
 
-1. Batch Vision detection across all photos  
-2. Merge attributes by confidence / consensus  
-3. Generate copy from verified attributes  
-4. Estimate sold-comps pricing (`CompsProvider` — AI now, eBay sold API later)  
-5. Review → save → one-click publish queue  
+Also set `OPENAI_API_KEY` and `CONNECTIONS_SECRET` (≥16 chars).
+
+### Dev without Supabase
+
+Leave Supabase vars empty or as placeholders — the app uses demo auth + IndexedDB.
+
+```bash
+pnpm dev
+```
 
 ## Stack
 

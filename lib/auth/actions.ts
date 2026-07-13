@@ -67,7 +67,19 @@ export async function signIn(
 
   if (!isSupabaseConfigured()) {
     const cookieStore = await cookies()
-    cookieStore.set(DEMO_COOKIE, JSON.stringify({ email, fullName: "Demo Seller" }), {
+    const existing = cookieStore.get(DEMO_COOKIE)?.value
+    let fullName = email.split("@")[0] || "Seller"
+    if (existing) {
+      try {
+        const parsed = JSON.parse(existing) as { fullName?: string; email?: string }
+        if (parsed.email === email && parsed.fullName) {
+          fullName = parsed.fullName
+        }
+      } catch {
+        // ignore malformed demo cookie
+      }
+    }
+    cookieStore.set(DEMO_COOKIE, JSON.stringify({ email, fullName }), {
       httpOnly: true,
       sameSite: "lax",
       path: "/",

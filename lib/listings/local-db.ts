@@ -37,9 +37,9 @@ export async function listLocalListings(userId: string): Promise<Listing[]> {
     const index = store.index("userId")
     const request = index.getAll(userId)
     request.onsuccess = () => {
-      const rows = (request.result as Listing[]).sort((a, b) =>
-        b.updatedAt.localeCompare(a.updatedAt)
-      )
+      const rows = (request.result as Listing[])
+        .map(normalizeListing)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       resolve(rows)
     }
     request.onerror = () => reject(request.error)
@@ -51,17 +51,48 @@ export async function getLocalListing(id: string): Promise<Listing | null> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readonly")
     const request = tx.objectStore(STORE).get(id)
-    request.onsuccess = () => resolve((request.result as Listing) ?? null)
+    request.onsuccess = () => {
+      const row = request.result as Listing | undefined
+      resolve(row ? normalizeListing(row) : null)
+    }
     request.onerror = () => reject(request.error)
   })
 }
 
 export async function saveLocalListing(listing: Listing): Promise<Listing> {
   const db = await openDb()
-  const tx = db.transaction(STORE, "readwrite")
-  tx.objectStore(STORE).put(listing)
-  await txDone(tx)
-  return listing
+  const normalized = normalizeListing(listing)
+  try {
+    const tx = db.transaction(STORE, "readwrite")
+    tx.objectStore(STORE).put(normalized)
+    await txDone(tx)
+    return normalized
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "IndexedDB save failed"
+    if (/quota|persist/i.test(message)) {
+      throw new Error(
+        "Browser storage is full. Remove old listings or configure Supabase storage."
+      )
+    }
+    throw error
+  }
+}
+
+function normalizeListing(listing: Listing): Listing {
+  return {
+    ...listing,
+    title: listing.title ?? "",
+    description: listing.description ?? "",
+    keywords: listing.keywords ?? [],
+    specifics: listing.specifics ?? {},
+    fieldConfidence: listing.fieldConfidence ?? {},
+    images: listing.images ?? [],
+    marketplaceListings: listing.marketplaceListings ?? [],
+    targetMarketplaces: listing.targetMarketplaces ?? [],
+    currency: listing.currency || "USD",
+    price: typeof listing.price === "number" ? listing.price : 0,
+  }
 }
 
 export async function deleteLocalListing(id: string): Promise<void> {

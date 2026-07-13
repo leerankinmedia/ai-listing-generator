@@ -40,6 +40,11 @@ export async function fetchListing(id: string): Promise<Listing | null> {
   return getLocalListing(id)
 }
 
+/**
+ * Unified listing repository.
+ * Uses Supabase only when NEXT_PUBLIC_SUPABASE_* is configured.
+ * Otherwise persists to browser IndexedDB (local to this device/browser).
+ */
 export async function persistListing(listing: Listing): Promise<Listing> {
   if (isSupabaseConfigured()) {
     try {
@@ -48,8 +53,8 @@ export async function persistListing(listing: Listing): Promise<Listing> {
         await saveLocalListing(remote)
         return remote
       }
-    } catch {
-      // Fall through to local-only persistence
+    } catch (error) {
+      console.error("[listings] Supabase save failed, using IndexedDB", error)
     }
   }
   return saveLocalListing(listing)

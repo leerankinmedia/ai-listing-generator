@@ -11,16 +11,7 @@ export const maxDuration = 300
 
 export async function POST(request: Request) {
   try {
-    if (!isOpenAIConfigured()) {
-      return NextResponse.json(
-        {
-          error:
-            "OPENAI_API_KEY is required. Add it to your environment to run the production listing engine.",
-        },
-        { status: 503 }
-      )
-    }
-
+    // Read uploads first so we always confirm photos reached the server
     const formData = await request.formData()
     const files = formData
       .getAll("images")
@@ -40,7 +31,17 @@ export async function POST(request: Request) {
       )
     }
 
-    // Analyze every image — no truncation
+    if (!isOpenAIConfigured()) {
+      return NextResponse.json(
+        {
+          error:
+            "OPENAI_API_KEY is required. Add it to your environment to run the production listing engine.",
+          receivedImages: files.length,
+        },
+        { status: 503 }
+      )
+    }
+
     const images = await Promise.all(
       files.map(async (file) => {
         const buffer = Buffer.from(await file.arrayBuffer())

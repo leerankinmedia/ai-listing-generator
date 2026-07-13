@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import { useAuth } from "@/components/auth/auth-provider"
 import { dataUrlToBlob } from "@/lib/listings/images"
 import { createEmptyListing, withImages } from "@/lib/listings/local-db"
+import { mapDraftToListingFields, getPersistenceMode } from "@/lib/listings/map-draft"
 import { persistListing } from "@/lib/listings/repository"
 import { listingIsReadyToPublish } from "@/lib/listings/publish"
 import type { GeneratedListingOutput } from "@/lib/listings/schema"
@@ -28,16 +29,18 @@ export function ListingGenerator() {
   const [progress, setProgress] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [model, setModel] = useState<string | null>(null)
+  const persistence = getPersistenceMode()
 
   async function handleGenerate() {
     if (!user || images.length === 0) return
     setError(null)
     setGenerating(true)
-    setProgress(`Analyzing all ${images.length} photo${images.length === 1 ? "" : "s"}…`)
+    setProgress(
+      `Uploading & analyzing all ${images.length} photo${images.length === 1 ? "" : "s"}…`
+    )
 
     try {
       const formData = new FormData()
-      // Send every image to the production engine
       for (const [index, image] of images.entries()) {
         const blob = dataUrlToBlob(image.url)
         formData.append("images", blob, `photo-${index + 1}.jpg`)
@@ -55,18 +58,18 @@ export function ListingGenerator() {
       const draft = payload.draft as GeneratedListingOutput
       setModel(payload.model ?? "gpt-4o")
 
-      const fieldConfidence = draft.fieldConfidence as Listing["fieldConfidence"]
+      const mapped = mapDraftToListingFields(draft)
 
       const base = createEmptyListing(user.id)
       const next = withImages(base, images, {
-        title: draft.title,
-        description: draft.description,
-        price: draft.price,
-        currency: draft.currency,
-        keywords: draft.keywords,
-        specifics: draft.specifics,
-        fieldConfidence,
-        comps: draft.comps,
+        title: mapped.title,
+        description: mapped.description,
+        price: mapped.price,
+        currency: mapped.currency,
+        keywords: mapped.keywords,
+        specifics: mapped.specifics,
+        fieldConfidence: mapped.fieldConfidence,
+        comps: mapped.comps,
         aiGenerated: true,
         status: "draft",
         analysisMeta: {
@@ -75,6 +78,11 @@ export function ListingGenerator() {
           analyzedAt: new Date().toISOString(),
         },
       })
+
+      if (!next.title.trim()) {
+        throw new Error("Mapped listing title was empty after AI analysis.")
+      }
+
       setListing(next)
       setStep("review")
       setProgress(null)
@@ -94,10 +102,14 @@ export function ListingGenerator() {
       const toSave: Listing = {
         ...listing,
         images,
+        title: listing.title.trim(),
         status: listingIsReadyToPublish({ ...listing, images })
           ? status
           : "draft",
         updatedAt: new Date().toISOString(),
+      }
+      if (!toSave.title) {
+        throw new Error("Title is required before saving.")
       }
       const saved = await persistListing(toSave)
       router.push(`/dashboard/listings/${saved.id}`)
@@ -117,7 +129,7 @@ export function ListingGenerator() {
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {step === "upload"
-              ? "Every photo is analyzed with OpenAI Vision — attributes, flaws, comps, and copy."
+              ? "Every photo is uploaded to the server and analyzed with OpenAI Vision."
               : "Edit any field, check confidence scores, then save or one-click publish."}
           </p>
         </div>
@@ -140,6 +152,15 @@ export function ListingGenerator() {
         </div>
       </div>
 
+      <p className="rounded-lg border border-border bg-card/50 px-3 py-2 text-xs text-muted-foreground">
+        Storage:{" "}
+        <span className="font-medium text-foreground">
+          {persistence === "supabase"
+            ? "Supabase"
+            : "Browser IndexedDB (local only — Supabase not configured)"}
+        </span>
+      </p>
+
       {step === "upload" && (
         <div className="animate-rise space-y-5">
           <ImageUploader
@@ -154,7 +175,10 @@ export function ListingGenerator() {
             </p>
           )}
           {error && (
-            <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive" role="alert">
+            <p
+              className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+              role="alert"
+            >
               {error}
             </p>
           )}
@@ -191,7 +215,8 @@ export function ListingGenerator() {
               <span className="font-medium text-foreground">
                 {model ?? listing.analysisMeta.model}
               </span>
-              . Confidence shown on every field.
+              . Title:{" "}
+              <span className="font-medium text-foreground">{listing.title}</span>
             </p>
           )}
 

@@ -51,32 +51,47 @@ export function ListingEditorForm({
   disabled,
 }: ListingEditorFormProps) {
   const keywordsText = useMemo(
-    () => listing.keywords.join(", "),
+    () => (listing.keywords ?? []).join(", "),
     [listing.keywords]
   )
 
-  function patch(partial: Partial<Listing>) {
-    onChange({ ...listing, ...partial, updatedAt: new Date().toISOString() })
+  /** Single atomic update — avoids stale overwrites from multiple patch() calls */
+  function update(partial: Partial<Listing>) {
+    const next: Listing = {
+      ...listing,
+      ...partial,
+      specifics: partial.specifics
+        ? { ...listing.specifics, ...partial.specifics }
+        : listing.specifics,
+      fieldConfidence: partial.fieldConfidence
+        ? { ...listing.fieldConfidence, ...partial.fieldConfidence }
+        : listing.fieldConfidence,
+      updatedAt: new Date().toISOString(),
+    }
+    onChange(next)
   }
 
-  function patchSpecifics(partial: Listing["specifics"]) {
-    patch({ specifics: { ...listing.specifics, ...partial } })
-  }
-
-  function patchFieldValue(fieldKey: DetectedFieldKey, value: string) {
-    const prev = listing.fieldConfidence?.[fieldKey]
-    if (!prev) return
-    patch({
+  function updateSpecific(
+    key: keyof Listing["specifics"],
+    value: string,
+    fieldKey?: DetectedFieldKey
+  ) {
+    const confidenceKey = fieldKey ?? (key as DetectedFieldKey)
+    const prev = listing.fieldConfidence?.[confidenceKey]
+    update({
+      specifics: { ...listing.specifics, [key]: value },
       fieldConfidence: {
         ...listing.fieldConfidence,
-        [fieldKey]: { ...prev, value },
+        [confidenceKey]: prev
+          ? { ...prev, value }
+          : { value, confidence: 1, rationale: "Edited manually" },
       },
     })
   }
 
   function toggleMarketplace(id: MarketplaceId) {
     const exists = listing.targetMarketplaces.includes(id)
-    patch({
+    update({
       targetMarketplaces: exists
         ? listing.targetMarketplaces.filter((m) => m !== id)
         : [...listing.targetMarketplaces, id],
@@ -106,8 +121,17 @@ export function ListingEditorForm({
             disabled={disabled}
             maxLength={120}
             onChange={(e) => {
-              patch({ title: e.target.value })
-              patchFieldValue("title", e.target.value)
+              const value = e.target.value
+              const prev = listing.fieldConfidence?.title
+              update({
+                title: value,
+                fieldConfidence: {
+                  ...listing.fieldConfidence,
+                  title: prev
+                    ? { ...prev, value }
+                    : { value, confidence: 1, rationale: "Edited manually" },
+                },
+              })
             }}
             placeholder="Brand + item + key attributes"
           />
@@ -132,8 +156,17 @@ export function ListingEditorForm({
             disabled={disabled}
             rows={10}
             onChange={(e) => {
-              patch({ description: e.target.value })
-              patchFieldValue("description", e.target.value)
+              const value = e.target.value
+              const prev = listing.fieldConfidence?.description
+              update({
+                description: value,
+                fieldConfidence: {
+                  ...listing.fieldConfidence,
+                  description: prev
+                    ? { ...prev, value }
+                    : { value, confidence: 1, rationale: "Edited manually" },
+                },
+              })
             }}
             placeholder="Professional marketplace description"
             className="min-h-[200px]"
@@ -151,10 +184,7 @@ export function ListingEditorForm({
             id="category"
             value={listing.specifics.category ?? ""}
             disabled={disabled}
-            onChange={(e) => {
-              patchSpecifics({ category: e.target.value })
-              patchFieldValue("category", e.target.value)
-            }}
+            onChange={(e) => updateSpecific("category", e.target.value, "category")}
             placeholder="Men > Outerwear > Jackets"
           />
         </div>
@@ -165,17 +195,15 @@ export function ListingEditorForm({
         price={listing.price}
         disabled={disabled}
         onPriceChange={(price) => {
-          patch({
+          const prev = listing.fieldConfidence?.price
+          update({
             price,
             fieldConfidence: {
               ...listing.fieldConfidence,
               price: {
                 value: String(price),
-                confidence:
-                  listing.fieldConfidence?.price?.confidence ??
-                  listing.comps?.confidence ??
-                  1,
-                rationale: listing.fieldConfidence?.price?.rationale,
+                confidence: prev?.confidence ?? listing.comps?.confidence ?? 1,
+                rationale: prev?.rationale ?? "Edited manually",
               },
             },
           })
@@ -212,10 +240,7 @@ export function ListingEditorForm({
                 id={key}
                 value={listing.specifics[key] ?? ""}
                 disabled={disabled}
-                onChange={(e) => {
-                  patchSpecifics({ [key]: e.target.value })
-                  patchFieldValue(key, e.target.value)
-                }}
+                onChange={(e) => updateSpecific(key, e.target.value, key)}
               />
               {listing.fieldConfidence?.[key]?.rationale && (
                 <p className="text-[11px] text-muted-foreground">
@@ -236,10 +261,9 @@ export function ListingEditorForm({
               id="condition"
               disabled={disabled}
               value={listing.specifics.condition ?? "Good"}
-              onChange={(e) => {
-                patchSpecifics({ condition: e.target.value })
-                patchFieldValue("condition", e.target.value)
-              }}
+              onChange={(e) =>
+                updateSpecific("condition", e.target.value, "condition")
+              }
               className="flex h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {CONDITIONS.map((c) => (
@@ -263,10 +287,7 @@ export function ListingEditorForm({
             value={listing.specifics.flaws ?? ""}
             disabled={disabled}
             rows={3}
-            onChange={(e) => {
-              patchSpecifics({ flaws: e.target.value })
-              patchFieldValue("flaws", e.target.value)
-            }}
+            onChange={(e) => updateSpecific("flaws", e.target.value, "flaws")}
             placeholder="Stains, wear, repairs, missing parts…"
           />
         </div>
@@ -284,14 +305,26 @@ export function ListingEditorForm({
           value={keywordsText}
           disabled={disabled}
           rows={3}
-          onChange={(e) =>
-            patch({
-              keywords: e.target.value
-                .split(",")
-                .map((k) => k.trim())
-                .filter(Boolean),
+          onChange={(e) => {
+            const keywords = e.target.value
+              .split(",")
+              .map((k) => k.trim())
+              .filter(Boolean)
+            const prev = listing.fieldConfidence?.keywords
+            update({
+              keywords,
+              fieldConfidence: {
+                ...listing.fieldConfidence,
+                keywords: prev
+                  ? { ...prev, value: keywords.join(", ") }
+                  : {
+                      value: keywords.join(", "),
+                      confidence: 1,
+                      rationale: "Edited manually",
+                    },
+              },
             })
-          }
+          }}
         />
       </section>
 

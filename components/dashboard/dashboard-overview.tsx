@@ -138,7 +138,7 @@ export function DashboardOverview() {
           <div>
             <h2 className="font-display text-xl font-semibold">Recent listings</h2>
             <p className="text-sm text-muted-foreground">
-              Generated with OpenAI Vision and saved to your workspace.
+              Vision analyzes every photo with confidence scores and sold comps.
             </p>
           </div>
           <Link

@@ -1,0 +1,58 @@
+import { NextResponse } from "next/server"
+import { exchangeEbayCode } from "@/lib/marketplaces/adapters/ebay/oauth"
+import { getAppBaseUrl } from "@/lib/marketplaces/connections/crypto"
+import { saveConnection } from "@/lib/marketplaces/connections/store"
+import {
+  assertStateMatches,
+  consumeOAuthStateRaw,
+  verifyOAuthState,
+} from "@/lib/marketplaces/oauth-state"
+
+export const runtime = "nodejs"
+
+function redirectWith(status: "connected" | "error", message?: string) {
+  const url = new URL("/dashboard/connections", getAppBaseUrl())
+  url.searchParams.set("ebay", status)
+  if (message) url.searchParams.set("message", message.slice(0, 240))
+  return NextResponse.redirect(url)
+}
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url)
+  const error = searchParams.get("error")
+  const errorDescription = searchParams.get("error_description")
+  if (error) {
+    return redirectWith("error", errorDescription || error)
+  }
+
+  const code = searchParams.get("code")
+  const state = searchParams.get("state")
+  if (!code || !state) {
+    return redirectWith("error", "Missing OAuth code or state from eBay.")
+  }
+
+  try {
+    const cookieState = await consumeOAuthStateRaw()
+    assertStateMatches(cookieState, state)
+    verifyOAuthState(state, "ebay")
+
+    const tokens = await exchangeEbayCode(code)
+    const now = new Date().toISOString()
+    await saveConnection({
+      marketplaceId: "ebay",
+      authMethod: "oauth",
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresAt: new Date(Date.now() + tokens.expiresIn * 1000).toISOString(),
+      accountLabel: "eBay seller",
+      connectedAt: now,
+      updatedAt: now,
+    })
+    return redirectWith("connected")
+  } catch (err) {
+    return redirectWith(
+      "error",
+      err instanceof Error ? err.message : "eBay OAuth failed."
+    )
+  }
+}

@@ -10,7 +10,7 @@ export function Hero() {
       <div className="pointer-events-none absolute inset-0 mesh-bg" />
       <div className="pointer-events-none absolute inset-0 grid-fade opacity-70" />
 
-      <div className="relative mx-auto flex min-h-[calc(100svh-4rem)] max-w-6xl flex-col justify-center px-4 py-16 sm:px-6 lg:py-20">
+      <div className="relative mx-auto flex min-h-[calc(100svh-4rem)] max-w-6xl flex-col justify-center px-4 pt-14 pb-0 sm:px-6 sm:pt-16">
         <div className="max-w-3xl">
           <Logo size="lg" className="animate-rise" href="/" />
 
@@ -39,10 +39,10 @@ export function Hero() {
             </Link>
           </div>
         </div>
+      </div>
 
-        <div className="animate-rise delay-400 relative mt-14 w-full lg:mt-16">
-          <HeroProductVisual />
-        </div>
+      <div className="animate-rise delay-400 relative mt-12 w-full sm:mt-16">
+        <HeroProductVisual />
       </div>
     </section>
   )
@@ -51,75 +51,72 @@ export function Hero() {
 function HeroProductVisual() {
   return (
     <div
-      className="relative w-full overflow-hidden rounded-2xl border border-border/80 bg-card/90 shadow-[0_40px_80px_-40px_rgba(10,18,32,0.45)] backdrop-blur"
+      className="relative w-full border-y border-border/70 bg-card/60 backdrop-blur-sm"
       aria-hidden
     >
-      <div className="flex items-center gap-2 border-b border-border/70 px-4 py-3">
-        <span className="h-2.5 w-2.5 rounded-full bg-border" />
-        <span className="h-2.5 w-2.5 rounded-full bg-border" />
-        <span className="h-2.5 w-2.5 rounded-full bg-border" />
-        <span className="ml-3 text-xs font-medium text-muted-foreground">
-          ListWise · Crosslist studio
-        </span>
-        <span className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-accent px-2 py-0.5 text-[11px] font-semibold text-accent-foreground">
-          <span className="h-1.5 w-1.5 animate-pulse-soft rounded-full bg-primary" />
-          AI ready
-        </span>
-      </div>
+      <div className="mx-auto grid max-w-6xl gap-0 lg:grid-cols-[1.15fr_0.85fr]">
+        <div className="border-b border-border/70 px-4 py-6 sm:px-6 sm:py-8 lg:border-b-0 lg:border-r">
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              Crosslist studio
+            </p>
+            <p className="text-xs font-medium text-primary">
+              Publishing · 9 channels
+            </p>
+          </div>
 
-      <div className="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
-        <div className="border-b border-border/70 p-5 sm:p-6 lg:border-b-0 lg:border-r">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            Source item
-          </p>
-          <div className="mt-4 flex gap-4">
-            <div className="h-28 w-24 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-zinc-700 via-zinc-500 to-emerald-700/60 sm:h-32 sm:w-28">
-              <div className="flex h-full items-end p-2">
-                <span className="rounded bg-black/35 px-1.5 py-0.5 text-[10px] font-medium text-white">
+          <div className="flex gap-4 sm:gap-5">
+            <div className="h-36 w-28 shrink-0 overflow-hidden bg-gradient-to-br from-zinc-700 via-zinc-500 to-emerald-800/70 sm:h-44 sm:w-36">
+              <div className="flex h-full items-end p-2.5">
+                <span className="bg-black/40 px-1.5 py-0.5 text-[10px] font-medium text-white">
                   Photo
                 </span>
               </div>
             </div>
-            <div className="min-w-0 flex-1 space-y-2.5">
-              <div className="h-3 w-[88%] rounded-full bg-foreground/15" />
-              <div className="h-3 w-[62%] rounded-full bg-foreground/10" />
-              <div className="mt-4 space-y-2">
+            <div className="min-w-0 flex-1 space-y-3 pt-1">
+              <div className="space-y-2">
+                <div className="h-3 w-[90%] rounded-full bg-foreground/15" />
+                <div className="h-3 w-[64%] rounded-full bg-foreground/10" />
+              </div>
+              <div className="space-y-2 pt-1">
                 <div className="h-2.5 w-full rounded-full bg-primary/25" />
-                <div className="h-2.5 w-[92%] rounded-full bg-primary/20" />
-                <div className="h-2.5 w-[70%] rounded-full bg-primary/15" />
+                <div className="h-2.5 w-[94%] rounded-full bg-primary/18" />
+                <div className="h-2.5 w-[72%] rounded-full bg-primary/12" />
               </div>
-              <div className="pt-2 text-sm font-semibold text-foreground">
-                Vintage Nike Windbreaker · M
-              </div>
-              <div className="text-xs text-muted-foreground">
-                Suggested · $68 · 9 channels
+              <div className="pt-3">
+                <p className="text-base font-semibold text-foreground sm:text-lg">
+                  Vintage Nike Windbreaker · M
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Suggested · $68
+                </p>
               </div>
             </div>
           </div>
         </div>
 
-        <div className="p-5 sm:p-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        <div className="px-4 py-6 sm:px-6 sm:py-8">
+          <p className="mb-5 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             Publishing to
           </p>
-          <ul className="mt-4 space-y-2.5">
+          <ul className="space-y-2.5">
             {[
-              { name: "eBay", state: "Queued" },
-              { name: "Poshmark", state: "Queued" },
-              { name: "Mercari", state: "Queued" },
-              { name: "Depop", state: "Queued" },
-              { name: "Etsy", state: "Queued" },
-            ].map((row, i) => (
+              "eBay",
+              "Poshmark",
+              "Mercari",
+              "Depop",
+              "Etsy",
+              "Vinted",
+            ].map((name) => (
               <li
-                key={row.name}
-                className="flex items-center justify-between rounded-lg bg-secondary/70 px-3 py-2.5"
-                style={{ animationDelay: `${450 + i * 80}ms` }}
+                key={name}
+                className="flex items-center justify-between border-b border-border/50 py-2.5 last:border-b-0"
               >
                 <span className="text-sm font-medium text-foreground">
-                  {row.name}
+                  {name}
                 </span>
                 <span className="text-xs font-semibold text-primary">
-                  {row.state}
+                  Queued
                 </span>
               </li>
             ))}

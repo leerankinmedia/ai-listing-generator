@@ -1,0 +1,205 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+:root {
+  --background: #f3f6f8;
+  --foreground: #0f1c24;
+  --muted: #e6edf1;
+  --muted-foreground: #5b6b76;
+  --surface: #ffffff;
+  --surface-elevated: #f8fbfc;
+  --border: #d7e0e6;
+  --border-strong: #b7c5cf;
+  --accent: #0f766e;
+  --accent-foreground: #f4fffd;
+  --accent-soft: #d9f5f1;
+  --secondary: #e8eef2;
+  --secondary-foreground: #0f1c24;
+  --destructive: #b42318;
+  --destructive-soft: #fde8e6;
+  --success: #0f7a4c;
+  --success-soft: #def7ea;
+  --warning: #d97706;
+  --warning-fg: #9a5b00;
+  --warning-soft: #fff3d9;
+  --ring: #0f766e;
+  --atmosphere-1: #d7ece8;
+  --atmosphere-2: #dbe6f2;
+  --atmosphere-3: #f3f6f8;
+}
+
+@theme inline {
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  color: var(--foreground);
+  font-family: var(--font-body), system-ui, sans-serif;
+  background:
+    radial-gradient(1200px 600px at 10% -10%, var(--atmosphere-1), transparent 55%),
+    radial-gradient(900px 500px at 95% 0%, var(--atmosphere-2), transparent 50%),
+    linear-gradient(180deg, #eef4f6 0%, var(--atmosphere-3) 45%, #e9eef2 100%);
+  background-attachment: fixed;
+}
+
+body::before {
+  content: "";
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  opacity: 0.35;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.45'/%3E%3C/svg%3E");
+  mix-blend-mode: soft-light;
+  z-index: 0;
+}
+
+#__next,
+body > * {
+  position: relative;
+  z-index: 1;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--foreground);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.field-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted-foreground);
+}
+
+.field-input {
+  width: 100%;
+  border-radius: 0.9rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--foreground);
+  padding: 0.7rem 0.9rem;
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.field-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.field-input:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.result-panel {
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--surface) 92%, white);
+  border-radius: 1.15rem;
+  padding: 1rem 1.1rem 1.15rem;
+  box-shadow: 0 10px 30px -24px rgb(15 28 36 / 0.45);
+}
+
+.result-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.animate-in-fade {
+  animation: fade-in 0.45s ease both;
+}
+
+.animate-in-up {
+  animation: rise-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 1.6s ease-in-out infinite;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes brand-sheen {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 100% 50%;
+  }
+}
+
+.brand-mark {
+  background: linear-gradient(120deg, #0f1c24 0%, #0f766e 45%, #0f1c24 90%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: brand-sheen 6s ease-in-out infinite alternate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

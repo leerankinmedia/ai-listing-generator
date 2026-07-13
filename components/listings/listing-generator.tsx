@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
-import { Loader2, Sparkles, Save } from "lucide-react"
+import { Loader2, Sparkles, Save, Camera } from "lucide-react"
 import { ImageUploader } from "@/components/listings/image-uploader"
 import { ListingEditorForm } from "@/components/listings/listing-editor-form"
 import { OneClickPublishBar } from "@/components/listings/one-click-publish-bar"
@@ -10,9 +10,13 @@ import { Button } from "@/components/ui/button"
 import { useAuth } from "@/components/auth/auth-provider"
 import { dataUrlToBlob } from "@/lib/listings/images"
 import { createEmptyListing, withImages } from "@/lib/listings/local-db"
-import { mapDraftToListingFields, getPersistenceMode } from "@/lib/listings/map-draft"
+import {
+  mapDraftToListingFields,
+  getPersistenceMode,
+} from "@/lib/listings/map-draft"
 import { persistListing } from "@/lib/listings/repository"
 import { listingIsReadyToPublish } from "@/lib/listings/publish"
+import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
 import type { GeneratedListingOutput } from "@/lib/listings/schema"
 import type { Listing, ListingImage } from "@/lib/types"
 
@@ -33,10 +37,15 @@ export function ListingGenerator() {
 
   async function handleGenerate() {
     if (!user || images.length === 0) return
+    if (images.length > MAX_LISTING_IMAGES) {
+      setError(`Upload between 1 and ${MAX_LISTING_IMAGES} photos.`)
+      return
+    }
+
     setError(null)
     setGenerating(true)
     setProgress(
-      `Uploading & analyzing all ${images.length} photo${images.length === 1 ? "" : "s"}…`
+      `Uploading ${images.length} photo${images.length === 1 ? "" : "s"} and running Vision analysis…`
     )
 
     try {
@@ -57,9 +66,9 @@ export function ListingGenerator() {
 
       const draft = payload.draft as GeneratedListingOutput
       setModel(payload.model ?? "gpt-4o")
+      setProgress("Building eBay title, description, specs, and comps…")
 
       const mapped = mapDraftToListingFields(draft)
-
       const base = createEmptyListing(user.id)
       const next = withImages(base, images, {
         title: mapped.title,
@@ -72,6 +81,7 @@ export function ListingGenerator() {
         comps: mapped.comps,
         aiGenerated: true,
         status: "draft",
+        targetMarketplaces: ["ebay"],
         analysisMeta: {
           imagesAnalyzed: payload.imagesAnalyzed ?? images.length,
           model: payload.model ?? "gpt-4o",
@@ -123,14 +133,14 @@ export function ListingGenerator() {
     <div className="mx-auto max-w-5xl space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-accent">Production listing engine</p>
+          <p className="text-sm font-medium text-accent">Phase 4 · Photo analysis</p>
           <h1 className="font-display text-3xl font-semibold tracking-tight">
-            {step === "upload" ? "Upload photos" : "Review & edit"}
+            {step === "upload" ? "Upload clothing photos" : "Review eBay draft"}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {step === "upload"
-              ? "Every photo is uploaded to the server and analyzed with OpenAI Vision."
-              : "Edit any field, check confidence scores, then save or one-click publish."}
+              ? `Upload 1–${MAX_LISTING_IMAGES} photos. Vision generates an editable eBay listing automatically.`
+              : "Edit any field — title, description, specifics, price, keywords, flaws — then save."}
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -139,7 +149,7 @@ export function ListingGenerator() {
               step === "upload" ? "font-semibold text-foreground" : undefined
             }
           >
-            1. Analyze
+            1. Photos
           </span>
           <span aria-hidden>→</span>
           <span
@@ -147,19 +157,34 @@ export function ListingGenerator() {
               step === "review" ? "font-semibold text-foreground" : undefined
             }
           >
-            2. Edit & publish
+            2. Edit & save
           </span>
         </div>
       </div>
 
-      <p className="rounded-lg border border-border bg-card/50 px-3 py-2 text-xs text-muted-foreground">
-        Storage:{" "}
-        <span className="font-medium text-foreground">
-          {persistence === "supabase"
-            ? "Supabase"
-            : "Browser IndexedDB (local only — Supabase not configured)"}
-        </span>
-      </p>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {[
+          { label: "Photos", value: `${images.length}/${MAX_LISTING_IMAGES}` },
+          {
+            label: "Engine",
+            value: model ? model : "OpenAI Vision",
+          },
+          {
+            label: "Storage",
+            value: persistence === "supabase" ? "Supabase" : "IndexedDB",
+          },
+        ].map((item) => (
+          <div
+            key={item.label}
+            className="rounded-xl border border-border bg-card/60 px-3 py-2.5"
+          >
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              {item.label}
+            </p>
+            <p className="mt-0.5 text-sm font-semibold">{item.value}</p>
+          </div>
+        ))}
+      </div>
 
       {step === "upload" && (
         <div className="animate-rise space-y-5">
@@ -192,7 +217,7 @@ export function ListingGenerator() {
               {generating ? (
                 <>
                   <Loader2 className="animate-spin" />
-                  Running Vision engine…
+                  Analyzing photos…
                 </>
               ) : (
                 <>
@@ -202,6 +227,10 @@ export function ListingGenerator() {
                 </>
               )}
             </Button>
+            <p className="flex items-center gap-1.5 self-center text-xs text-muted-foreground">
+              <Camera className="h-3.5 w-3.5" />
+              Generates eBay title, description, specs, comps, keywords & flaws
+            </p>
           </div>
         </div>
       )}
@@ -209,15 +238,15 @@ export function ListingGenerator() {
       {step === "review" && listing && (
         <div className="animate-rise space-y-6">
           {listing.analysisMeta && (
-            <p className="rounded-xl border border-border bg-card/60 px-4 py-3 text-sm text-muted-foreground">
-              Analyzed {listing.analysisMeta.imagesAnalyzed} photo
-              {listing.analysisMeta.imagesAnalyzed === 1 ? "" : "s"} with{" "}
-              <span className="font-medium text-foreground">
-                {model ?? listing.analysisMeta.model}
-              </span>
-              . Title:{" "}
-              <span className="font-medium text-foreground">{listing.title}</span>
-            </p>
+            <div className="rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-sm">
+              <p className="font-medium text-foreground">{listing.title}</p>
+              <p className="mt-1 text-muted-foreground">
+                Analyzed {listing.analysisMeta.imagesAnalyzed} photo
+                {listing.analysisMeta.imagesAnalyzed === 1 ? "" : "s"} with{" "}
+                {model ?? listing.analysisMeta.model}. Every field below is
+                editable before saving.
+              </p>
+            </div>
           )}
 
           <ImageUploader

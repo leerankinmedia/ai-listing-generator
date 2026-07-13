@@ -102,15 +102,15 @@ export function ListingEditorForm({
     <div className="space-y-8">
       <section className="space-y-4">
         <div>
-          <h2 className="font-display text-lg font-semibold">Listing details</h2>
+          <h2 className="font-display text-lg font-semibold">eBay listing details</h2>
           <p className="text-sm text-muted-foreground">
-            Every field is editable. Confidence scores reflect Vision certainty.
+            Title, description, and category are editable. Confidence shows Vision certainty.
           </p>
         </div>
 
         <div className="space-y-2">
           <FieldHeader
-            label="SEO title"
+            label="eBay title"
             htmlFor="title"
             fieldKey="title"
             listing={listing}
@@ -145,7 +145,7 @@ export function ListingEditorForm({
 
         <div className="space-y-2">
           <FieldHeader
-            label="Description"
+            label="eBay description"
             htmlFor="description"
             fieldKey="description"
             listing={listing}
@@ -168,14 +168,14 @@ export function ListingEditorForm({
                 },
               })
             }}
-            placeholder="Professional marketplace description"
+            placeholder="eBay-ready clothing description"
             className="min-h-[200px]"
           />
         </div>
 
         <div className="space-y-2">
           <FieldHeader
-            label="Category"
+            label="eBay category"
             htmlFor="category"
             fieldKey="category"
             listing={listing}
@@ -185,7 +185,7 @@ export function ListingEditorForm({
             value={listing.specifics.category ?? ""}
             disabled={disabled}
             onChange={(e) => updateSpecific("category", e.target.value, "category")}
-            placeholder="Men > Outerwear > Jackets"
+            placeholder="Clothing, Shoes & Accessories > Men > Men's Clothing > Jeans"
           />
         </div>
       </section>

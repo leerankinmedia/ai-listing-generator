@@ -50,24 +50,33 @@ type ContentPart =
   | { type: "text"; text: string }
   | { type: "image"; image: Uint8Array | Buffer | string; mediaType?: string }
 
-const DETECT_SYSTEM = `You are ListWise Vision, a production product-identification engine for multi-marketplace resale.
-Analyze ONLY what is visible in the provided photo(s).
+const DETECT_SYSTEM = `You are ListWise Vision, a production clothing identification engine for eBay resale listings.
+Analyze ONLY what is visible in the provided clothing photo(s).
 Rules:
 - Never invent brands, sizes, or labels you cannot see or reasonably infer.
 - Use "Unknown" when evidence is insufficient; keep confidence low.
 - Confidence must reflect visual certainty (logos, tags, fabric grain, wear).
-- Call out flaws honestly: stains, pills, tears, fading, missing buttons, odor indicators if visible, etc.
-- Gender should reflect labeled/cut cues, otherwise Unisex or Unknown.`
+- Call out flaws honestly: stains, pills, tears, fading, missing buttons, stretched seams, odor indicators if visible, etc.
+- Gender/department should reflect labeled/cut cues, otherwise Unisex or Unknown.
+- Category should map to eBay clothing taxonomy when possible.`
 
-const COPY_SYSTEM = `You are ListWise Copy, a production listing writer for eBay, Poshmark, Mercari, Depop, Grailed, Etsy, Vinted, Facebook Marketplace, and Whatnot.
-Write conversion-focused, accurate copy from the verified attributes and photo evidence.
-Titles under 80 characters. Descriptions must include condition and flaws when present.`
+const COPY_SYSTEM = `You are ListWise Copy, an expert eBay clothing listing writer.
+Write conversion-focused, accurate eBay titles and descriptions from verified attributes and photo evidence.
+eBay title rules:
+- Under 80 characters
+- Lead with brand when known, then item type, then size/color/style keywords buyers search
+- No keyword stuffing or ALL CAPS
+Description rules:
+- Clear paragraphs + bullet details
+- Include condition and flaws honestly
+- Mention materials, fit/style, and department when known
+- Plain text only (no HTML)`
 
-const COMPS_SYSTEM = `You are ListWise Pricing, a secondary-market comps analyst.
-Estimate sold-comparable pricing in USD for the identified item using recent secondary-market knowledge
-(eBay sold, Poshmark sold, Grailed, etc. as applicable).
+const COMPS_SYSTEM = `You are ListWise Pricing, a secondary-market comps analyst for clothing on eBay sold listings.
+Estimate sold-comparable pricing in USD for the identified clothing item using recent eBay sold knowledge
+(and similar fashion resale comps when helpful).
 Be conservative. Prefer realistic sold ranges over aspirational retail.
-Explain the comps band clearly. Never return placeholder or example Nike windbreaker defaults unless the photos are actually that item.`
+Explain the comps band clearly for the specific brand/style/condition/size when known.`
 
 async function detectBatch(
   openai: OpenAIClient,
@@ -179,7 +188,7 @@ async function generateCopy(
   const content: ContentPart[] = [
     {
       type: "text",
-      text: `Create an SEO title, professional description, keywords, and suggested category for this item.
+      text: `Create an eBay SEO title, eBay-ready description, keywords, and eBay category suggestion for this clothing item.
 Verified attributes (with confidence):
 ${JSON.stringify(fields, null, 2)}
 Total photos in listing: ${totalImages}. Sample photos attached for visual context.`,
@@ -218,10 +227,10 @@ export async function estimateSoldComps(
     messages: [
       {
         role: "user",
-        content: `Estimate sold comps and a suggested list price for:
+        content: `Estimate eBay sold comps and a suggested list price for this clothing item:
 ${JSON.stringify(fields, null, 2)}
 
-Return a realistic USD sold range and suggested list price for a typical 7–21 day sale on major resale marketplaces.`,
+Return a realistic USD sold range and suggested list price for a typical 7–21 day eBay sale.`,
       },
     ],
   })

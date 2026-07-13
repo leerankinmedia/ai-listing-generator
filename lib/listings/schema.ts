@@ -1,6 +1,8 @@
 import { z } from "zod"
 
-export const MAX_LISTING_IMAGES = 24
+/** Phase 4 workflow: 1–12 clothing photos per listing */
+export const MAX_LISTING_IMAGES = 12
+export const MIN_LISTING_IMAGES = 1
 /** Analyze every uploaded image; batch for Vision rate/token limits */
 export const VISION_BATCH_SIZE = 4
 
@@ -67,7 +69,9 @@ export const listingCopySchema = z.object({
   title: z.object({
     value: z
       .string()
-      .describe("SEO-optimized title under 80 characters"),
+      .describe(
+        "eBay SEO title under 80 characters: Brand + Item + Key attrs (size/color/style). No ALL CAPS spam."
+      ),
     confidence: z.number().min(0).max(1),
     rationale: z.string(),
   }),
@@ -75,7 +79,7 @@ export const listingCopySchema = z.object({
     value: z
       .string()
       .describe(
-        "Professional multi-paragraph marketplace description including features, fit, condition, and flaws"
+        "eBay-ready HTML-free description with short paragraphs and bullet details for features, measurements if known, condition, and flaws"
       ),
     confidence: z.number().min(0).max(1),
     rationale: z.string(),
@@ -85,7 +89,9 @@ export const listingCopySchema = z.object({
     confidence: z.number().min(0).max(1),
     rationale: z.string(),
   }),
-  category: confidentStringSchema,
+  category: confidentStringSchema.describe(
+    "eBay-style category path, e.g. Clothing, Shoes & Accessories > Men > Men's Clothing > Jeans"
+  ),
 })
 
 export const compsEstimateSchema = z.object({

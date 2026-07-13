@@ -5,13 +5,40 @@ import {
   ListingEngineError,
 } from "@/lib/ai/generate-listing"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
+import { getServerAuthUser, isSupabaseConfigured } from "@/lib/supabase/index"
+import { createClient as createServerClient } from "@/lib/supabase/server"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
 
-export async function POST(request: Request) {
+async function recordAiGeneration(params: {
+  userId: string
+  model: string
+  imagesAnalyzed: number
+  draft: unknown
+  status: "succeeded" | "failed"
+  errorMessage?: string
+}) {
+  if (!isSupabaseConfigured()) return
   try {
-    // Read uploads first so we always confirm photos reached the server
+    const supabase = await createServerClient()
+    await supabase.from("ai_generations").insert({
+      user_id: params.userId,
+      model: params.model,
+      images_analyzed: params.imagesAnalyzed,
+      draft: params.draft ?? {},
+      status: params.status,
+      error_message: params.errorMessage ?? null,
+    })
+  } catch (error) {
+    console.error("[ai_generations] failed to persist", error)
+  }
+}
+
+export async function POST(request: Request) {
+  const user = await getServerAuthUser()
+
+  try {
     const formData = await request.formData()
     const files = formData
       .getAll("images")
@@ -54,6 +81,16 @@ export async function POST(request: Request) {
 
     const { draft, model } = await generateListingFromImages(images)
 
+    if (user) {
+      await recordAiGeneration({
+        userId: user.id,
+        model,
+        imagesAnalyzed: images.length,
+        draft,
+        status: "succeeded",
+      })
+    }
+
     return NextResponse.json({
       draft,
       model,
@@ -62,6 +99,16 @@ export async function POST(request: Request) {
     })
   } catch (error) {
     console.error("[listing engine]", error)
+    if (user) {
+      await recordAiGeneration({
+        userId: user.id,
+        model: "unknown",
+        imagesAnalyzed: 0,
+        draft: {},
+        status: "failed",
+        errorMessage: error instanceof Error ? error.message : "Listing engine failed.",
+      })
+    }
     if (error instanceof ListingEngineError) {
       return NextResponse.json({ error: error.message }, { status: error.status })
     }

@@ -5,6 +5,7 @@ import {
   putStagingImage,
   type StagingImage,
 } from "@/lib/marketplaces/images/staging-store"
+import { getServerAuthUser } from "@/lib/supabase/index"
 
 function parseDataUrl(dataUrl: string): StagingImage {
   const match = /^data:([^;]+);base64,(.+)$/i.exec(dataUrl)
@@ -35,8 +36,8 @@ function supabaseStorageConfigured() {
 
 async function uploadToSupabase(dataUrl: string, index: number): Promise<string> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   const bucket = process.env.SUPABASE_STORAGE_BUCKET!
   const parsed = parseDataUrl(dataUrl)
   const ext = parsed.contentType.includes("png")
@@ -44,8 +45,20 @@ async function uploadToSupabase(dataUrl: string, index: number): Promise<string>
     : parsed.contentType.includes("webp")
       ? "webp"
       : "jpg"
-  const path = `publish/${Date.now()}-${index}.${ext}`
-  const supabase = createClient(url, key, {
+
+  // Prefer service role (bypasses storage RLS). With anon key, path must be {userId}/...
+  const user = serviceKey ? null : await getServerAuthUser()
+  if (!serviceKey && !user) {
+    throw new MarketplaceError(
+      "Supabase storage upload requires SUPABASE_SERVICE_ROLE_KEY or an authenticated session.",
+      "storage_auth_required",
+      401
+    )
+  }
+
+  const folder = serviceKey ? "publish" : `${user!.id}/publish`
+  const path = `${folder}/${Date.now()}-${index}.${ext}`
+  const supabase = createClient(url, serviceKey || anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   })
   const { error } = await supabase.storage.from(bucket).upload(path, parsed.buffer, {
@@ -62,7 +75,7 @@ async function uploadToSupabase(dataUrl: string, index: number): Promise<string>
   const { data } = supabase.storage.from(bucket).getPublicUrl(path)
   if (!data.publicUrl) {
     throw new MarketplaceError(
-      "Storage upload succeeded but no public URL was returned. Make the bucket public.",
+      "Storage upload succeeded but no public URL was returned. Make the listing-images bucket public.",
       "storage_public_url_missing",
       502
     )
@@ -77,7 +90,6 @@ async function uploadToSupabase(dataUrl: string, index: number): Promise<string>
  * Resolution order for data URLs:
  * 1. Supabase Storage when SUPABASE_STORAGE_BUCKET is configured
  * 2. Short-lived local staging served at /api/media/staging/:id
- *    (requires NEXT_PUBLIC_APP_URL to be reachable by the marketplace)
  */
 export async function ensurePublicImageUrls(urls: string[]): Promise<string[]> {
   const out: string[] = []
@@ -107,7 +119,7 @@ export async function ensurePublicImageUrls(urls: string[]): Promise<string[]> {
       !process.env.NEXT_PUBLIC_APP_URL
     ) {
       throw new MarketplaceError(
-        "Marketplace publishing needs publicly reachable image URLs. Configure SUPABASE_STORAGE_BUCKET (and Supabase keys) or set NEXT_PUBLIC_APP_URL to a publicly reachable host so staged photos can be fetched.",
+        "Marketplace publishing needs publicly reachable image URLs. Set SUPABASE_STORAGE_BUCKET + SUPABASE_SERVICE_ROLE_KEY (recommended) or a public NEXT_PUBLIC_APP_URL for staged photos.",
         "public_images_required",
         400
       )

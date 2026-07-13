@@ -1,0 +1,92 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+:root {
+  --background: #f3efe6;
+  --foreground: #14201c;
+  --card: #fffaf2;
+  --muted: #e7e0d2;
+  --muted-foreground: #5c685f;
+  --border: #d5cdbc;
+  --accent: #c45c26;
+  --accent-foreground: #fffaf2;
+  --accent-soft: #f3d7c4;
+  --accent-foreground-soft: #7a3412;
+  --secondary: #dfe8e2;
+  --secondary-foreground: #14201c;
+  --destructive: #b42318;
+  --ink: #0f1c18;
+  --ink-foreground: #f4efe6;
+  --ring: #c45c26;
+  --shadow-soft: 0 10px 30px -18px rgba(20, 32, 28, 0.35);
+  --hero-glow: radial-gradient(ellipse 80% 55% at 70% -10%, rgba(196, 92, 38, 0.18), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 10% 20%, rgba(45, 90, 70, 0.12), transparent 50%);
+}
+
+@theme inline {
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--foreground);
+  background:
+    var(--hero-glow),
+    linear-gradient(180deg, #f7f3ea 0%, #efe8da 45%, #e9e2d3 100%);
+  background-attachment: fixed;
+  font-family: var(--font-body), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--accent) 35%, white);
+}
+
+.texture-grid {
+  background-image:
+    linear-gradient(to right, rgba(20, 32, 28, 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(20, 32, 28, 0.035) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: linear-gradient(to bottom, black 40%, transparent 100%);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise {
+  animation: rise 0.55s ease-out both;
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2.2s ease-in-out infinite;
+}

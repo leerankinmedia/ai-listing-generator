@@ -1,6 +1,7 @@
 /**
  * Demo auth for local/preview when Supabase env vars are not set.
- * Swap to Supabase-only by configuring NEXT_PUBLIC_SUPABASE_*.
+ * When NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY are set,
+ * demo mode is off unless NEXT_PUBLIC_DEMO_AUTH=true.
  */
 
 export const DEMO_SESSION_COOKIE = "listwise_demo_session"
@@ -15,12 +16,12 @@ export interface DemoUser {
 export function isDemoAuthEnabled() {
   if (process.env.NEXT_PUBLIC_DEMO_AUTH === "true") return true
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  return (
-    !url ||
-    !key ||
-    url === "https://your-project.supabase.co"
-  )
+  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+  // Supabase configured → never fall back to demo
+  if (url && key && url !== "https://your-project.supabase.co") {
+    return false
+  }
+  return true
 }
 
 export function createDemoUser(email: string, fullName?: string): DemoUser {

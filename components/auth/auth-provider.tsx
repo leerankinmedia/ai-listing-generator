@@ -17,7 +17,7 @@ import {
   setDemoSession,
   type DemoUser,
 } from "@/lib/auth/demo"
-import { createClient, isSupabaseConfigured } from "@/lib/supabase/client"
+import { createClient } from "@/lib/supabase/client"
 
 interface AuthUser {
   id: string
@@ -47,7 +47,7 @@ function toAuthUser(demo: DemoUser): AuthUser {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null)
   const [loading, setLoading] = useState(true)
-  const demoMode = isDemoAuthEnabled() || !isSupabaseConfigured()
+  const demoMode = isDemoAuthEnabled()
 
   useEffect(() => {
     let mounted = true

@@ -25,7 +25,8 @@ function parseDataUrl(dataUrl: string): StagingImage {
 function supabaseStorageConfigured() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
   return Boolean(
     url &&
       key &&
@@ -37,7 +38,7 @@ function supabaseStorageConfigured() {
 async function uploadToSupabase(dataUrl: string, index: number): Promise<string> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
   const bucket = process.env.SUPABASE_STORAGE_BUCKET!
   const parsed = parseDataUrl(dataUrl)
   const ext = parsed.contentType.includes("png")

@@ -188,7 +188,7 @@ export function getPersistenceMode(): "supabase" | "indexeddb" {
   // Client-safe check mirrors isSupabaseConfigured without throwing
   if (typeof window === "undefined") {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
     if (
       url &&
       key &&
@@ -199,7 +199,7 @@ export function getPersistenceMode(): "supabase" | "indexeddb" {
     return "indexeddb"
   }
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
   if (url && key && url !== "https://your-project.supabase.co") {
     return "supabase"
   }

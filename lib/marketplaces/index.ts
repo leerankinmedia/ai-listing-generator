@@ -1,8 +1,10 @@
 import type { MarketplaceId } from "@/lib/types"
 
 /**
- * Marketplace registry — single source of truth for Phase 2+ integrations.
- * UI surfaces read from this; adapters will live under lib/marketplaces/adapters/.
+ * Marketplace registry — single source of truth for UI + adapter paths.
+ * Live adapters: lib/marketplaces/adapters/{ebay,vinted,whatnot}
+ * Future adapters register the same MarketplaceAdapter contract without
+ * changing publish-service or Connections UI.
  */
 
 export interface MarketplaceDefinition {

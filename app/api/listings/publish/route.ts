@@ -6,7 +6,7 @@ export const runtime = "nodejs"
 
 /**
  * One-click multi-marketplace publish endpoint.
- * Accepts a full listing payload + target IDs; adapters fulfill jobs.
+ * Only publishes through real adapters for connected marketplaces.
  */
 export async function POST(request: Request) {
   try {
@@ -22,9 +22,10 @@ export async function POST(request: Request) {
       )
     }
 
-    const results = await publishListingOneClick(body.listing, {
-      marketplaceIds: body.marketplaceIds,
-    })
+    const results = await publishListingOneClick(
+      body.listing,
+      body.marketplaceIds
+    )
 
     return NextResponse.json({ results })
   } catch (error) {

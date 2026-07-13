@@ -1,48 +1,51 @@
-/**
- * Marketplace adapter contract.
- * Future phases implement one adapter per marketplace under this folder.
- */
-
 import type {
   Listing,
   MarketplaceId,
   MarketplaceListingRef,
-  PublishReadyListing,
 } from "@/lib/types"
+import type { StoredMarketplaceConnection } from "@/lib/marketplaces/connections/crypto"
 
-export interface MarketplaceCredentials {
-  accessToken?: string
-  refreshToken?: string
-  expiresAt?: string
-  meta?: Record<string, string>
+export class MarketplaceError extends Error {
+  status: number
+  code: string
+  constructor(message: string, code = "marketplace_error", status = 400) {
+    super(message)
+    this.name = "MarketplaceError"
+    this.code = code
+    this.status = status
+  }
 }
 
 export interface PublishResult {
   ok: boolean
   listingRef?: MarketplaceListingRef
   error?: string
+  externalUrl?: string
 }
 
 export interface MarketplaceAdapter {
   id: MarketplaceId
-  connect(credentials: MarketplaceCredentials): Promise<void>
-  disconnect(): Promise<void>
-  /** Prefer publishReady for channel-specific mapping */
-  publish(listing: Listing | PublishReadyListing): Promise<PublishResult>
-  update(listing: Listing, externalId: string): Promise<PublishResult>
-  delist(externalId: string): Promise<{ ok: boolean; error?: string }>
-  syncInventory?(sku: string, quantity: number): Promise<{ ok: boolean }>
+  displayName: string
+  /** Whether app-level credentials are configured in env */
+  isAppConfigured(): boolean
+  /** Human-readable setup requirements */
+  setupRequirements(): string[]
+  publish(
+    listing: Listing,
+    connection: StoredMarketplaceConnection
+  ): Promise<PublishResult>
 }
 
-/** Placeholder adapters — wire real APIs in Phase 2+. */
-export const ADAPTER_STATUS = {
-  ebay: "planned",
-  poshmark: "planned",
-  mercari: "planned",
-  depop: "planned",
-  grailed: "planned",
-  facebook_marketplace: "planned",
-  etsy: "planned",
-  vinted: "planned",
-  whatnot: "planned",
-} as const satisfies Record<MarketplaceId, "planned" | "beta" | "live">
+export type AdapterCapability =
+  | "oauth"
+  | "api_token"
+  | "publish"
+  | "disconnect"
+
+export interface AdapterMeta {
+  id: MarketplaceId
+  name: string
+  status: "live" | "requires_credentials" | "coming_soon"
+  authMethod: "oauth" | "api_token" | null
+  capabilities: AdapterCapability[]
+}

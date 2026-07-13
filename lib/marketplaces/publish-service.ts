@@ -1,23 +1,24 @@
 import type {
   Listing,
   MarketplaceId,
-  OneClickPublishRequest,
   OneClickPublishResult,
-  PublishReadyListing,
 } from "@/lib/types"
-import { getMarketplace } from "@/lib/marketplaces"
+import { getAdapter } from "@/lib/marketplaces/adapters/registry"
+import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
+import { getConnection, isPhase5Marketplace } from "@/lib/marketplaces/connections/store"
 import { listingIsReadyToPublish } from "@/lib/listings/publish"
+import { getMarketplace } from "@/lib/marketplaces"
 
 /**
- * One-click publish orchestration.
- * Marketplace adapters plug into this service; until connected, jobs are queued.
+ * Production publish orchestration.
+ * Only calls real adapters. Never reports success without an API response.
  */
 export async function publishListingOneClick(
   listing: Listing,
-  request: Omit<OneClickPublishRequest, "listingId">
+  marketplaceIds: MarketplaceId[]
 ): Promise<OneClickPublishResult[]> {
   if (!listingIsReadyToPublish(listing)) {
-    return request.marketplaceIds.map((marketplaceId) => ({
+    return marketplaceIds.map((marketplaceId) => ({
       marketplaceId,
       ok: false,
       status: "error" as const,
@@ -27,44 +28,76 @@ export async function publishListingOneClick(
 
   const results: OneClickPublishResult[] = []
 
-  for (const marketplaceId of request.marketplaceIds) {
-    const payload = toPublishPayload(listing, marketplaceId)
+  for (const marketplaceId of marketplaceIds) {
     const def = getMarketplace(marketplaceId)
+    try {
+      if (!isPhase5Marketplace(marketplaceId)) {
+        results.push({
+          marketplaceId,
+          ok: false,
+          status: "error",
+          message: `${def?.name ?? marketplaceId} is not available yet.`,
+        })
+        continue
+      }
 
-    // Adapter hook — replace with real OAuth + API publish in Phase 4+
-    results.push({
-      marketplaceId,
-      ok: true,
-      status: "queued",
-      message: `${def?.name ?? marketplaceId} publish queued. Connect the ${marketplaceId} adapter to go live.`,
-      listingRef: {
+      const connection = await getConnection(marketplaceId)
+      if (!connection) {
+        results.push({
+          marketplaceId,
+          ok: false,
+          status: "error",
+          message: `Connect ${def?.name ?? marketplaceId} on the Marketplace Connections page first.`,
+        })
+        continue
+      }
+
+      const adapter = getAdapter(marketplaceId)
+      if (!adapter.isAppConfigured()) {
+        results.push({
+          marketplaceId,
+          ok: false,
+          status: "error",
+          message: `${adapter.displayName} app credentials are not configured on the server.`,
+        })
+        continue
+      }
+
+      const published = await adapter.publish(listing, connection)
+      if (!published.ok || !published.listingRef) {
+        results.push({
+          marketplaceId,
+          ok: false,
+          status: "error",
+          message: published.error || "Publish failed without a listing reference.",
+        })
+        continue
+      }
+
+      results.push({
         marketplaceId,
-        status: "draft",
-        price: payload.overrides?.price ?? listing.price,
-      },
-    })
+        ok: true,
+        status: "published",
+        message: published.externalUrl
+          ? `Published: ${published.externalUrl}`
+          : `Published to ${adapter.displayName}.`,
+        listingRef: published.listingRef,
+      })
+    } catch (error) {
+      const message =
+        error instanceof MarketplaceError
+          ? error.message
+          : error instanceof Error
+            ? error.message
+            : "Publish failed."
+      results.push({
+        marketplaceId,
+        ok: false,
+        status: "error",
+        message,
+      })
+    }
   }
 
   return results
-}
-
-export function toPublishPayload(
-  listing: Listing,
-  marketplaceId: MarketplaceId
-): PublishReadyListing {
-  return {
-    listing,
-    marketplaceId,
-    overrides: undefined,
-  }
-}
-
-export function buildPublishJob(listing: Listing, marketplaceIds: MarketplaceId[]) {
-  return {
-    listingId: listing.id,
-    createdAt: new Date().toISOString(),
-    targets: marketplaceIds.map((marketplaceId) =>
-      toPublishPayload(listing, marketplaceId)
-    ),
-  }
 }

@@ -332,12 +332,17 @@ export function ListingEditorForm({
         <div>
           <h2 className="font-display text-lg font-semibold">Publish targets</h2>
           <p className="text-sm text-muted-foreground">
-            Select channels for one-click publish.
+            Prefer connected Phase 5 markets (eBay, Vinted, Whatnot). Others are
+            reserved for future adapters.
           </p>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {MARKETPLACES.map((marketplace) => {
             const active = listing.targetMarketplaces.includes(marketplace.id)
+            const live =
+              marketplace.id === "ebay" ||
+              marketplace.id === "vinted" ||
+              marketplace.id === "whatnot"
             return (
               <button
                 key={marketplace.id}
@@ -355,7 +360,14 @@ export function ListingEditorForm({
                   className="h-2 w-2 shrink-0 rounded-full"
                   style={{ backgroundColor: marketplace.color }}
                 />
-                <span className="truncate font-medium">{marketplace.shortName}</span>
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {marketplace.shortName}
+                </span>
+                {!live && (
+                  <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Soon
+                  </span>
+                )}
               </button>
             )
           })}

@@ -1,0 +1,169 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+}
+
+:root {
+  --lw-bg: #f4f7f8;
+  --lw-fg: #0c1222;
+  --lw-fg-muted: #4a5568;
+  --lw-fg-subtle: #7b8794;
+  --lw-surface: #ffffff;
+  --lw-surface-2: #e8eef1;
+  --lw-surface-3: #d9e2e8;
+  --lw-border: #d3dde4;
+  --lw-border-strong: #b7c4ce;
+  --lw-accent: #0f9f8a;
+  --lw-accent-hover: #0d8a78;
+  --lw-accent-fg: #06241f;
+  --lw-ink: #0b1324;
+  --background: var(--lw-bg);
+  --foreground: var(--lw-fg);
+}
+
+.dark {
+  --lw-bg: #070b12;
+  --lw-fg: #eef3f7;
+  --lw-fg-muted: #9aa8b6;
+  --lw-fg-subtle: #6b7a8a;
+  --lw-surface: #0e1522;
+  --lw-surface-2: #162033;
+  --lw-surface-3: #1e2b42;
+  --lw-border: #243247;
+  --lw-border-strong: #334760;
+  --lw-accent: #2dd4bf;
+  --lw-accent-hover: #5eead4;
+  --lw-accent-fg: #042f2e;
+  --lw-ink: #05080f;
+  --background: var(--lw-bg);
+  --foreground: var(--lw-fg);
+}
+
+@layer base {
+  * {
+    @apply border-[var(--lw-border)];
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-[var(--lw-bg)] text-[var(--lw-fg)] antialiased;
+    font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 10% -10%, rgba(15, 159, 138, 0.08), transparent),
+      radial-gradient(ellipse 60% 40% at 100% 0%, rgba(56, 189, 248, 0.06), transparent);
+    min-height: 100svh;
+  }
+
+  .dark body {
+    background-image:
+      radial-gradient(ellipse 80% 50% at 10% -10%, rgba(45, 212, 191, 0.1), transparent),
+      radial-gradient(ellipse 60% 40% at 100% 0%, rgba(56, 189, 248, 0.06), transparent);
+  }
+}
+
+/* Atmospheric hero plane — cool mist + teal wash, not flat */
+.lw-hero-plane {
+  background:
+    linear-gradient(165deg, rgba(244, 247, 248, 0.2) 0%, rgba(15, 159, 138, 0.08) 45%, rgba(56, 189, 248, 0.06) 100%),
+    radial-gradient(ellipse at 70% 20%, rgba(15, 159, 138, 0.18), transparent 50%),
+    radial-gradient(ellipse at 20% 80%, rgba(14, 165, 233, 0.12), transparent 45%);
+}
+
+.dark .lw-hero-plane {
+  background:
+    linear-gradient(165deg, rgba(7, 11, 18, 0.4) 0%, rgba(45, 212, 191, 0.08) 50%, rgba(14, 165, 233, 0.05) 100%),
+    radial-gradient(ellipse at 70% 20%, rgba(45, 212, 191, 0.16), transparent 50%),
+    radial-gradient(ellipse at 20% 80%, rgba(56, 189, 248, 0.1), transparent 45%);
+}
+
+.lw-grid-fade {
+  background-image:
+    linear-gradient(to right, rgba(15, 23, 42, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(15, 23, 42, 0.06) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at center, black 20%, transparent 75%);
+}
+
+.dark .lw-grid-fade {
+  background-image:
+    linear-gradient(to right, rgba(238, 243, 247, 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(238, 243, 247, 0.05) 1px, transparent 1px);
+}
+
+@keyframes lw-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes lw-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes lw-drift {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(-18px, 12px) scale(1.05);
+  }
+}
+
+@keyframes lw-drift-slow {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(14px, -10px);
+  }
+}
+
+.animate-lw-rise {
+  animation: lw-rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-lw-rise-delayed {
+  animation: lw-rise 0.85s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both;
+}
+
+.animate-lw-fade {
+  animation: lw-fade 0.8s ease 0.25s both;
+}
+
+.animate-lw-drift {
+  animation: lw-drift 14s ease-in-out infinite;
+}
+
+.animate-lw-drift-slow {
+  animation: lw-drift-slow 18s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-lw-rise,
+  .animate-lw-rise-delayed,
+  .animate-lw-fade,
+  .animate-lw-drift,
+  .animate-lw-drift-slow {
+    animation: none;
+  }
+}

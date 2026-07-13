@@ -3,7 +3,12 @@
  * Future phases implement one adapter per marketplace under this folder.
  */
 
-import type { Listing, MarketplaceId, MarketplaceListingRef } from "@/lib/types"
+import type {
+  Listing,
+  MarketplaceId,
+  MarketplaceListingRef,
+  PublishReadyListing,
+} from "@/lib/types"
 
 export interface MarketplaceCredentials {
   accessToken?: string
@@ -22,7 +27,8 @@ export interface MarketplaceAdapter {
   id: MarketplaceId
   connect(credentials: MarketplaceCredentials): Promise<void>
   disconnect(): Promise<void>
-  publish(listing: Listing): Promise<PublishResult>
+  /** Prefer publishReady for channel-specific mapping */
+  publish(listing: Listing | PublishReadyListing): Promise<PublishResult>
   update(listing: Listing, externalId: string): Promise<PublishResult>
   delist(externalId: string): Promise<{ ok: boolean; error?: string }>
   syncInventory?(sku: string, quantity: number): Promise<{ ok: boolean }>

@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   LogOut,
   Package,
+  Plus,
   Settings,
   Store,
   Zap,
@@ -15,11 +16,13 @@ import {
 import { Logo } from "@/components/brand/logo"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { useAuth } from "@/components/auth/auth-provider"
+import { buttonVariants } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 const navItems = [
-  { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-  { href: "/dashboard#listings", label: "Listings", icon: Package },
+  { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
+  { href: "/dashboard/listings", label: "Listings", icon: Package },
+  { href: "/dashboard/listings/new", label: "AI Generator", icon: Plus },
   { href: "/dashboard#marketplaces", label: "Marketplaces", icon: Store },
   { href: "/dashboard#inventory", label: "Inventory", icon: Boxes },
   { href: "/dashboard#automation", label: "Automation", icon: Zap },
@@ -43,10 +46,31 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         <div className="flex h-16 items-center px-5">
           <Logo className="[&_span:last-child]:text-sidebar-foreground" />
         </div>
-        <nav className="flex-1 space-y-1 px-3 py-4">
+        <div className="px-3 pb-2">
+          <Link
+            href="/dashboard/listings/new"
+            className={cn(
+              buttonVariants({ variant: "accent", size: "sm" }),
+              "w-full"
+            )}
+          >
+            <Plus className="h-4 w-4" />
+            New listing
+          </Link>
+        </div>
+        <nav className="flex-1 space-y-1 px-3 py-2">
           {navItems.map((item) => {
             const Icon = item.icon
-            const active = item.href === "/dashboard" && pathname === "/dashboard"
+            const active = item.exact
+              ? pathname === item.href
+              : pathname === item.href ||
+                (item.href !== "/dashboard" &&
+                  !item.href.includes("#") &&
+                  pathname.startsWith(item.href) &&
+                  !(
+                    item.href === "/dashboard/listings" &&
+                    pathname.startsWith("/dashboard/listings/new")
+                  ))
             return (
               <Link
                 key={item.href}
@@ -93,6 +117,16 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             Sell smarter across every marketplace.
           </p>
           <div className="flex items-center gap-2">
+            <Link
+              href="/dashboard/listings/new"
+              className={cn(
+                buttonVariants({ variant: "accent", size: "sm" }),
+                "hidden sm:inline-flex lg:hidden"
+              )}
+            >
+              <Plus className="h-4 w-4" />
+              New
+            </Link>
             <ThemeToggle />
             <button
               type="button"
@@ -105,7 +139,13 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         </header>
 
         <nav className="flex gap-1 overflow-x-auto border-b border-border px-3 py-2 lg:hidden">
-          {navItems.slice(0, 5).map((item) => {
+          {[
+            navItems[0],
+            navItems[1],
+            navItems[2],
+            navItems[3],
+            navItems[4],
+          ].map((item) => {
             const Icon = item.icon
             return (
               <Link

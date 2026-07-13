@@ -1,5 +1,7 @@
 "use client"
 
+import Link from "next/link"
+import { useEffect, useState } from "react"
 import {
   ArrowUpRight,
   Package,
@@ -9,42 +11,12 @@ import {
 } from "lucide-react"
 import { useAuth } from "@/components/auth/auth-provider"
 import { MARKETPLACES } from "@/lib/marketplaces"
+import { fetchListings } from "@/lib/listings/repository"
 import { buttonVariants } from "@/components/ui/button"
+import type { Listing } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-const stats = [
-  {
-    label: "Active listings",
-    value: "0",
-    hint: "Ready for Phase 2",
-    icon: Package,
-  },
-  {
-    label: "Connected shops",
-    value: "0 / 9",
-    hint: "Marketplace adapters ready",
-    icon: Store,
-  },
-  {
-    label: "Pending offers",
-    value: "0",
-    hint: "Automation coming soon",
-    icon: Zap,
-  },
-  {
-    label: "Revenue (30d)",
-    value: "$0",
-    hint: "Analytics scaffolding live",
-    icon: TrendingUp,
-  },
-]
-
 const roadmap = [
-  {
-    id: "listings",
-    title: "AI listing generation",
-    body: "Photo → title, description, tags, and price suggestions powered by OpenAI.",
-  },
   {
     id: "marketplaces",
     title: "Marketplace syncing",
@@ -69,7 +41,51 @@ const roadmap = [
 
 export function DashboardOverview() {
   const { user, isDemo } = useAuth()
-  const firstName = user?.fullName?.split(" ")[0] || user?.email?.split("@")[0] || "Seller"
+  const [listings, setListings] = useState<Listing[]>([])
+  const firstName =
+    user?.fullName?.split(" ")[0] || user?.email?.split("@")[0] || "Seller"
+
+  useEffect(() => {
+    if (!user) return
+    let mounted = true
+    void fetchListings(user.id).then((rows) => {
+      if (mounted) setListings(rows)
+    })
+    return () => {
+      mounted = false
+    }
+  }, [user])
+
+  const activeCount = listings.filter(
+    (l) => l.status === "ready" || l.status === "listed" || l.status === "draft"
+  ).length
+
+  const stats = [
+    {
+      label: "Active listings",
+      value: String(activeCount),
+      hint: listings.length ? "From your workspace" : "Create your first AI listing",
+      icon: Package,
+    },
+    {
+      label: "Connected shops",
+      value: "0 / 9",
+      hint: "Marketplace adapters ready",
+      icon: Store,
+    },
+    {
+      label: "Pending offers",
+      value: "0",
+      hint: "Automation coming soon",
+      icon: Zap,
+    },
+    {
+      label: "Revenue (30d)",
+      value: "$0",
+      hint: "Analytics scaffolding live",
+      icon: TrendingUp,
+    },
+  ]
 
   return (
     <div className="mx-auto max-w-6xl space-y-8">
@@ -80,22 +96,20 @@ export function DashboardOverview() {
             {firstName}&apos;s workspace
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Phase 1 foundation is live
+            AI listing generator is live
             {isDemo ? " · running in demo auth mode" : ""}.
           </p>
         </div>
-        <button
-          type="button"
-          disabled
-          title="AI listing generation ships in Phase 2"
+        <Link
+          href="/dashboard/listings/new"
           className={cn(
             buttonVariants({ variant: "accent" }),
-            "self-start opacity-70 sm:self-auto"
+            "self-start sm:self-auto"
           )}
         >
           New listing
           <ArrowUpRight className="h-4 w-4" />
-        </button>
+        </Link>
       </div>
 
       <div className="animate-rise-delay-1 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -119,12 +133,73 @@ export function DashboardOverview() {
         })}
       </div>
 
-      <section id="marketplaces" className="animate-rise-delay-2 scroll-mt-24">
+      <section id="listings" className="animate-rise-delay-2 scroll-mt-24 space-y-4">
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <h2 className="font-display text-xl font-semibold">Recent listings</h2>
+            <p className="text-sm text-muted-foreground">
+              Generated with OpenAI Vision and saved to your workspace.
+            </p>
+          </div>
+          <Link
+            href="/dashboard/listings"
+            className="text-sm font-medium text-muted-foreground hover:text-accent"
+          >
+            View all
+          </Link>
+        </div>
+        {listings.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border bg-card/40 px-6 py-14 text-center">
+            <Package className="mx-auto h-8 w-8 text-muted-foreground" />
+            <p className="mt-3 font-medium">No listings yet</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Upload photos and generate SEO-ready copy in seconds.
+            </p>
+            <Link
+              href="/dashboard/listings/new"
+              className={cn(buttonVariants({ variant: "accent" }), "mt-5 inline-flex")}
+            >
+              Open AI generator
+            </Link>
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {listings.slice(0, 6).map((listing) => (
+              <Link
+                key={listing.id}
+                href={`/dashboard/listings/${listing.id}`}
+                className="overflow-hidden rounded-xl border border-border bg-card/80 transition-colors hover:border-accent/40"
+              >
+                <div className="aspect-[16/10] bg-secondary">
+                  {listing.images[0] && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={listing.images[0].url}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
+                  )}
+                </div>
+                <div className="space-y-1 p-3.5">
+                  <p className="line-clamp-1 text-sm font-semibold">
+                    {listing.title || "Untitled"}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    ${listing.price.toFixed(2)} · {listing.status}
+                  </p>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section id="marketplaces" className="scroll-mt-24">
         <div className="mb-4 flex items-end justify-between gap-4">
           <div>
             <h2 className="font-display text-xl font-semibold">Marketplaces</h2>
             <p className="text-sm text-muted-foreground">
-              Connection UI is ready — OAuth adapters plug in next.
+              Listings are publish-ready — OAuth adapters plug in next.
             </p>
           </div>
         </div>
@@ -157,32 +232,16 @@ export function DashboardOverview() {
         </div>
       </section>
 
-      <section id="listings" className="scroll-mt-24 space-y-4">
-        <div>
-          <h2 className="font-display text-xl font-semibold">Listings</h2>
-          <p className="text-sm text-muted-foreground">
-            Your catalog will appear here once AI listing generation ships.
-          </p>
-        </div>
-        <div className="rounded-xl border border-dashed border-border bg-card/40 px-6 py-14 text-center">
-          <Package className="mx-auto h-8 w-8 text-muted-foreground" />
-          <p className="mt-3 font-medium">No listings yet</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Architecture types and marketplace refs are ready for Phase 2.
-          </p>
-        </div>
-      </section>
-
       <section id="automation" className="scroll-mt-24">
-        <h2 className="font-display text-xl font-semibold">Product roadmap</h2>
+        <h2 className="font-display text-xl font-semibold">Coming next</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Scaffolded modules prepared for upcoming phases.
+          Crosslisting, automation, and analytics phases.
         </p>
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           {roadmap.map((item) => (
             <div
               key={item.id}
-              id={item.id === "listings" ? undefined : item.id}
+              id={item.id}
               className="rounded-xl border border-border bg-card/80 p-4"
             >
               <p className="text-sm font-semibold">{item.title}</p>
@@ -194,7 +253,10 @@ export function DashboardOverview() {
         </div>
       </section>
 
-      <section id="settings" className="scroll-mt-24 rounded-xl border border-border bg-card/80 p-5">
+      <section
+        id="settings"
+        className="scroll-mt-24 rounded-xl border border-border bg-card/80 p-5"
+      >
         <h2 className="font-display text-xl font-semibold">Account</h2>
         <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
           <div>

@@ -25,6 +25,14 @@ export type ListingStatus =
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error"
 
+export type ItemCondition =
+  | "New with tags"
+  | "New without tags"
+  | "Excellent"
+  | "Good"
+  | "Fair"
+  | "Poor"
+
 export interface MarketplaceConnection {
   marketplaceId: MarketplaceId
   status: ConnectionStatus
@@ -33,17 +41,44 @@ export interface MarketplaceConnection {
   errorMessage?: string
 }
 
+export interface ListingImage {
+  id: string
+  /** Public URL, data URL, or storage path */
+  url: string
+  /** Optional storage object key for Supabase Storage */
+  storagePath?: string
+  sortOrder: number
+  isPrimary?: boolean
+}
+
+export interface ListingSpecifics {
+  brand?: string
+  size?: string
+  color?: string
+  material?: string
+  style?: string
+  condition?: ItemCondition | string
+  category?: string
+  /** Free-form key/value extras for marketplace-specific fields */
+  extras?: Record<string, string>
+}
+
 export interface Listing {
   id: string
+  userId: string
   title: string
-  description?: string
+  description: string
   price: number
   currency: string
-  condition?: string
-  category?: string
-  images: string[]
+  keywords: string[]
+  specifics: ListingSpecifics
+  images: ListingImage[]
   status: ListingStatus
+  /** Future publish targets — adapters fill these in later phases */
   marketplaceListings: MarketplaceListingRef[]
+  /** Which marketplaces the seller intends to publish to */
+  targetMarketplaces: MarketplaceId[]
+  aiGenerated: boolean
   createdAt: string
   updatedAt: string
 }
@@ -54,6 +89,20 @@ export interface MarketplaceListingRef {
   url?: string
   status: ListingStatus
   price?: number
+  lastSyncedAt?: string
+  errorMessage?: string
+}
+
+/** Payload adapters will consume when publishing */
+export interface PublishReadyListing {
+  listing: Listing
+  marketplaceId: MarketplaceId
+  overrides?: Partial<{
+    title: string
+    description: string
+    price: number
+    specifics: ListingSpecifics
+  }>
 }
 
 export interface InventoryItem {
@@ -95,4 +144,13 @@ export interface DashboardStats {
   connectedMarketplaces: number
   pendingOffers: number
   revenueThisMonth: number
+}
+
+export interface GeneratedListingDraft {
+  title: string
+  description: string
+  price: number
+  currency: string
+  keywords: string[]
+  specifics: ListingSpecifics
 }

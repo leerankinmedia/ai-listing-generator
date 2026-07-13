@@ -8,7 +8,14 @@ AI-powered crosslisting for professional multi-marketplace sellers.
 - Login / Sign up (Supabase + demo auth fallback)
 - Dashboard shell with marketplace registry
 - Dark mode + responsive navigation
-- Architecture stubs for future AI, sync, automation, and analytics
+
+## Phase 2
+
+- AI Listing Generator with drag-and-drop upload (up to 24 photos)
+- OpenAI Vision analysis → SEO title, description, specifics, price, keywords
+- Editable draft before save
+- Persist listings (Supabase when configured, IndexedDB demo fallback)
+- Publish-ready listing shape for future marketplace adapters
 
 ## Setup
 
@@ -18,8 +25,18 @@ cp .env.example .env.local
 pnpm dev
 ```
 
-Without Supabase credentials, auth runs in **demo mode** (local session). Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` for production auth.
+### Environment
+
+| Variable | Purpose |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` / `ANON_KEY` | Auth + listings table |
+| `OPENAI_API_KEY` | Live Vision generation |
+| `NEXT_PUBLIC_DEMO_AUTH` | Force local demo auth |
+
+Without Supabase/OpenAI credentials, demo auth + demo Vision drafts still work for UI walkthroughs.
+
+Apply `supabase/migrations/001_listings.sql` in your Supabase project for production persistence.
 
 ## Stack
 
-Next.js · TypeScript · Tailwind CSS · Supabase · OpenAI (ready) · next-themes
+Next.js · TypeScript · Tailwind CSS · Supabase · OpenAI · next-themes

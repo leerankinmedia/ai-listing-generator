@@ -1,0 +1,31 @@
+"use client"
+
+import { useEffect } from "react"
+import { useParams, useRouter } from "next/navigation"
+import { DashboardShell } from "@/components/layout/dashboard-shell"
+import { ListingDetail } from "@/components/listings/listing-detail"
+import { useAuth } from "@/components/auth/auth-provider"
+
+export default function ListingDetailPage() {
+  const { user, loading } = useAuth()
+  const router = useRouter()
+  const params = useParams<{ id: string }>()
+
+  useEffect(() => {
+    if (!loading && !user) router.replace("/login")
+  }, [loading, user, router])
+
+  if (loading || !user) {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+        Loading…
+      </div>
+    )
+  }
+
+  return (
+    <DashboardShell>
+      <ListingDetail listingId={params.id} />
+    </DashboardShell>
+  )
+}

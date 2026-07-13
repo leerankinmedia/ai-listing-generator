@@ -1,3 +1,10 @@
+/**
+ * eBay OAuth 2.0 authorization code grant + token endpoints.
+ * Docs:
+ * - https://developer.ebay.com/api-docs/static/oauth-authorization-code-grant.html
+ * - Token: POST {api.ebay.com|api.sandbox.ebay.com}/identity/v1/oauth2/token
+ * - Authorize: GET {auth.ebay.com|auth.sandbox.ebay.com}/oauth2/authorize
+ */
 import { getAppBaseUrl } from "@/lib/marketplaces/connections/crypto"
 
 export function isEbayConfigured() {

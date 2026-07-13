@@ -5,11 +5,23 @@ import {
   refreshWhatnotToken,
   whatnotGraphql,
 } from "@/lib/marketplaces/adapters/whatnot/oauth"
+import { resolveWhatnotCategoryId } from "@/lib/marketplaces/adapters/whatnot/taxonomy"
 import type { MarketplaceAdapter, PublishResult } from "@/lib/marketplaces/adapters/types"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { saveConnection } from "@/lib/marketplaces/connections/store"
 import { ensurePublicImageUrls } from "@/lib/marketplaces/images/ensure-public-urls"
 
+/**
+ * Official Whatnot Seller API mutations:
+ * https://developers.whatnot.com/docs/mutations/productCreate
+ * https://developers.whatnot.com/docs/mutations/listingPublish
+ *
+ * Input shapes match documented GraphQL types:
+ * - CreateMediaInput: source + mediaContentType
+ * - ProductInput: title, description, productCategory, variants
+ * - MoneyInput: amount in minor units (Int)
+ * - BuyItNowInput: price (required)
+ */
 const PRODUCT_CREATE = `
 mutation ProductCreate($input: ProductInput!, $media: [CreateMediaInput!]!) {
   productCreate(input: $input, media: $media) {
@@ -54,6 +66,18 @@ mutation ListingPublish($input: ListingPublishInput!) {
 }
 `
 
+function toMinorUnits(price: number): number {
+  const cents = Math.round(price * 100)
+  if (!Number.isFinite(cents) || cents <= 0) {
+    throw new MarketplaceError(
+      "Whatnot price must be greater than 0 (MoneyInput.amount in minor units).",
+      "whatnot_price_invalid",
+      400
+    )
+  }
+  return cents
+}
+
 async function withFreshToken(connection: StoredMarketplaceConnection) {
   if (!connection.expiresAt) return connection
   const expires = Date.parse(connection.expiresAt)
@@ -84,17 +108,17 @@ export const whatnotAdapter: MarketplaceAdapter = {
   displayName: "Whatnot",
   isAppConfigured: isWhatnotConfigured,
   setupRequirements: () => [
-    "WHATNOT_CLIENT_ID",
-    "WHATNOT_CLIENT_SECRET",
+    "WHATNOT_CLIENT_ID / WHATNOT_CLIENT_SECRET (issued by Whatnot)",
+    "Whatnot Seller API partner access (Developer Preview; new applicants currently closed)",
     "WHATNOT_REDIRECT_URI (or NEXT_PUBLIC_APP_URL)",
     "CONNECTIONS_SECRET",
-    "Whatnot Seller API access (Developer Preview approval)",
     "Public image hosting (SUPABASE_STORAGE_BUCKET or reachable NEXT_PUBLIC_APP_URL)",
+    "Optional WHATNOT_DEFAULT_CATEGORY_ID (taxonomy categoryId)",
   ],
   async publish(listing: Listing, connection: StoredMarketplaceConnection): Promise<PublishResult> {
     if (!isWhatnotConfigured()) {
       throw new MarketplaceError(
-        "Whatnot app credentials are not configured.",
+        "Whatnot app credentials are not configured. Seller API access also requires Whatnot partner approval (Developer Preview; onboarding currently closed).",
         "whatnot_not_configured",
         503
       )
@@ -107,11 +131,25 @@ export const whatnotAdapter: MarketplaceAdapter = {
 
     const sku =
       listing.id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 50) || `lw-${Date.now()}`
+    const currencyCode = (listing.currency || "USD").toUpperCase()
+    const amount = toMinorUnits(listing.price)
+    const categoryId = resolveWhatnotCategoryId(listing)
 
-    const media = imageUrls.slice(0, 8).map((url, index) => ({
-      url,
-      position: index,
+    // Official CreateMediaInput: source + mediaContentType (IMAGE)
+    const media = imageUrls.slice(0, 8).map((source) => ({
+      source,
+      mediaContentType: "IMAGE" as const,
     }))
+
+    const title = listing.title.trim().slice(0, 999)
+    const description = listing.description.trim().slice(0, 999)
+    if (title.length < 1 || description.length < 1) {
+      throw new MarketplaceError(
+        "Whatnot requires a non-blank title and description (max 1000 chars).",
+        "whatnot_copy_invalid",
+        400
+      )
+    }
 
     const created = await whatnotGraphql<{
       productCreate: {
@@ -131,19 +169,25 @@ export const whatnotAdapter: MarketplaceAdapter = {
     }>(auth.accessToken, PRODUCT_CREATE, {
       media,
       input: {
-        title: listing.title.slice(0, 120),
-        description: listing.description,
+        title,
+        description,
+        productCategory: { categoryId },
+        autoCreateShippingProfile: true,
         variants: [
           {
             sku,
             price: {
-              amount: listing.price.toFixed(2),
-              currencyCode: listing.currency || "USD",
+              amount,
+              currencyCode,
             },
+            mediaSources: imageUrls.slice(0, 8),
             listings: [
               {
                 buyItNow: {
-                  enabled: true,
+                  price: {
+                    amount,
+                    currencyCode,
+                  },
                 },
                 published: false,
               },

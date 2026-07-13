@@ -1,3 +1,16 @@
+/**
+ * Whatnot Seller API OAuth (authorization code grant).
+ * Docs: https://developers.whatnot.com/docs/getting-started/authentication
+ * GraphQL: https://developers.whatnot.com/docs/getting-started/introduction
+ *
+ * Endpoint paths under /seller-api/rest/oauth/* are the live Seller API REST
+ * surface (authorize returns HTTP 400 without params; /oauth/authorize is 404).
+ * Exact sample URLs in Magidoc are rendered client-side; paths verified against
+ * stage/production hosts.
+ *
+ * Access note: Seller API is Developer Preview. Official docs state Whatnot is
+ * not accepting new applicants at this time.
+ */
 import { getAppBaseUrl } from "@/lib/marketplaces/connections/crypto"
 
 export function isWhatnotConfigured() {

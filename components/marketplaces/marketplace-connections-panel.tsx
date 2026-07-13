@@ -251,6 +251,18 @@ export function MarketplaceConnectionsPanel() {
                         Server app credentials are missing for this marketplace.
                       </p>
                     )}
+                    {adapter.id === "whatnot" && (
+                      <p className="text-xs text-muted-foreground">
+                        Whatnot Seller API is Developer Preview and currently
+                        closed to new applicants per official docs.
+                      </p>
+                    )}
+                    {adapter.id === "vinted" && (
+                      <p className="text-xs text-muted-foreground">
+                        Requires a Vinted Pro account allowlisted for
+                        Integrations (official partner approval).
+                      </p>
+                    )}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">

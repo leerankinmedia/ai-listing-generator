@@ -2,51 +2,66 @@ import type { Listing } from "@/lib/types"
 import type { StoredMarketplaceConnection } from "@/lib/marketplaces/connections/crypto"
 import {
   mapConditionToVintedStatusName,
+  resolveVintedCurrency,
   vintedFetch,
 } from "@/lib/marketplaces/adapters/vinted/client"
 import type { MarketplaceAdapter, PublishResult } from "@/lib/marketplaces/adapters/types"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { ensurePublicImageUrls } from "@/lib/marketplaces/images/ensure-public-urls"
 
-type OntologyNode = {
-  id?: number
+/**
+ * Official Vinted Pro Integrations GetOntologies response shape:
+ * https://pro-docs.svc.vinted.com/ — GetOntologiesResponse.enumerations
+ */
+type VintedOntologies = {
+  enumerations: {
+    catalogs: OntologyCatalog[]
+    statuses: Array<{ id: number; title?: string; description?: string }>
+    package_sizes: Array<{ id: number; title?: string }>
+    colors: Array<{ id: number; title?: string }>
+    size_groups: Array<{
+      id: number
+      title?: string
+      sizes?: Array<{ id: number; title?: string }>
+    }>
+  }
+}
+
+type OntologyCatalog = {
+  id: number
   title?: string
-  code?: string
-  catalogs?: OntologyNode[]
-  statuses?: Array<{ id: number; title?: string }>
-  package_sizes?: Array<{ id: number; title?: string }>
-  colors?: Array<{ id: number; title?: string; code?: string }>
-  size_groups?: Array<{
-    id: number
-    title?: string
-    sizes?: Array<{ id: number; title?: string }>
-  }>
+  catalogs?: OntologyCatalog[]
+  size_group_ids?: number[]
 }
 
 function flattenCatalogs(
-  nodes: OntologyNode[] | undefined,
+  nodes: OntologyCatalog[] | undefined,
   path: string[] = []
-): Array<{ id: number; path: string }> {
+): Array<{ id: number; path: string; sizeGroupIds: number[] }> {
   if (!nodes) return []
-  const out: Array<{ id: number; path: string }> = []
+  const out: Array<{ id: number; path: string; sizeGroupIds: number[] }> = []
   for (const node of nodes) {
-    const nextPath = [...path, node.title || node.code || String(node.id)]
-    if (node.id && (!node.catalogs || node.catalogs.length === 0)) {
-      out.push({ id: node.id, path: nextPath.join(" > ") })
+    const nextPath = [...path, node.title || String(node.id)]
+    const children = node.catalogs || []
+    if (children.length === 0) {
+      out.push({
+        id: node.id,
+        path: nextPath.join(" > "),
+        sizeGroupIds: node.size_group_ids || [],
+      })
     }
-    out.push(...flattenCatalogs(node.catalogs, nextPath))
+    out.push(...flattenCatalogs(children, nextPath))
   }
   return out
 }
 
-function pickCatalogId(
-  ontologies: OntologyNode,
+function pickCatalog(
+  ontologies: VintedOntologies,
   listing: Listing
-): number {
-  const leaves = flattenCatalogs(ontologies.catalogs)
-  const category = (listing.specifics.category || "").toLowerCase()
+): { id: number; sizeGroupIds: number[] } {
+  const leaves = flattenCatalogs(ontologies.enumerations.catalogs)
   const gender = (listing.specifics.gender || "").toLowerCase()
-  const hay = `${category} ${listing.title}`.toLowerCase()
+  const hay = `${listing.specifics.category || ""} ${listing.title}`.toLowerCase()
 
   const scored = leaves
     .map((leaf) => {
@@ -66,21 +81,21 @@ function pickCatalogId(
 
   if (!scored[0] || scored[0].score === 0) {
     throw new MarketplaceError(
-      "Could not map listing category to a Vinted catalog. Set a more specific clothing category.",
+      "Could not map listing category to a Vinted leaf catalog_id. Set a more specific clothing category/gender.",
       "vinted_catalog_unmapped",
       400
     )
   }
-  return scored[0].id
+  return { id: scored[0].id, sizeGroupIds: scored[0].sizeGroupIds }
 }
 
-function pickStatusId(ontologies: OntologyNode, listing: Listing): number {
+function pickStatusId(ontologies: VintedOntologies, listing: Listing): number {
   const wanted = mapConditionToVintedStatusName(listing.specifics.condition)
-  const match = ontologies.statuses?.find(
+  const match = ontologies.enumerations.statuses?.find(
     (s) => s.title?.toLowerCase() === wanted.toLowerCase()
   )
   if (match?.id) return match.id
-  const fallback = ontologies.statuses?.[0]?.id
+  const fallback = ontologies.enumerations.statuses?.[0]?.id
   if (!fallback) {
     throw new MarketplaceError(
       "Vinted ontologies did not include item statuses.",
@@ -91,8 +106,8 @@ function pickStatusId(ontologies: OntologyNode, listing: Listing): number {
   return fallback
 }
 
-function pickPackageSizeId(ontologies: OntologyNode): number {
-  const id = ontologies.package_sizes?.[0]?.id
+function pickPackageSizeId(ontologies: VintedOntologies): number {
+  const id = ontologies.enumerations.package_sizes?.[0]?.id
   if (!id) {
     throw new MarketplaceError(
       "Vinted ontologies did not include package sizes.",
@@ -103,23 +118,33 @@ function pickPackageSizeId(ontologies: OntologyNode): number {
   return id
 }
 
-function pickColorIds(ontologies: OntologyNode, listing: Listing): number[] {
+function pickColorIds(ontologies: VintedOntologies, listing: Listing): number[] {
   const color = (listing.specifics.color || "").toLowerCase()
-  if (!color || !ontologies.colors?.length) return []
-  const match = ontologies.colors.find((c) => {
-    const title = (c.title || c.code || "").toLowerCase()
+  if (!color || !ontologies.enumerations.colors?.length) return []
+  const match = ontologies.enumerations.colors.find((c) => {
+    const title = (c.title || "").toLowerCase()
     return color.includes(title) || title.includes(color.split(/[\s/]/)[0] || "")
   })
   return match?.id ? [match.id] : []
 }
 
-function pickSizeId(ontologies: OntologyNode, listing: Listing): number | undefined {
+function pickSizeId(
+  ontologies: VintedOntologies,
+  listing: Listing,
+  sizeGroupIds: number[]
+): number | undefined {
   const size = (listing.specifics.size || "").toLowerCase()
   if (!size) return undefined
-  for (const group of ontologies.size_groups || []) {
-    const match = group.sizes?.find((s) =>
-      (s.title || "").toLowerCase().includes(size) ||
-      size.includes((s.title || "").toLowerCase())
+  const groups = ontologies.enumerations.size_groups || []
+  const relevant =
+    sizeGroupIds.length > 0
+      ? groups.filter((g) => sizeGroupIds.includes(g.id))
+      : groups
+  for (const group of relevant) {
+    const match = group.sizes?.find(
+      (s) =>
+        (s.title || "").toLowerCase().includes(size) ||
+        size.includes((s.title || "").toLowerCase())
     )
     if (match?.id) return match.id
   }
@@ -131,10 +156,11 @@ export const vintedAdapter: MarketplaceAdapter = {
   displayName: "Vinted",
   isAppConfigured: () => Boolean(process.env.CONNECTIONS_SECRET),
   setupRequirements: () => [
-    "Vinted Pro account allowlisted for Integrations",
-    "Vinted Pro access token (accessKey,signingKey)",
+    "Vinted Pro account allowlisted for Integrations (partner approval)",
+    "Vinted Pro access token (accessKey,signingKey) from Integrations Portal",
     "CONNECTIONS_SECRET",
     "Public image hosting (SUPABASE_STORAGE_BUCKET or reachable NEXT_PUBLIC_APP_URL)",
+    "Listing currency EUR or GBP (or VINTED_CURRENCY=EUR|GBP)",
   ],
   async publish(listing: Listing, connection: StoredMarketplaceConnection): Promise<PublishResult> {
     const accessKey = connection.accessToken
@@ -147,6 +173,32 @@ export const vintedAdapter: MarketplaceAdapter = {
       )
     }
 
+    const brand = listing.specifics.brand?.trim()
+    if (!brand) {
+      throw new MarketplaceError(
+        "Vinted CreateItems requires brand (official ItemProperties.brand).",
+        "vinted_brand_required",
+        400
+      )
+    }
+
+    const currency = resolveVintedCurrency(listing.currency)
+    const title = listing.title.trim().slice(0, 100)
+    const description = [
+      listing.description.trim(),
+      listing.specifics.flaws ? `\n\nFlaws: ${listing.specifics.flaws}` : "",
+    ]
+      .join("")
+      .slice(0, 2000)
+
+    if (title.length < 5 || description.length < 5) {
+      throw new MarketplaceError(
+        "Vinted requires title 5–100 chars and description 5–2000 chars.",
+        "vinted_copy_invalid",
+        400
+      )
+    }
+
     const imageUrls = await ensurePublicImageUrls(
       listing.images.map((i) => i.url).filter(Boolean)
     )
@@ -156,54 +208,63 @@ export const vintedAdapter: MarketplaceAdapter = {
       path: "/api/v1/ontologies",
       accessKey,
       signingKey,
-    })) as OntologyNode
+    })) as VintedOntologies
 
-    const catalogId = pickCatalogId(ontologies, listing)
+    if (!ontologies?.enumerations?.catalogs) {
+      throw new MarketplaceError(
+        "Unexpected GetOntologies response (missing enumerations.catalogs).",
+        "vinted_ontologies_invalid",
+        502
+      )
+    }
+
+    const catalog = pickCatalog(ontologies, listing)
     const statusId = pickStatusId(ontologies, listing)
     const packageSizeId = pickPackageSizeId(ontologies)
     const colorIds = pickColorIds(ontologies, listing)
-    const sizeId = pickSizeId(ontologies, listing)
+    const sizeId = pickSizeId(ontologies, listing, catalog.sizeGroupIds)
+
+    if (catalog.sizeGroupIds.length > 0 && !sizeId) {
+      throw new MarketplaceError(
+        "This Vinted catalog requires size_id. Set listing size to a value from Vinted size groups.",
+        "vinted_size_required",
+        400
+      )
+    }
 
     const item: Record<string, unknown> = {
-      title: listing.title.slice(0, 100),
-      description: [
-        listing.description,
-        listing.specifics.flaws
-          ? `\n\nFlaws: ${listing.specifics.flaws}`
-          : "",
-      ]
-        .join("")
-        .slice(0, 4000),
-      catalog_id: catalogId,
+      title,
+      description,
+      catalog_id: catalog.id,
       price: listing.price,
-      currency: listing.currency || "USD",
+      currency,
       status_id: statusId,
       package_size_id: packageSizeId,
-      brand: listing.specifics.brand || undefined,
+      brand,
       photo_urls: imageUrls.slice(0, 20),
+      item_reference: listing.id.slice(0, 100),
+      // Publish to marketplace (not draft). Official field is_draft is required.
+      is_draft: false,
     }
     if (colorIds.length) item.color_ids = colorIds
     if (sizeId) item.size_id = sizeId
 
+    // CreateItems returns 202 Accepted; items upload asynchronously.
     const response = (await vintedFetch({
       method: "POST",
       path: "/api/v1/items",
       accessKey,
       signingKey,
       body: { items: [item] },
+      acceptStatuses: [202],
     })) as {
-      items?: Array<{ id?: string | number; external_id?: string }>
-      item_ids?: Array<string | number>
+      items?: Array<{ item_id?: string; item_reference?: string }>
     }
 
-    const externalId =
-      response.items?.[0]?.id ||
-      response.items?.[0]?.external_id ||
-      response.item_ids?.[0]
-
+    const externalId = response.items?.[0]?.item_id
     if (!externalId) {
       throw new MarketplaceError(
-        "Vinted accepted the request but returned no item id.",
+        "Vinted CreateItems accepted the request but returned no item_id.",
         "vinted_item_id_missing",
         502
       )
@@ -211,10 +272,11 @@ export const vintedAdapter: MarketplaceAdapter = {
 
     return {
       ok: true,
+      // Official docs: receiving item_id does not mean the item is listed yet (202 async).
       listingRef: {
         marketplaceId: "vinted",
         externalId: String(externalId),
-        status: "listed",
+        status: "ready",
         price: listing.price,
         lastSyncedAt: new Date().toISOString(),
       },

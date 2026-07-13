@@ -65,6 +65,8 @@ export async function vintedFetch(params: {
   accessKey: string
   signingKey: string
   body?: unknown
+  /** Extra HTTP statuses treated as success (CreateItems returns 202). */
+  acceptStatuses?: number[]
 }) {
   const body = params.body === undefined ? "" : JSON.stringify(params.body)
   const pathWithQuery = params.path.startsWith("/")
@@ -97,7 +99,8 @@ export async function vintedFetch(params: {
     json = { raw: text }
   }
 
-  if (!response.ok) {
+  const accepted = new Set([200, 201, ...(params.acceptStatuses || [])])
+  if (!response.ok && !accepted.has(response.status)) {
     const err = json as { message?: string; error?: string }
     throw new MarketplaceError(
       err.message || err.error || `Vinted API error (${response.status})`,
@@ -107,6 +110,19 @@ export async function vintedFetch(params: {
   }
 
   return json
+}
+
+/** Official Currency enum: EUR | GBP only. */
+export function resolveVintedCurrency(listingCurrency?: string): "EUR" | "GBP" {
+  const override = process.env.VINTED_CURRENCY?.toUpperCase()
+  if (override === "EUR" || override === "GBP") return override
+  const currency = (listingCurrency || "").toUpperCase()
+  if (currency === "EUR" || currency === "GBP") return currency
+  throw new MarketplaceError(
+    "Vinted Pro CreateItems only accepts currency EUR or GBP. Set listing currency or VINTED_CURRENCY=EUR|GBP.",
+    "vinted_currency_unsupported",
+    400
+  )
 }
 
 /** Map ListWise condition labels to Vinted status names for ontology lookup */

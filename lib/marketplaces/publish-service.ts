@@ -74,13 +74,16 @@ export async function publishListingOneClick(
         continue
       }
 
+      const queued = published.listingRef.status === "ready"
       results.push({
         marketplaceId,
         ok: true,
-        status: "published",
+        status: queued ? "queued" : "published",
         message: published.externalUrl
           ? `Published: ${published.externalUrl}`
-          : `Published to ${adapter.displayName}.`,
+          : queued
+            ? `Accepted by ${adapter.displayName} (async). Poll item status or webhooks for completion.`
+            : `Published to ${adapter.displayName}.`,
         listingRef: published.listingRef,
       })
     } catch (error) {

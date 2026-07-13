@@ -1,0 +1,141 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --lw-bg: #f4f7f8;
+  --lw-fg: #0b1215;
+  --lw-fg-muted: #4a5a63;
+  --lw-fg-subtle: #7a8b94;
+  --lw-surface: #ffffff;
+  --lw-surface-elevated: #f8fbfc;
+  --lw-surface-hover: #eef3f5;
+  --lw-border: #d7e0e5;
+  --lw-border-strong: #b7c5cd;
+  --lw-accent: #0f9f82;
+  --lw-accent-fg: #041510;
+  --background: var(--lw-bg);
+  --foreground: var(--lw-fg);
+}
+
+.dark {
+  --lw-bg: #070b0e;
+  --lw-fg: #eef4f6;
+  --lw-fg-muted: #9aadb8;
+  --lw-fg-subtle: #6d818c;
+  --lw-surface: #0d1418;
+  --lw-surface-elevated: #121b21;
+  --lw-surface-hover: #172229;
+  --lw-border: #1c2a33;
+  --lw-border-strong: #2a3d49;
+  --lw-accent: #1ee6a8;
+  --lw-accent-fg: #042218;
+  --background: var(--lw-bg);
+  --foreground: var(--lw-fg);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+}
+
+* {
+  border-color: var(--lw-border);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--lw-bg);
+  color: var(--lw-fg);
+  font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.lw-hero-grid {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, color-mix(in oklab, var(--lw-accent) 22%, transparent), transparent 55%),
+    linear-gradient(to right, color-mix(in oklab, var(--lw-fg) 4%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklab, var(--lw-fg) 4%, transparent) 1px, transparent 1px);
+  background-size: 100% 100%, 48px 48px, 48px 48px;
+  mask-image: linear-gradient(to bottom, black 35%, transparent 95%);
+}
+
+.lw-hero-panel {
+  background:
+    linear-gradient(160deg, color-mix(in oklab, var(--lw-surface) 92%, transparent), color-mix(in oklab, var(--lw-surface-elevated) 88%, transparent)),
+    radial-gradient(circle at 20% 0%, color-mix(in oklab, var(--lw-accent) 12%, transparent), transparent 45%);
+}
+
+.lw-cta-glow {
+  background:
+    radial-gradient(ellipse at 0% 50%, color-mix(in oklab, var(--lw-accent) 18%, transparent), transparent 50%),
+    radial-gradient(ellipse at 100% 0%, color-mix(in oklab, #38bdf8 12%, transparent), transparent 40%);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+.animate-rise {
+  animation: rise 0.7s ease-out both;
+}
+
+.animate-rise-delayed {
+  animation: rise 0.85s ease-out 0.12s both;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out both;
+}
+
+.animate-float {
+  animation: float 9s ease-in-out infinite;
+}
+
+.animate-float-delayed {
+  animation: float 11s ease-in-out 1.2s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-rise-delayed,
+  .animate-fade-in,
+  .animate-float,
+  .animate-float-delayed {
+    animation: none;
+  }
+}

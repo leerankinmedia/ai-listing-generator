@@ -15,8 +15,17 @@ import type { Listing } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 function normalizeListing(row: Listing): Listing {
+  const images = [...(row.images ?? [])]
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+    .map((img, index) => ({
+      ...img,
+      sortOrder: index,
+      isPrimary: index === 0,
+    }))
+
   return {
     ...row,
+    images,
     fieldConfidence: row.fieldConfidence ?? {},
     specifics: row.specifics ?? {},
     keywords: row.keywords ?? [],
@@ -53,24 +62,41 @@ export function ListingDetail({ listingId }: { listingId: string }) {
     }
   }, [listingId, user])
 
-  async function handleSave() {
+  async function handleSave(status: Listing["status"]) {
     if (!listing) return
     setSaving(true)
     setError(null)
     setMessage(null)
     try {
+      const images = [...listing.images]
+        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+        .map((img, index) => ({
+          ...img,
+          sortOrder: index,
+          isPrimary: index === 0,
+        }))
+      const ready = listingIsReadyToPublish({ ...listing, images })
       const next: Listing = {
         ...listing,
-        status: listingIsReadyToPublish(listing)
-          ? listing.status === "draft"
-            ? "ready"
-            : listing.status
-          : "draft",
+        title: listing.title.trim(),
+        images,
+        status: ready ? status : "draft",
         updatedAt: new Date().toISOString(),
+      }
+      if (!next.title) {
+        throw new Error("Title is required before saving.")
       }
       const saved = await persistListing(next)
       setListing(normalizeListing(saved))
-      setMessage("Listing saved.")
+      if (status === "ready" && saved.status === "draft") {
+        setMessage(
+          "Saved as draft — add a title, description, price, and at least one photo to mark ready."
+        )
+      } else if (saved.status === "draft") {
+        setMessage("Draft saved.")
+      } else {
+        setMessage("Listing saved.")
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed")
     } finally {
@@ -101,7 +127,7 @@ export function ListingDetail({ listingId }: { listingId: string }) {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="mx-auto max-w-5xl space-y-6 pb-24 sm:pb-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <Link
@@ -122,14 +148,26 @@ export function ListingDetail({ listingId }: { listingId: string }) {
               : ""}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="hidden flex-wrap gap-2 sm:flex">
           <Button variant="outline" onClick={() => void handleDelete()} disabled={saving}>
             <Trash2 />
             Delete
           </Button>
-          <Button variant="accent" onClick={() => void handleSave()} disabled={saving}>
+          <Button
+            variant="secondary"
+            onClick={() => void handleSave("draft")}
+            disabled={saving}
+          >
             {saving ? <Loader2 className="animate-spin" /> : <Save />}
-            Save changes
+            Save as draft
+          </Button>
+          <Button
+            variant="accent"
+            onClick={() => void handleSave("ready")}
+            disabled={saving}
+          >
+            {saving ? <Loader2 className="animate-spin" /> : <Save />}
+            Save listing
           </Button>
         </div>
       </div>
@@ -145,14 +183,53 @@ export function ListingDetail({ listingId }: { listingId: string }) {
         </p>
       )}
 
-      <ImageUploader
-        images={listing.images}
-        onChange={(images) => setListing({ ...listing, images })}
-        disabled={saving}
-      />
+      <section className="space-y-2">
+        <h2 className="font-display text-lg font-semibold">Photos</h2>
+        <p className="text-sm text-muted-foreground">
+          Choose a cover photo, reorder, or delete. Changes save with the listing.
+        </p>
+        <ImageUploader
+          images={listing.images}
+          onChange={(images) => setListing({ ...listing, images })}
+          disabled={saving}
+        />
+      </section>
 
       <ListingEditorForm listing={listing} onChange={setListing} disabled={saving} />
       <OneClickPublishBar listing={listing} disabled={saving} />
+
+      <div className="sticky bottom-3 z-20 flex flex-wrap gap-2 rounded-2xl border border-border bg-background/90 p-3 backdrop-blur-xl sm:hidden">
+        <Button
+          variant="outline"
+          size="sm"
+          className="flex-1"
+          onClick={() => void handleDelete()}
+          disabled={saving}
+        >
+          <Trash2 />
+          Delete
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="flex-1"
+          onClick={() => void handleSave("draft")}
+          disabled={saving}
+        >
+          {saving ? <Loader2 className="animate-spin" /> : <Save />}
+          Save as draft
+        </Button>
+        <Button
+          variant="accent"
+          size="sm"
+          className="flex-1"
+          onClick={() => void handleSave("ready")}
+          disabled={saving}
+        >
+          {saving ? <Loader2 className="animate-spin" /> : <Save />}
+          Save listing
+        </Button>
+      </div>
     </div>
   )
 }

@@ -102,15 +102,15 @@ export function ListingEditorForm({
     <div className="space-y-8">
       <section className="space-y-4">
         <div>
-          <h2 className="font-display text-lg font-semibold">eBay listing details</h2>
+          <h2 className="font-display text-lg font-semibold">Listing details</h2>
           <p className="text-sm text-muted-foreground">
-            Title, description, and category are editable. Confidence shows Vision certainty.
+            Edit title, description, price, and item details before saving. Confidence shows Vision certainty.
           </p>
         </div>
 
         <div className="space-y-2">
           <FieldHeader
-            label="eBay title"
+            label="Title"
             htmlFor="title"
             fieldKey="title"
             listing={listing}
@@ -145,7 +145,7 @@ export function ListingEditorForm({
 
         <div className="space-y-2">
           <FieldHeader
-            label="eBay description"
+            label="Description"
             htmlFor="description"
             fieldKey="description"
             listing={listing}
@@ -168,14 +168,14 @@ export function ListingEditorForm({
                 },
               })
             }}
-            placeholder="eBay-ready clothing description"
+            placeholder="Clothing listing description"
             className="min-h-[200px]"
           />
         </div>
 
         <div className="space-y-2">
           <FieldHeader
-            label="eBay category"
+            label="Category"
             htmlFor="category"
             fieldKey="category"
             listing={listing}

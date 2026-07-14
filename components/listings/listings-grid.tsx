@@ -82,18 +82,25 @@ export function ListingsGrid() {
               className="group overflow-hidden rounded-2xl border border-border bg-card/80 transition-colors hover:border-accent/40"
             >
               <div className="aspect-[4/3] bg-secondary">
-                {listing.images[0] ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={listing.images[0].url}
-                    alt={listing.title}
-                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center text-muted-foreground">
-                    <Package className="h-8 w-8" />
-                  </div>
-                )}
+                {(() => {
+                  const cover =
+                    listing.images.find((img) => img.isPrimary) ||
+                    [...listing.images].sort(
+                      (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
+                    )[0]
+                  return cover ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={cover.url}
+                      alt={listing.title}
+                      className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+                    />
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-muted-foreground">
+                      <Package className="h-8 w-8" />
+                    </div>
+                  )
+                })()}
               </div>
               <div className="space-y-1.5 p-4">
                 <div className="flex items-start justify-between gap-2">

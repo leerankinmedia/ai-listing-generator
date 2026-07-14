@@ -109,13 +109,23 @@ export function ListingGenerator() {
     setSaving(true)
     setError(null)
     try {
+      const sourceImages = (images.length > 0 ? images : listing.images) ?? []
+      const normalizedImages = [...sourceImages]
+        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+        .map((img, index) => ({
+          ...img,
+          sortOrder: index,
+          isPrimary: index === 0,
+        }))
+      const ready = listingIsReadyToPublish({
+        ...listing,
+        images: normalizedImages,
+      })
       const toSave: Listing = {
         ...listing,
-        images,
+        images: normalizedImages,
         title: listing.title.trim(),
-        status: listingIsReadyToPublish({ ...listing, images })
-          ? status
-          : "draft",
+        status: ready ? status : "draft",
         updatedAt: new Date().toISOString(),
       }
       if (!toSave.title) {
@@ -135,7 +145,7 @@ export function ListingGenerator() {
         <div>
           <p className="text-sm font-medium text-accent">Phase 4 · Photo analysis</p>
           <h1 className="font-display text-3xl font-semibold tracking-tight">
-            {step === "upload" ? "Upload clothing photos" : "Review eBay draft"}
+            {step === "upload" ? "Upload clothing photos" : "Review & edit listing"}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {step === "upload"
@@ -285,7 +295,7 @@ export function ListingGenerator() {
               onClick={() => void handleSave("draft")}
             >
               {saving ? <Loader2 className="animate-spin" /> : <Save />}
-              Save draft
+              Save as draft
             </Button>
             <Button
               variant="accent"

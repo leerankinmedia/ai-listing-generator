@@ -1,8 +1,9 @@
 "use client"
 
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useState, type FormEvent } from "react"
+import { PasswordInput } from "@/components/auth/password-input"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -10,11 +11,13 @@ import { useAuth } from "@/components/auth/auth-provider"
 
 export function LoginForm() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { signIn, isDemo } = useAuth()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const resetSuccess = searchParams.get("reset") === "success"
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -38,6 +41,15 @@ export function LoginForm() {
         </p>
       )}
 
+      {resetSuccess && (
+        <p
+          className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm text-foreground"
+          role="status"
+        >
+          Password updated. Log in with your new password.
+        </p>
+      )}
+
       <div className="space-y-2">
         <Label htmlFor="email">Email</Label>
         <Input
@@ -52,10 +64,17 @@ export function LoginForm() {
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="password">Password</Label>
-        <Input
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor="password">Password</Label>
+          <Link
+            href="/forgot-password"
+            className="text-xs font-medium text-muted-foreground hover:text-accent"
+          >
+            Forgot password?
+          </Link>
+        </div>
+        <PasswordInput
           id="password"
-          type="password"
           autoComplete="current-password"
           required
           minLength={6}

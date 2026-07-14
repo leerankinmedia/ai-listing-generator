@@ -1,15 +1,14 @@
 import type { Metadata } from "next"
 import Link from "next/link"
-import { Suspense } from "react"
 import { Logo } from "@/components/brand/logo"
-import { LoginForm } from "@/components/auth/login-form"
+import { ResetPasswordForm } from "@/components/auth/reset-password-form"
 import { ThemeToggle } from "@/components/theme-toggle"
 
 export const metadata: Metadata = {
-  title: "Log in",
+  title: "Reset password",
 }
 
-export default function LoginPage() {
+export default function ResetPasswordPage() {
   return (
     <div className="relative flex min-h-screen flex-col">
       <div className="flex items-center justify-between px-4 py-4 sm:px-6">
@@ -21,15 +20,13 @@ export default function LoginPage() {
         <div className="animate-rise w-full max-w-md rounded-2xl border border-border bg-card/90 p-6 shadow-[0_24px_60px_-40px_rgba(10,15,26,0.45)] backdrop-blur-sm sm:p-8">
           <div className="mb-6">
             <h1 className="font-display text-2xl font-semibold tracking-tight">
-              Welcome back
+              Choose a new password
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Log in to your ListWise workspace.
+              Enter and confirm a new password for your ListWise account.
             </p>
           </div>
-          <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>
-            <LoginForm />
-          </Suspense>
+          <ResetPasswordForm />
         </div>
       </div>
 

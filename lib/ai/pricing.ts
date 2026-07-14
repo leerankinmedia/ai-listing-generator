@@ -71,8 +71,10 @@ export function emptyTokenUsage(): TokenUsage {
 }
 
 export function addTokenUsage(a: TokenUsage, b: Partial<TokenUsage>): TokenUsage {
-  const inputTokens = a.inputTokens + (b.inputTokens ?? 0)
-  const outputTokens = a.outputTokens + (b.outputTokens ?? 0)
+  const inputTokens =
+    (Number(a.inputTokens) || 0) + (Number(b.inputTokens) || 0)
+  const outputTokens =
+    (Number(a.outputTokens) || 0) + (Number(b.outputTokens) || 0)
   return {
     inputTokens,
     outputTokens,

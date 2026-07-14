@@ -16,28 +16,14 @@ import {
   emptyTokenUsage,
   type TokenUsage,
 } from "@/lib/ai/pricing"
+import { usageFromResult } from "@/lib/ai/token-usage"
 import type { DetectedFieldKey, FieldConfidence } from "@/lib/types"
 
 type OpenAIClient = ReturnType<typeof createOpenAI>
 
-function usageFromResult(result: {
-  usage?: {
-    inputTokens?: number | undefined
-    outputTokens?: number | undefined
-    totalTokens?: number | undefined
-    promptTokens?: number | undefined
-    completionTokens?: number | undefined
-  }
-}): TokenUsage {
-  const u = result.usage
-  if (!u) return emptyTokenUsage()
-  const inputTokens = u.inputTokens ?? u.promptTokens ?? 0
-  const outputTokens = u.outputTokens ?? u.completionTokens ?? 0
-  return {
-    inputTokens,
-    outputTokens,
-    totalTokens: u.totalTokens ?? inputTokens + outputTokens,
-  }
+/** Prefer Chat Completions so usage is returned as prompt_tokens/completion_tokens. */
+function listingModel(openai: OpenAIClient) {
+  return openai.chat(DEFAULT_LISTING_MODEL)
 }
 
 export class ListingEngineError extends Error {
@@ -127,7 +113,7 @@ Return one analysis object per photo in the same order. Cover brand, category, s
   }
 
   const result = await generateObject({
-    model: openai(DEFAULT_LISTING_MODEL),
+    model: listingModel(openai),
     schema: imageBatchDetectionSchema,
     system: DETECT_SYSTEM,
     messages: [{ role: "user", content }],
@@ -232,7 +218,7 @@ Total photos in listing: ${totalImages}. Sample photos attached for visual conte
   }
 
   const result = await generateObject({
-    model: openai(DEFAULT_LISTING_MODEL),
+    model: listingModel(openai),
     schema: listingCopySchema,
     system: COPY_SYSTEM,
     messages: [{ role: "user", content }],
@@ -250,7 +236,7 @@ export async function estimateSoldComps(
   fields: Record<string, FieldConfidence>
 ): Promise<{ comps: CompsEstimate; usage: TokenUsage }> {
   const result = await generateObject({
-    model: openai(DEFAULT_LISTING_MODEL),
+    model: listingModel(openai),
     schema: compsEstimateSchema,
     system: COMPS_SYSTEM,
     messages: [

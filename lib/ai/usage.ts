@@ -31,7 +31,25 @@ export async function recordAiUsage(input: AiUsageRecordInput) {
   }
 
   const usage = input.usage ?? emptyTokenUsage()
-  const estimatedCostUsd = estimateOpenAiCostUsd(input.model, usage)
+  const inputTokens = Math.max(0, Math.round(Number(usage.inputTokens) || 0))
+  const outputTokens = Math.max(0, Math.round(Number(usage.outputTokens) || 0))
+  const totalTokens = Math.max(
+    0,
+    Math.round(Number(usage.totalTokens) || inputTokens + outputTokens)
+  )
+  const normalizedUsage = { inputTokens, outputTokens, totalTokens }
+  const estimatedCostUsd = estimateOpenAiCostUsd(input.model, normalizedUsage)
+
+  if (
+    input.status === "succeeded" &&
+    inputTokens === 0 &&
+    outputTokens === 0
+  ) {
+    console.warn(
+      "[ai-usage] succeeded generation recorded 0 tokens; check provider usage mapping",
+      { model: input.model, imagesAnalyzed: input.imagesAnalyzed }
+    )
+  }
 
   const { data, error } = await admin
     .from("ai_generations")
@@ -40,9 +58,9 @@ export async function recordAiUsage(input: AiUsageRecordInput) {
       listing_id: input.listingId || null,
       model: input.model,
       images_analyzed: input.imagesAnalyzed,
-      input_tokens: usage.inputTokens,
-      output_tokens: usage.outputTokens,
-      total_tokens: usage.totalTokens,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      total_tokens: totalTokens,
       estimated_cost_usd: estimatedCostUsd,
       draft: input.draft ?? {},
       status: input.status,

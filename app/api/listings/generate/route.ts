@@ -8,13 +8,25 @@ import { DEFAULT_LISTING_MODEL, emptyTokenUsage } from "@/lib/ai/pricing"
 import { recordAiUsage } from "@/lib/ai/usage"
 import { checkSubscriptionAccess } from "@/lib/billing/access"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
-import { getServerAuthUser } from "@/lib/supabase/index"
+import {
+  getServerAuthUser,
+  isSupabaseConfigured,
+} from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
 
 export async function POST(request: Request) {
   const user = await getServerAuthUser()
+
+  // Usage rows require auth.users FK — always require a signed-in user when
+  // Supabase is configured so every successful generation can be recorded.
+  if (isSupabaseConfigured() && !user?.id) {
+    return NextResponse.json(
+      { error: "Sign in required to generate listings." },
+      { status: 401 }
+    )
+  }
 
   const access = await checkSubscriptionAccess(user?.id)
   if (!access.allowed) {
@@ -80,8 +92,12 @@ export async function POST(request: Request) {
 
     const { draft, model, usage } = await generateListingFromImages(images)
 
-    if (user) {
-      await recordAiUsage({
+    let usageRecorded = false
+    let usageRecordId: string | null = null
+    let usageRecordError: string | undefined
+
+    if (user?.id) {
+      const recorded = await recordAiUsage({
         userId: user.id,
         listingId,
         model,
@@ -90,6 +106,19 @@ export async function POST(request: Request) {
         status: "succeeded",
         draft,
       })
+      usageRecorded = recorded.recorded
+      usageRecordId = recorded.id
+      usageRecordError = recorded.error
+      if (!recorded.recorded) {
+        console.error(
+          "[listing engine] succeeded but AI usage was not recorded",
+          recorded.error
+        )
+      }
+    } else {
+      console.warn(
+        "[listing engine] skipping AI usage record — no authenticated user"
+      )
     }
 
     return NextResponse.json({
@@ -97,11 +126,14 @@ export async function POST(request: Request) {
       model,
       imagesAnalyzed,
       openaiConfigured: true,
+      usageRecorded,
+      usageRecordId,
+      ...(usageRecordError ? { usageRecordError } : {}),
     })
   } catch (error) {
     console.error("[listing engine]", error)
-    if (user) {
-      await recordAiUsage({
+    if (user?.id) {
+      const recorded = await recordAiUsage({
         userId: user.id,
         listingId,
         model: DEFAULT_LISTING_MODEL,
@@ -112,6 +144,12 @@ export async function POST(request: Request) {
           error instanceof Error ? error.message : "Listing engine failed.",
         draft: {},
       })
+      if (!recorded.recorded) {
+        console.error(
+          "[listing engine] failed run also failed to record usage",
+          recorded.error
+        )
+      }
     }
     if (error instanceof ListingEngineError) {
       return NextResponse.json({ error: error.message }, { status: error.status })

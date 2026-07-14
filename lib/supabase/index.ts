@@ -12,11 +12,14 @@ export async function createServerSupabase() {
   return createServerClient()
 }
 
-/** Optional service-role client for privileged server uploads (never expose to browser). */
+/** Optional service-role client for privileged server writes (never expose to browser). */
 export function createServiceRoleClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
   if (!url || !key || url === "https://your-project.supabase.co") {
+    console.error(
+      "[supabase] createServiceRoleClient unavailable — missing URL or SUPABASE_SERVICE_ROLE_KEY"
+    )
     return null
   }
   return createSupabaseJsClient(url, key, {

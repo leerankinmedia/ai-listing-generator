@@ -58,10 +58,17 @@ export function ListingGenerator() {
       const response = await fetch("/api/listings/generate", {
         method: "POST",
         body: formData,
+        credentials: "same-origin",
       })
       const payload = await response.json()
       if (!response.ok) {
         throw new Error(payload.error || "Generation failed")
+      }
+      if (payload.usageRecorded === false) {
+        console.warn(
+          "[listing-generator] AI usage was not recorded",
+          payload.usageRecordError
+        )
       }
 
       const draft = payload.draft as GeneratedListingOutput

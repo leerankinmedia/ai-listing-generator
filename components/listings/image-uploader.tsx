@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   DndContext,
   DragOverlay,
@@ -56,6 +56,7 @@ function SortablePhoto({
     attributes,
     listeners,
     setNodeRef,
+    setActivatorNodeRef,
     transform,
     transition,
     isDragging,
@@ -75,13 +76,11 @@ function SortablePhoto({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "relative aspect-square touch-none overflow-hidden rounded-xl border bg-secondary",
+        // No touch-none on the card — vertical swipes must scroll the page
+        "relative aspect-square overflow-hidden rounded-xl border bg-secondary",
         isCover ? "border-accent ring-1 ring-accent/40" : "border-border",
-        isDragging && "z-20 opacity-40",
-        !disabled && "cursor-grab active:cursor-grabbing"
+        isDragging && "z-20 opacity-40"
       )}
-      {...attributes}
-      {...listeners}
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
@@ -95,10 +94,22 @@ function SortablePhoto({
           Cover
         </span>
       )}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/70 to-transparent p-1.5 pt-6">
-        <span className="flex h-8 w-8 items-center justify-center rounded-md bg-background/80 text-foreground">
-          <GripVertical className="h-4 w-4" aria-hidden />
-        </span>
+      <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/70 to-transparent p-1.5 pt-6">
+        <button
+          type="button"
+          ref={setActivatorNodeRef}
+          aria-label={`Hold and drag to reorder photo ${index + 1}`}
+          disabled={disabled}
+          className={cn(
+            "flex h-11 w-11 items-center justify-center rounded-md bg-background/90 text-foreground",
+            !disabled && "cursor-grab active:cursor-grabbing",
+            disabled && "opacity-40"
+          )}
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical className="h-5 w-5" aria-hidden />
+        </button>
         <button
           type="button"
           aria-label={
@@ -107,8 +118,7 @@ function SortablePhoto({
               : `Set photo ${index + 1} as cover`
           }
           disabled={disabled || isCover}
-          className="pointer-events-auto flex h-8 w-8 items-center justify-center rounded-md bg-background/90 text-foreground disabled:opacity-40"
-          onPointerDown={(e) => e.stopPropagation()}
+          className="flex h-11 w-11 items-center justify-center rounded-md bg-background/90 text-foreground disabled:opacity-40"
           onClick={(e) => {
             e.stopPropagation()
             onSetCover(image.id)
@@ -118,14 +128,13 @@ function SortablePhoto({
             className={cn("h-4 w-4", isCover && "fill-accent text-accent")}
           />
         </button>
-        <span className="h-8 w-8" aria-hidden />
+        <span className="h-11 w-11" aria-hidden />
       </div>
       <button
         type="button"
         aria-label={`Remove photo ${index + 1}`}
         disabled={disabled}
-        className="pointer-events-auto absolute right-1.5 top-1.5 flex h-8 w-8 items-center justify-center rounded-md bg-background/90 text-foreground"
-        onPointerDown={(e) => e.stopPropagation()}
+        className="absolute right-1.5 top-1.5 flex h-11 w-11 items-center justify-center rounded-md bg-background/90 text-foreground"
         onClick={(e) => {
           e.stopPropagation()
           onRemove(image.id)
@@ -180,15 +189,33 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
     [images]
   )
 
+  // Drag only starts from the handle; long-press on touch avoids scroll fights
   const sensors = useSensors(
     useSensor(MouseSensor, {
-      activationConstraint: { distance: 8 },
+      activationConstraint: { distance: 6 },
     }),
     useSensor(TouchSensor, {
-      // Short press-and-hold so taps still hit cover/delete on phones
-      activationConstraint: { delay: 160, tolerance: 8 },
+      activationConstraint: { delay: 400, tolerance: 10 },
     })
   )
+
+  // While a photo drag is active, lock page scroll so reorder stays intentional
+  useEffect(() => {
+    if (!activeId) return
+    const body = document.body
+    const html = document.documentElement
+    const prevBodyOverflow = body.style.overflow
+    const prevHtmlOverflow = html.style.overflow
+    const prevTouchAction = body.style.touchAction
+    body.style.overflow = "hidden"
+    html.style.overflow = "hidden"
+    body.style.touchAction = "none"
+    return () => {
+      body.style.overflow = prevBodyOverflow
+      html.style.overflow = prevHtmlOverflow
+      body.style.touchAction = prevTouchAction
+    }
+  }, [activeId])
 
   const addFiles = useCallback(
     async (fileList: FileList | File[]) => {
@@ -328,7 +355,7 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
         </p>
         <p className="mt-1 max-w-sm text-sm text-muted-foreground">
           Drag and drop 1–{MAX_LISTING_IMAGES} clothing photos, or tap to browse.
-          Press and drag photos to reorder before saving.
+          Hold the handle on a photo to reorder before saving.
         </p>
         <p className="mt-3 text-xs font-medium text-muted-foreground">
           {ordered.length} / {MAX_LISTING_IMAGES} uploaded
@@ -344,7 +371,8 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
       {ordered.length > 0 && (
         <div className="space-y-2">
           <p className="text-xs text-muted-foreground">
-            Press and drag to reorder · tap ★ for cover · ✕ to delete
+            Swipe anywhere to scroll · hold ⋮⋮ handle ~0.4s to drag · ★ cover · ✕
+            delete
           </p>
           <DndContext
             sensors={sensors}

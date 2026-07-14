@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 import { Bricolage_Grotesque, Figtree } from "next/font/google"
 import { Analytics } from "@vercel/analytics/react"
 import { AuthProvider } from "@/components/auth/auth-provider"
+import { RecoveryRedirect } from "@/components/auth/recovery-redirect"
 import { ThemeProvider } from "@/components/theme-provider"
 import "./globals.css"
 
@@ -39,6 +40,7 @@ export default function RootLayout({
       <body className={`${figtree.variable} ${bricolage.variable}`}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
           <AuthProvider>
+            <RecoveryRedirect />
             {children}
             <Analytics />
           </AuthProvider>

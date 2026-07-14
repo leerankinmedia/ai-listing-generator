@@ -1,8 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { useEffect, useState, type FormEvent } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
+import { Suspense, useEffect, useState, type FormEvent } from "react"
 import { PasswordInput } from "@/components/auth/password-input"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -13,6 +13,7 @@ async function establishRecoverySession() {
   const supabase = createClient()
   const url = new URL(window.location.href)
 
+  // PKCE code (if user landed directly on /reset-password?code=...)
   const code = url.searchParams.get("code")
   if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code)
@@ -20,6 +21,19 @@ async function establishRecoverySession() {
     window.history.replaceState({}, "", "/reset-password")
   }
 
+  // token_hash flow
+  const tokenHash = url.searchParams.get("token_hash")
+  const type = url.searchParams.get("type")
+  if (tokenHash && type) {
+    const { error } = await supabase.auth.verifyOtp({
+      type: type as "recovery",
+      token_hash: tokenHash,
+    })
+    if (error) throw error
+    window.history.replaceState({}, "", "/reset-password")
+  }
+
+  // Implicit / hash tokens from older email templates
   if (url.hash.includes("access_token")) {
     const hash = new URLSearchParams(url.hash.replace(/^#/, ""))
     const access_token = hash.get("access_token")
@@ -34,13 +48,15 @@ async function establishRecoverySession() {
     }
   }
 
+  // Session may already be set by /auth/callback cookies
   const { data, error } = await supabase.auth.getSession()
   if (error) throw error
   return data.session
 }
 
-export function ResetPasswordForm() {
+function ResetPasswordFormInner() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [password, setPassword] = useState("")
   const [confirm, setConfirm] = useState("")
   const [error, setError] = useState<string | null>(null)
@@ -52,6 +68,7 @@ export function ResetPasswordForm() {
 
   useEffect(() => {
     let mounted = true
+    const linkError = searchParams.get("error")
 
     async function init() {
       if (demoMode || !isSupabaseConfigured()) {
@@ -59,6 +76,17 @@ export function ResetPasswordForm() {
           setError(
             "Password reset needs Supabase auth. Open the recovery link from your email on the live app."
           )
+          setChecking(false)
+        }
+        return
+      }
+
+      if (linkError) {
+        if (mounted) {
+          setError(
+            "This reset link is invalid or expired. Request a new recovery email."
+          )
+          setSessionReady(false)
           setChecking(false)
         }
         return
@@ -89,10 +117,33 @@ export function ResetPasswordForm() {
     }
 
     void init()
+
+    if (!demoMode && isSupabaseConfigured()) {
+      try {
+        const supabase = createClient()
+        const {
+          data: { subscription },
+        } = supabase.auth.onAuthStateChange((event, session) => {
+          if (!mounted) return
+          if (event === "PASSWORD_RECOVERY" || (event === "SIGNED_IN" && session)) {
+            setSessionReady(true)
+            setError(null)
+            setChecking(false)
+          }
+        })
+        return () => {
+          mounted = false
+          subscription.unsubscribe()
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     return () => {
       mounted = false
     }
-  }, [demoMode])
+  }, [demoMode, searchParams])
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -209,5 +260,17 @@ export function ResetPasswordForm() {
         </Link>
       </p>
     </form>
+  )
+}
+
+export function ResetPasswordForm() {
+  return (
+    <Suspense
+      fallback={
+        <p className="text-sm text-muted-foreground">Verifying recovery link…</p>
+      }
+    >
+      <ResetPasswordFormInner />
+    </Suspense>
   )
 }

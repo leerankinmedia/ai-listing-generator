@@ -3,9 +3,40 @@ import { updateSession } from "@/lib/supabase/middleware"
 
 const PROTECTED_PREFIXES = ["/dashboard"]
 
+/** Public auth routes — never force a login redirect. */
+const PUBLIC_AUTH_PREFIXES = [
+  "/login",
+  "/signup",
+  "/forgot-password",
+  "/reset-password",
+  "/auth",
+]
+
 export async function middleware(request: NextRequest) {
+  const { pathname, searchParams } = request.nextUrl
+
+  // If Supabase drops a recovery code on the Site URL (/), send it through
+  // the callback so the session is established and /reset-password is shown.
+  if (
+    pathname === "/" &&
+    (searchParams.has("code") || searchParams.has("token_hash"))
+  ) {
+    const url = request.nextUrl.clone()
+    url.pathname = "/auth/callback"
+    if (!url.searchParams.get("next")) {
+      url.searchParams.set("next", "/reset-password")
+    }
+    return NextResponse.redirect(url)
+  }
+
   const response = await updateSession(request)
-  const { pathname } = request.nextUrl
+
+  const isPublicAuth = PUBLIC_AUTH_PREFIXES.some((prefix) =>
+    pathname.startsWith(prefix)
+  )
+  if (isPublicAuth) {
+    return response
+  }
 
   const isProtected = PROTECTED_PREFIXES.some((prefix) =>
     pathname.startsWith(prefix)

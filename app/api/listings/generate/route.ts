@@ -4,37 +4,14 @@ import {
   isOpenAIConfigured,
   ListingEngineError,
 } from "@/lib/ai/generate-listing"
+import { DEFAULT_LISTING_MODEL, emptyTokenUsage } from "@/lib/ai/pricing"
+import { recordAiUsage } from "@/lib/ai/usage"
 import { checkSubscriptionAccess } from "@/lib/billing/access"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
-import { getServerAuthUser, isSupabaseConfigured } from "@/lib/supabase/index"
-import { createClient as createServerClient } from "@/lib/supabase/server"
+import { getServerAuthUser } from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
-
-async function recordAiGeneration(params: {
-  userId: string
-  model: string
-  imagesAnalyzed: number
-  draft: unknown
-  status: "succeeded" | "failed"
-  errorMessage?: string
-}) {
-  if (!isSupabaseConfigured()) return
-  try {
-    const supabase = await createServerClient()
-    await supabase.from("ai_generations").insert({
-      user_id: params.userId,
-      model: params.model,
-      images_analyzed: params.imagesAnalyzed,
-      draft: params.draft ?? {},
-      status: params.status,
-      error_message: params.errorMessage ?? null,
-    })
-  } catch (error) {
-    console.error("[ai_generations] failed to persist", error)
-  }
-}
 
 export async function POST(request: Request) {
   const user = await getServerAuthUser()
@@ -51,8 +28,16 @@ export async function POST(request: Request) {
     )
   }
 
+  let imagesAnalyzed = 0
+  let listingId: string | null = null
+
   try {
     const formData = await request.formData()
+    const listingIdRaw = formData.get("listingId")
+    if (typeof listingIdRaw === "string" && listingIdRaw.trim()) {
+      listingId = listingIdRaw.trim()
+    }
+
     const files = formData
       .getAll("images")
       .filter((value): value is File => value instanceof File && value.size > 0)
@@ -91,35 +76,41 @@ export async function POST(request: Request) {
         }
       })
     )
+    imagesAnalyzed = images.length
 
-    const { draft, model } = await generateListingFromImages(images)
+    const { draft, model, usage } = await generateListingFromImages(images)
 
     if (user) {
-      await recordAiGeneration({
+      await recordAiUsage({
         userId: user.id,
+        listingId,
         model,
-        imagesAnalyzed: images.length,
-        draft,
+        imagesAnalyzed,
+        usage,
         status: "succeeded",
+        draft,
       })
     }
 
     return NextResponse.json({
       draft,
       model,
-      imagesAnalyzed: images.length,
+      imagesAnalyzed,
       openaiConfigured: true,
     })
   } catch (error) {
     console.error("[listing engine]", error)
     if (user) {
-      await recordAiGeneration({
+      await recordAiUsage({
         userId: user.id,
-        model: "unknown",
-        imagesAnalyzed: 0,
-        draft: {},
+        listingId,
+        model: DEFAULT_LISTING_MODEL,
+        imagesAnalyzed,
+        usage: emptyTokenUsage(),
         status: "failed",
-        errorMessage: error instanceof Error ? error.message : "Listing engine failed.",
+        errorMessage:
+          error instanceof Error ? error.message : "Listing engine failed.",
+        draft: {},
       })
     }
     if (error instanceof ListingEngineError) {

@@ -10,9 +10,35 @@ import {
   type ImageDetection,
   type ListingCopy,
 } from "@/lib/listings/schema"
+import {
+  DEFAULT_LISTING_MODEL,
+  addTokenUsage,
+  emptyTokenUsage,
+  type TokenUsage,
+} from "@/lib/ai/pricing"
 import type { DetectedFieldKey, FieldConfidence } from "@/lib/types"
 
 type OpenAIClient = ReturnType<typeof createOpenAI>
+
+function usageFromResult(result: {
+  usage?: {
+    inputTokens?: number | undefined
+    outputTokens?: number | undefined
+    totalTokens?: number | undefined
+    promptTokens?: number | undefined
+    completionTokens?: number | undefined
+  }
+}): TokenUsage {
+  const u = result.usage
+  if (!u) return emptyTokenUsage()
+  const inputTokens = u.inputTokens ?? u.promptTokens ?? 0
+  const outputTokens = u.outputTokens ?? u.completionTokens ?? 0
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: u.totalTokens ?? inputTokens + outputTokens,
+  }
+}
 
 export class ListingEngineError extends Error {
   status: number
@@ -84,7 +110,7 @@ async function detectBatch(
   batchIndex: number,
   totalImages: number,
   startIndex: number
-): Promise<ImageDetection[]> {
+): Promise<{ images: ImageDetection[]; usage: TokenUsage }> {
   const content: ContentPart[] = [
     {
       type: "text",
@@ -100,21 +126,24 @@ Return one analysis object per photo in the same order. Cover brand, category, s
     })
   }
 
-  const { object } = await generateObject({
-    model: openai("gpt-4o"),
+  const result = await generateObject({
+    model: openai(DEFAULT_LISTING_MODEL),
     schema: imageBatchDetectionSchema,
     system: DETECT_SYSTEM,
     messages: [{ role: "user", content }],
   })
 
-  if (!object.images.length) {
+  if (!result.object.images.length) {
     throw new ListingEngineError(
       `Vision returned no detections for batch ${batchIndex + 1}.`,
       502
     )
   }
 
-  return object.images
+  return {
+    images: result.object.images,
+    usage: usageFromResult(result),
+  }
 }
 
 function pickBest(
@@ -184,7 +213,7 @@ async function generateCopy(
   fields: Record<string, FieldConfidence>,
   sampleImages: VisionImage[],
   totalImages: number
-): Promise<ListingCopy> {
+): Promise<{ copy: ListingCopy; usage: TokenUsage }> {
   const content: ContentPart[] = [
     {
       type: "text",
@@ -202,13 +231,13 @@ Total photos in listing: ${totalImages}. Sample photos attached for visual conte
     })
   }
 
-  const { object } = await generateObject({
-    model: openai("gpt-4o"),
+  const result = await generateObject({
+    model: openai(DEFAULT_LISTING_MODEL),
     schema: listingCopySchema,
     system: COPY_SYSTEM,
     messages: [{ role: "user", content }],
   })
-  return object
+  return { copy: result.object, usage: usageFromResult(result) }
 }
 
 /**
@@ -219,9 +248,9 @@ Total photos in listing: ${totalImages}. Sample photos attached for visual conte
 export async function estimateSoldComps(
   openai: OpenAIClient,
   fields: Record<string, FieldConfidence>
-): Promise<CompsEstimate> {
-  const { object } = await generateObject({
-    model: openai("gpt-4o"),
+): Promise<{ comps: CompsEstimate; usage: TokenUsage }> {
+  const result = await generateObject({
+    model: openai(DEFAULT_LISTING_MODEL),
     schema: compsEstimateSchema,
     system: COMPS_SYSTEM,
     messages: [
@@ -234,7 +263,7 @@ Return a realistic USD sold range and suggested list price for a typical 7–21 
       },
     ],
   })
-  return object
+  return { comps: result.object, usage: usageFromResult(result) }
 }
 
 export interface CompsProvider {
@@ -248,17 +277,19 @@ export interface CompsProvider {
     rationale: string
     comparableSummary: string
     sampleSize: number
+    usage: TokenUsage
   }>
 }
 
 export function createAiCompsProvider(openai: OpenAIClient): CompsProvider {
   return {
     async estimate(fields) {
-      const comps = await estimateSoldComps(openai, fields)
+      const { comps, usage } = await estimateSoldComps(openai, fields)
       return {
         ...comps,
         currency: "USD",
         method: "ai_market_comps",
+        usage,
       }
     },
   }
@@ -271,13 +302,14 @@ export function createAiCompsProvider(openai: OpenAIClient): CompsProvider {
 export async function generateListingFromImages(
   images: VisionImage[],
   options?: { compsProvider?: CompsProvider }
-): Promise<{ draft: GeneratedListingOutput; model: string }> {
+): Promise<{ draft: GeneratedListingOutput; model: string; usage: TokenUsage }> {
   if (images.length === 0) {
     throw new ListingEngineError("At least one image is required.", 400)
   }
 
   const openai = getOpenAI()
-  const model = "gpt-4o"
+  const model = DEFAULT_LISTING_MODEL
+  let usage = emptyTokenUsage()
 
   const batches: VisionImage[][] = []
   for (let i = 0; i < images.length; i += VISION_BATCH_SIZE) {
@@ -296,17 +328,21 @@ export async function generateListingFromImages(
         return detectBatch(openai, batch, batchIndex, images.length, startIndex)
       })
     )
-    for (const batchResults of results) {
-      detections.push(...batchResults)
+    for (const batchResult of results) {
+      detections.push(...batchResult.images)
+      usage = addTokenUsage(usage, batchResult.usage)
     }
   }
 
   const { fields, perImage } = mergeDetections(detections)
 
-  const [copy, comps] = await Promise.all([
+  const [copyResult, comps] = await Promise.all([
     generateCopy(openai, fields, images, images.length),
     (options?.compsProvider ?? createAiCompsProvider(openai)).estimate(fields),
   ])
+  usage = addTokenUsage(usage, copyResult.usage)
+  usage = addTokenUsage(usage, comps.usage)
+  const copy = copyResult.copy
 
   const fieldConfidence: GeneratedListingOutput["fieldConfidence"] = {
     brand: fields.brand,
@@ -374,5 +410,5 @@ export async function generateListingFromImages(
     perImage,
   }
 
-  return { draft, model }
+  return { draft, model, usage }
 }

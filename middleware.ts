@@ -1,16 +1,25 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { updateSession } from "@/lib/supabase/middleware"
+import { isBillingEnforcementEnabled } from "@/lib/billing/config"
+import { createServerClient } from "@supabase/ssr"
+import { createServiceRoleClient } from "@/lib/supabase/index"
+import { statusGrantsAccess } from "@/lib/billing/config"
 
 const PROTECTED_PREFIXES = ["/dashboard"]
 
-/** Public auth routes — never force a login redirect. */
+/** Public auth / billing routes — never force a login redirect. */
 const PUBLIC_AUTH_PREFIXES = [
   "/login",
   "/signup",
   "/forgot-password",
   "/reset-password",
   "/auth",
+  "/pricing",
+  "/billing",
 ]
+
+/** Dashboard paths locked users may still open. */
+const BILLING_EXEMPT_DASHBOARD = ["/dashboard/billing"]
 
 export async function middleware(request: NextRequest) {
   const { pathname, searchParams } = request.nextUrl
@@ -57,9 +66,50 @@ export async function middleware(request: NextRequest) {
     url && key && url !== "https://your-project.supabase.co"
 
   if (!supabaseReady) {
-    // Demo mode: allow dashboard access without forcing redirect when no cookie —
-    // client-side AuthProvider handles demo session. Soft-gate via cookie only.
     return response
+  }
+
+  // Subscription enforcement (off by default while Stripe test mode is verified)
+  if (isBillingEnforcementEnabled()) {
+    const exempt = BILLING_EXEMPT_DASHBOARD.some((prefix) =>
+      pathname.startsWith(prefix)
+    )
+    if (!exempt) {
+      try {
+        let userId: string | null = null
+        const supabase = createServerClient(url, key, {
+          cookies: {
+            getAll() {
+              return request.cookies.getAll()
+            },
+            setAll() {
+              // Session already refreshed above
+            },
+          },
+        })
+        const { data } = await supabase.auth.getUser()
+        userId = data.user?.id ?? null
+
+        if (userId) {
+          const admin = createServiceRoleClient()
+          if (admin) {
+            const { data: sub } = await admin
+              .from("subscriptions")
+              .select("status")
+              .eq("user_id", userId)
+              .maybeSingle()
+            if (!statusGrantsAccess(sub?.status)) {
+              const pricing = request.nextUrl.clone()
+              pricing.pathname = "/pricing"
+              pricing.search = ""
+              return NextResponse.redirect(pricing)
+            }
+          }
+        }
+      } catch (error) {
+        console.error("[middleware] billing check failed", error)
+      }
+    }
   }
 
   return response

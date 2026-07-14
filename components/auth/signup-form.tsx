@@ -28,7 +28,7 @@ export function SignupForm() {
       setError(result.error)
       return
     }
-    router.push("/dashboard")
+    router.push("/pricing")
   }
 
   return (

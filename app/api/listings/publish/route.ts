@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server"
+import { checkSubscriptionAccess } from "@/lib/billing/access"
 import { publishListingOneClick } from "@/lib/marketplaces/publish-service"
+import { getServerAuthUser } from "@/lib/supabase/index"
 import type { Listing, MarketplaceId } from "@/lib/types"
 
 export const runtime = "nodejs"
@@ -10,6 +12,19 @@ export const runtime = "nodejs"
  */
 export async function POST(request: Request) {
   try {
+    const user = await getServerAuthUser()
+    const access = await checkSubscriptionAccess(user?.id)
+    if (!access.allowed) {
+      return NextResponse.json(
+        {
+          error:
+            "Subscription required. Start your trial or renew to unlock ListWise.",
+          code: "subscription_required",
+        },
+        { status: 402 }
+      )
+    }
+
     const body = (await request.json()) as {
       listing?: Listing
       marketplaceIds?: MarketplaceId[]

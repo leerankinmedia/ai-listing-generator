@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation"
 import {
   BarChart3,
   Boxes,
+  CreditCard,
   LayoutDashboard,
   LogOut,
   Package,
@@ -24,6 +25,7 @@ const navItems = [
   { href: "/dashboard/listings", label: "Listings", icon: Package },
   { href: "/dashboard/listings/new", label: "AI Generator", icon: Plus },
   { href: "/dashboard/connections", label: "Connections", icon: Store },
+  { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
   { href: "/dashboard#inventory", label: "Inventory", icon: Boxes },
   { href: "/dashboard#automation", label: "Automation", icon: Zap },
   { href: "/dashboard#analytics", label: "Analytics", icon: BarChart3 },

@@ -4,6 +4,7 @@ import {
   isOpenAIConfigured,
   ListingEngineError,
 } from "@/lib/ai/generate-listing"
+import { checkSubscriptionAccess } from "@/lib/billing/access"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
 import { getServerAuthUser, isSupabaseConfigured } from "@/lib/supabase/index"
 import { createClient as createServerClient } from "@/lib/supabase/server"
@@ -37,6 +38,18 @@ async function recordAiGeneration(params: {
 
 export async function POST(request: Request) {
   const user = await getServerAuthUser()
+
+  const access = await checkSubscriptionAccess(user?.id)
+  if (!access.allowed) {
+    return NextResponse.json(
+      {
+        error:
+          "Subscription required. Start your trial or renew to unlock ListWise.",
+        code: "subscription_required",
+      },
+      { status: 402 }
+    )
+  }
 
   try {
     const formData = await request.formData()

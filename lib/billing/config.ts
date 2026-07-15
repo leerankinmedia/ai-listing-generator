@@ -2,7 +2,7 @@
 
 export const PLAN_NAME = "ListWise Pro"
 
-export const BILLING_TRIAL_DAYS = 14
+export const BILLING_TRIAL_DAYS = 7
 
 /**
  * Customer AI listing credits included per billing cycle.

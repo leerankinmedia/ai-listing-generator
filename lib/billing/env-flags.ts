@@ -17,3 +17,13 @@ function readBoolEnv(name: string): boolean {
 export function isBillingEnforcementEnabled() {
   return readBoolEnv("BILLING_ENFORCEMENT")
 }
+
+/**
+ * Safe local subscription-status simulator for lock testing.
+ * Enabled when NODE_ENV is not production, or ENABLE_BILLING_TEST_CONTROLS=true.
+ * Never modifies Stripe — only the local subscriptions row for the signed-in user.
+ */
+export function isBillingTestControlsEnabled() {
+  if (process.env.NODE_ENV !== "production") return true
+  return readBoolEnv("ENABLE_BILLING_TEST_CONTROLS")
+}

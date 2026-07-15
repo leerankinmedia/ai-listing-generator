@@ -14,7 +14,7 @@ import {
   creditPeriodStartFromSubscription,
   getListingCreditsSummary,
 } from "@/lib/billing/credits"
-import { isBillingEnforcementEnabled } from "@/lib/billing/env-flags"
+import { isBillingEnforcementEnabled, isBillingTestControlsEnabled } from "@/lib/billing/env-flags"
 import { getSubscriptionByUserId } from "@/lib/billing/subscription-store"
 import { getServerAuthUser } from "@/lib/supabase/index"
 
@@ -49,6 +49,7 @@ export async function GET() {
   return NextResponse.json(
     {
       enforcement: isBillingEnforcementEnabled(),
+      testControlsEnabled: isBillingTestControlsEnabled(),
       stripeConfigured: isStripeBillingConfigured(),
       planName: PLAN_NAME,
       priceLabel: getMembershipPriceLabel(),

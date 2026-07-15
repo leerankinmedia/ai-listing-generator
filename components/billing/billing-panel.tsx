@@ -62,14 +62,31 @@ async function updateSubscription(action: "cancel" | "reactivate") {
   }
 }
 
+async function simulateLocalStatus(
+  status: "past_due" | "canceled" | "active" | "trialing"
+) {
+  const res = await fetch("/api/billing/test-simulate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({ status }),
+  })
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || "Could not simulate status")
+  }
+  return data as { status: string; message?: string }
+}
+
 export function BillingPanel() {
   const { status, loading, error, refresh } = useBillingStatus()
-  const [busy, setBusy] = useState<"checkout" | "cancel" | "reactivate" | null>(
-    null
-  )
+  const [busy, setBusy] = useState<
+    "checkout" | "cancel" | "reactivate" | "simulate" | null
+  >(null)
   const [confirmCancel, setConfirmCancel] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [simulateBusy, setSimulateBusy] = useState<string | null>(null)
 
   async function onSubscribe() {
     setActionError(null)
@@ -117,6 +134,30 @@ export function BillingPanel() {
       )
     } finally {
       setBusy(null)
+    }
+  }
+
+  async function onSimulate(
+    next: "past_due" | "canceled" | "active" | "trialing"
+  ) {
+    setActionError(null)
+    setActionMessage(null)
+    setBusy("simulate")
+    setSimulateBusy(next)
+    try {
+      const result = await simulateLocalStatus(next)
+      setActionMessage(
+        result.message ||
+          `Local status set to ${result.status}. Stripe was not modified.`
+      )
+      await refresh()
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : "Could not simulate status"
+      )
+    } finally {
+      setBusy(null)
+      setSimulateBusy(null)
     }
   }
 
@@ -359,6 +400,56 @@ export function BillingPanel() {
         stay saved if access is locked later. Paid tools stay unlocked while
         status is trialing or active.
       </p>
+
+      {status.testControlsEnabled && (
+        <div className="rounded-2xl border border-dashed border-amber-500/50 bg-amber-500/10 p-4 space-y-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+              TEST MODE ONLY
+            </p>
+            <h2 className="mt-1 font-display text-lg font-semibold tracking-tight">
+              Subscription status simulator
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Updates this account&apos;s local subscription row only. Does not
+              change Stripe. Use to verify locks after failed payment or ended
+              subscription without waiting for the trial.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                "past_due",
+                "canceled",
+                "active",
+                "trialing",
+              ] as const
+            ).map((simStatus) => (
+              <Button
+                key={simStatus}
+                variant="outline"
+                size="sm"
+                disabled={busy !== null}
+                onClick={() => void onSimulate(simStatus)}
+              >
+                {simulateBusy === simStatus ? (
+                  <Loader2 className="animate-spin" />
+                ) : null}
+                Simulate {simStatus}
+              </Button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Current local status:{" "}
+            <span className="font-medium text-foreground">
+              {statusLabel(status.status)}
+            </span>
+            {" · "}
+            paid tools{" "}
+            {status.paidToolsUnlocked ? "unlocked" : "locked"}
+          </p>
+        </div>
+      )}
     </div>
   )
 }

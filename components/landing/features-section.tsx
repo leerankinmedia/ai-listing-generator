@@ -13,36 +13,42 @@ const features = [
     title: "AI listing generation",
     description:
       "Turn photos into optimized titles, descriptions, and pricing suggestions in seconds.",
+    comingSoon: false,
   },
   {
     icon: Layers3,
     title: "One-click crosslisting",
     description:
       "Push inventory to eBay, Poshmark, Mercari, Depop, and more from a single draft.",
+    comingSoon: true,
   },
   {
     icon: RefreshCw,
     title: "Auto delisting & sync",
     description:
       "When an item sells, ListWise removes it everywhere so you never double-sell.",
+    comingSoon: true,
   },
   {
     icon: Bot,
     title: "Offer automation",
     description:
       "Set floors and auto-accept rules so negotiations run while you ship.",
+    comingSoon: true,
   },
   {
     icon: ShieldCheck,
-    title: "Inventory command",
+    title: "Cloud inventory",
     description:
-      "Track SKUs, quantities, and marketplace status without spreadsheet chaos.",
+      "Track SKUs, quantities, and listing status in one workspace — no spreadsheet chaos.",
+    comingSoon: false,
   },
   {
     icon: LineChart,
     title: "Seller analytics",
     description:
       "See what moves, where it sells, and how fast — then double down.",
+    comingSoon: true,
   },
 ]
 
@@ -58,8 +64,8 @@ export function FeaturesSection() {
             Everything multi-platform sellers need — nothing they don’t.
           </h2>
           <p className="mt-3 text-muted-foreground">
-            Phase 1 ships the foundation. Architecture is ready for AI generation,
-            marketplace syncing, and automation in the phases ahead.
+            AI listing generation and cloud inventory are live. Marketplace
+            automation features are labeled Coming soon until they ship.
           </p>
         </div>
 
@@ -71,7 +77,14 @@ export function FeaturesSection() {
                 <div className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-accent/15 text-accent-foreground transition-transform duration-300 group-hover:-translate-y-0.5 dark:text-accent">
                   <Icon className="h-5 w-5" />
                 </div>
-                <h3 className="font-display text-lg font-semibold">{feature.title}</h3>
+                <h3 className="font-display text-lg font-semibold">
+                  {feature.title}
+                  {feature.comingSoon ? (
+                    <span className="ml-2 align-middle text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                      Coming soon
+                    </span>
+                  ) : null}
+                </h3>
                 <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                   {feature.description}
                 </p>

@@ -30,7 +30,7 @@ export default function DashboardBillingPage() {
             Billing
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Manage your ListWise membership and trial.
+            ListWise Pro — membership, trial, and AI listing credits.
           </p>
         </div>
         <BillingPanel />

@@ -10,10 +10,16 @@ import {
   Zap,
 } from "lucide-react"
 import { useAuth } from "@/components/auth/auth-provider"
+import { useBillingStatus } from "@/components/billing/paywall"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import { fetchListings } from "@/lib/listings/repository"
 import { buttonVariants } from "@/components/ui/button"
 import type { Listing } from "@/lib/types"
+import {
+  MONTHLY_LISTING_CREDITS,
+  PLAN_NAME,
+  getMembershipPriceLabel,
+} from "@/lib/billing/config"
 import { cn } from "@/lib/utils"
 
 const roadmap = [
@@ -41,6 +47,7 @@ const roadmap = [
 
 export function DashboardOverview() {
   const { user, isDemo } = useAuth()
+  const { status: billing } = useBillingStatus(Boolean(user))
   const [listings, setListings] = useState<Listing[]>([])
   const firstName =
     user?.fullName?.split(" ")[0] || user?.email?.split("@")[0] || "Seller"
@@ -268,10 +275,32 @@ export function DashboardOverview() {
             <dd className="mt-0.5 font-medium">{user?.fullName ?? "—"}</dd>
           </div>
           <div>
+            <dt className="text-muted-foreground">Plan</dt>
+            <dd className="mt-0.5 font-medium">
+              {billing?.planName || PLAN_NAME} ·{" "}
+              {billing?.priceLabel || getMembershipPriceLabel()}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">AI listing credits</dt>
+            <dd className="mt-0.5 font-medium">
+              {billing?.listingCreditsUsed ?? 0} /{" "}
+              {billing?.listingCreditsAllowance ?? MONTHLY_LISTING_CREDITS} used
+              this cycle
+            </dd>
+          </div>
+          <div>
             <dt className="text-muted-foreground">Auth mode</dt>
             <dd className="mt-0.5 font-medium">{isDemo ? "Demo" : "Supabase"}</dd>
           </div>
         </dl>
+        <p className="mt-4 text-xs text-muted-foreground">
+          1 completed AI-generated listing = 1 credit. Credit limits are not
+          enforced yet.{" "}
+          <Link href="/dashboard/billing" className="underline hover:text-foreground">
+            Manage billing
+          </Link>
+        </p>
       </section>
     </div>
   )

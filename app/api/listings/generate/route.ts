@@ -7,6 +7,10 @@ import {
 import { getListingModel, emptyTokenUsage } from "@/lib/ai/pricing"
 import { recordAiUsage } from "@/lib/ai/usage"
 import { checkSubscriptionAccess } from "@/lib/billing/access"
+import {
+  assertListingCreditAvailable,
+  creditPeriodStartFromSubscription,
+} from "@/lib/billing/credits"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
 import {
   getServerAuthUser,
@@ -38,6 +42,36 @@ export async function POST(request: Request) {
       },
       { status: 402 }
     )
+  }
+
+  // One completed AI listing = 1 customer credit (not per internal OpenAI call).
+  // No-op while BILLING_ENFORCEMENT=false — does not lock test users.
+  if (user?.id) {
+    const periodStart = creditPeriodStartFromSubscription(
+      access.subscription
+        ? {
+            status: access.subscription.status,
+            trial_start: access.subscription.trial_start,
+            current_period_end: access.subscription.current_period_end,
+          }
+        : null
+    )
+    const creditCheck = await assertListingCreditAvailable({
+      userId: user.id,
+      periodStartIso: periodStart,
+    })
+    if (!creditCheck.ok) {
+      return NextResponse.json(
+        {
+          error:
+            "AI listing credit limit reached for this billing cycle. Upgrade or wait for renewal.",
+          code: "listing_credits_exhausted",
+          allowance: creditCheck.summary.allowance,
+          used: creditCheck.summary.used,
+        },
+        { status: 402 }
+      )
+    }
   }
 
   let imagesAnalyzed = 0

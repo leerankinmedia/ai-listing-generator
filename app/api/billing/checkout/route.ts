@@ -4,6 +4,8 @@ import {
   getBillingAppOrigin,
   getStripePriceId,
   isStripeBillingConfigured,
+  MONTHLY_LISTING_CREDITS,
+  PLAN_NAME,
 } from "@/lib/billing/config"
 import { getStripe } from "@/lib/billing/stripe"
 import {
@@ -65,10 +67,18 @@ export async function POST() {
       payment_method_collection: "always",
       line_items: [{ price: priceId, quantity: 1 }],
       subscription_data: {
-        metadata: { supabase_user_id: user.id },
+        metadata: {
+          supabase_user_id: user.id,
+          plan_name: PLAN_NAME,
+          listing_credits: String(MONTHLY_LISTING_CREDITS),
+        },
         ...(allowTrial ? { trial_period_days: BILLING_TRIAL_DAYS } : {}),
       },
-      metadata: { supabase_user_id: user.id },
+      metadata: {
+        supabase_user_id: user.id,
+        plan_name: PLAN_NAME,
+        listing_credits: String(MONTHLY_LISTING_CREDITS),
+      },
       success_url: `${origin}/dashboard?checkout=success`,
       cancel_url: `${origin}/pricing?checkout=canceled`,
     })

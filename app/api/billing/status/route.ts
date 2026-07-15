@@ -5,8 +5,15 @@ import {
   isStripeBillingConfigured,
   statusGrantsAccess,
   BILLING_TRIAL_DAYS,
+  MONTHLY_LISTING_CREDITS,
+  PLAN_NAME,
+  PLAN_FEATURES,
 } from "@/lib/billing/config"
 import { checkSubscriptionAccess } from "@/lib/billing/access"
+import {
+  creditPeriodStartFromSubscription,
+  getListingCreditsSummary,
+} from "@/lib/billing/credits"
 import { getSubscriptionByUserId } from "@/lib/billing/subscription-store"
 import { getServerAuthUser } from "@/lib/supabase/index"
 
@@ -20,12 +27,24 @@ export async function GET() {
 
   const subscription = await getSubscriptionByUserId(user.id)
   const access = await checkSubscriptionAccess(user.id)
+  const periodStart = creditPeriodStartFromSubscription(subscription)
+  const credits = await getListingCreditsSummary({
+    userId: user.id,
+    periodStartIso: periodStart,
+  })
 
   return NextResponse.json({
     enforcement: isBillingEnforcementEnabled(),
     stripeConfigured: isStripeBillingConfigured(),
+    planName: PLAN_NAME,
     priceLabel: getMembershipPriceLabel(),
     trialDays: BILLING_TRIAL_DAYS,
+    listingCreditsAllowance: MONTHLY_LISTING_CREDITS,
+    listingCreditsUsed: credits.used,
+    listingCreditsRemaining: credits.remaining,
+    listingCreditsPeriodStart: credits.periodStart,
+    listingCreditsEnforced: credits.enforced,
+    features: PLAN_FEATURES,
     allowed: access.allowed,
     reason: access.reason,
     status: subscription?.status ?? "none",

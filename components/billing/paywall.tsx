@@ -3,14 +3,29 @@
 import { useCallback, useEffect, useState } from "react"
 import { CreditCard, Loader2, Lock, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { getMembershipPriceLabel, BILLING_TRIAL_DAYS } from "@/lib/billing/config"
+import { PlanFeaturesList } from "@/components/billing/plan-features"
+import {
+  getMembershipPriceLabel,
+  BILLING_TRIAL_DAYS,
+  MONTHLY_LISTING_CREDITS,
+  PLAN_NAME,
+  PLAN_FEATURES,
+  type PlanFeature,
+} from "@/lib/billing/config"
 import { cn } from "@/lib/utils"
 
 export interface BillingStatusPayload {
   enforcement: boolean
   stripeConfigured: boolean
+  planName: string
   priceLabel: string
   trialDays: number
+  listingCreditsAllowance: number
+  listingCreditsUsed: number
+  listingCreditsRemaining: number
+  listingCreditsPeriodStart: string | null
+  listingCreditsEnforced: boolean
+  features: PlanFeature[]
   allowed: boolean
   reason: string
   status: string
@@ -23,19 +38,6 @@ export interface BillingStatusPayload {
   stripeCustomerId: string | null
   stripeSubscriptionId: string | null
   unlocksApp: boolean
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "—"
-  try {
-    return new Date(value).toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    })
-  } catch {
-    return "—"
-  }
 }
 
 export function useBillingStatus(enabled = true) {
@@ -98,7 +100,12 @@ export function PaywallCard({
 }) {
   const [busy, setBusy] = useState<"checkout" | "portal" | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const planName = status?.planName || PLAN_NAME
   const priceLabel = status?.priceLabel || getMembershipPriceLabel()
+  const trialDays = status?.trialDays ?? BILLING_TRIAL_DAYS
+  const credits =
+    status?.listingCreditsAllowance ?? MONTHLY_LISTING_CREDITS
+  const features = status?.features?.length ? status.features : PLAN_FEATURES
   const trialEligible = status?.trialEligible ?? true
   const inactive =
     status &&
@@ -139,24 +146,34 @@ export function PaywallCard({
         <Lock className="h-5 w-5" />
       </div>
       <h1 className="font-display text-2xl font-semibold tracking-tight">
-        {inactive ? "Trial expired or subscription inactive" : "Start your ListWise trial"}
+        {inactive
+          ? "Trial expired or subscription inactive"
+          : `Start your ${planName} trial`}
       </h1>
       <p className="mt-2 text-sm text-muted-foreground">
         {inactive
           ? "Your listings and account data are saved. Renew to unlock every feature again."
-          : `Full access for ${BILLING_TRIAL_DAYS} days. A card is required to start — then ${priceLabel} after the trial unless you cancel.`}
+          : `Full access for ${trialDays} days. A card is required to start — then ${priceLabel} after the trial unless you cancel.`}
       </p>
 
       <div className="mt-6 rounded-xl border border-border bg-secondary/40 px-4 py-3">
         <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
-          Monthly membership
+          {planName}
         </p>
         <p className="mt-1 font-display text-2xl font-semibold">{priceLabel}</p>
         {trialEligible && (
           <p className="mt-1 text-xs text-muted-foreground">
-            Includes a {BILLING_TRIAL_DAYS}-day full-access trial
+            Includes a {trialDays}-day full-access trial
           </p>
         )}
+        <p className="mt-1 text-xs text-muted-foreground">
+          {credits} AI listing credits per billing cycle · 1 completed listing = 1
+          credit
+        </p>
+      </div>
+
+      <div className="mt-5">
+        <PlanFeaturesList features={features} />
       </div>
 
       {error && (
@@ -179,8 +196,8 @@ export function PaywallCard({
             <Sparkles />
           )}
           {trialEligible
-            ? "Start 7-day trial"
-            : "Subscribe and unlock ListWise"}
+            ? `Start ${trialDays}-day trial`
+            : `Subscribe to ${planName}`}
         </Button>
         {(status?.stripeCustomerId || status?.hasUsedTrial) && (
           <Button

@@ -5,7 +5,7 @@ import { PricingPageClient } from "@/components/billing/pricing-page-client"
 import { ThemeToggle } from "@/components/theme-toggle"
 
 export const metadata: Metadata = {
-  title: "Pricing & trial",
+  title: "ListWise Pro pricing",
 }
 
 export default function PricingPage() {

@@ -22,7 +22,8 @@ export default function BillingPage() {
               Billing
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Subscription status, trial dates, and manage billing in Stripe.
+              Subscription status, ListWise Pro credits, and manage billing in
+              Stripe.
             </p>
           </div>
           <BillingPanel />

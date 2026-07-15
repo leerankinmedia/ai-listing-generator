@@ -1,11 +1,21 @@
 /** Server + shared billing configuration (no secrets in client bundles). */
 
-export const BILLING_TRIAL_DAYS = 7
+export const PLAN_NAME = "ListWise Pro"
+
+export const BILLING_TRIAL_DAYS = 14
+
+/**
+ * Customer AI listing credits included per billing cycle.
+ * One completed AI-generated listing = 1 credit (not per internal OpenAI call).
+ * Enforcement is gated by BILLING_ENFORCEMENT — keep false until ready.
+ */
+export const MONTHLY_LISTING_CREDITS = 600
 
 /** Display-only membership price (Stripe Price object is source of charge). */
 export function getMembershipPriceLabel() {
   return (
-    process.env.NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_LABEL?.trim() || "$29/month"
+    process.env.NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_LABEL?.trim() ||
+    "$34.99/month"
   )
 }
 
@@ -59,3 +69,43 @@ export type AccessStatus = "trialing" | "active"
 export function statusGrantsAccess(status: string | null | undefined) {
   return Boolean(status && ACCESS_STATUSES.has(status as AccessStatus))
 }
+
+export type PlanFeature = {
+  label: string
+  /** When true, UI must show “Coming soon” — do not claim it is live. */
+  comingSoon?: boolean
+}
+
+/**
+ * Public plan inclusions for pricing / paywall / billing UI.
+ * Keep marketplace automation clearly labeled until shipped.
+ */
+export const PLAN_FEATURES: PlanFeature[] = [
+  {
+    label: `${MONTHLY_LISTING_CREDITS} AI listing credits per billing cycle`,
+  },
+  { label: "No fixed inventory limit" },
+  { label: "AI-generated listings" },
+  { label: "Cloud inventory" },
+  {
+    label: "Crosslisting to supported marketplaces",
+    comingSoon: true,
+  },
+  {
+    label: "Automatic sale detection and delisting",
+    comingSoon: true,
+  },
+  {
+    label: "Automatic offers and relisting where supported",
+    comingSoon: true,
+  },
+  { label: "Sold-comps research" },
+  {
+    label: "BOLO research alerts",
+    comingSoon: true,
+  },
+  {
+    label: "Free shipping-supplies resources",
+    comingSoon: true,
+  },
+]

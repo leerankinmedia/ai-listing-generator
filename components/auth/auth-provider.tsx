@@ -17,6 +17,7 @@ import {
   setDemoSession,
   type DemoUser,
 } from "@/lib/auth/demo"
+import { getEmailValidationError, normalizeEmail } from "@/lib/auth/email"
 import { createClient } from "@/lib/supabase/client"
 
 interface AuthUser {
@@ -133,11 +134,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signUp = useCallback(
     async (email: string, password: string, fullName: string) => {
+      const emailError = getEmailValidationError(email)
+      if (emailError) return { error: emailError }
+      if (password.length < 6) {
+        return { error: "Password must be at least 6 characters." }
+      }
+      const normalizedEmail = normalizeEmail(email)
+
       if (demoMode) {
-        if (!email || password.length < 6) {
-          return { error: "Enter a valid email and password (6+ characters)." }
-        }
-        const demo = createDemoUser(email, fullName)
+        const demo = createDemoUser(normalizedEmail, fullName)
         setDemoSession(demo)
         setUser(toAuthUser(demo))
         return {}
@@ -146,7 +151,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const supabase = createClient()
         const { error } = await supabase.auth.signUp({
-          email,
+          email: normalizedEmail,
           password,
           options: { data: { full_name: fullName } },
         })
@@ -155,7 +160,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (data.user) {
           setUser({
             id: data.user.id,
-            email: data.user.email ?? "",
+            email: data.user.email ?? normalizedEmail,
             fullName:
               (data.user.user_metadata?.full_name as string | undefined) ??
               fullName,

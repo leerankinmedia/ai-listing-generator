@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useAuth } from "@/components/auth/auth-provider"
+import { getEmailValidationError } from "@/lib/auth/email"
 
 export function SignupForm() {
   const router = useRouter()
@@ -21,6 +22,11 @@ export function SignupForm() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
+    const emailError = getEmailValidationError(email)
+    if (emailError) {
+      setError(emailError)
+      return
+    }
     setLoading(true)
     const result = await signUp(email.trim(), password, fullName.trim())
     setLoading(false)

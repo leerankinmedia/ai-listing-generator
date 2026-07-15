@@ -13,18 +13,48 @@ import {
   getSubscriptionByUserId,
   upsertSubscriptionForUser,
 } from "@/lib/billing/subscription-store"
-import { getServerAuthUser } from "@/lib/supabase/index"
+import {
+  getEmailValidationError,
+  isValidEmail,
+  normalizeEmail,
+} from "@/lib/auth/email"
+import {
+  createServiceRoleClient,
+  getServerAuthUser,
+} from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
 
+type CheckoutBody = {
+  billingEmail?: string
+  confirmBillingEmail?: string
+}
+
+async function updateAuthEmail(userId: string, email: string) {
+  const admin = createServiceRoleClient()
+  if (!admin) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is required to update billing email."
+    )
+  }
+  const { error } = await admin.auth.admin.updateUserById(userId, {
+    email,
+    email_confirm: true,
+  })
+  if (error) {
+    throw new Error(error.message || "Could not update account email.")
+  }
+}
+
 /**
  * Create an Embedded Checkout Session (ui_mode: embedded_page).
- * Returns clientSecret for Stripe.js — no redirect to checkout.stripe.com.
+ * Never sends a malformed email to Stripe — asks the client for a corrected
+ * billing email when the stored auth email is invalid.
  */
-export async function POST() {
+export async function POST(request: Request) {
   try {
     const user = await getServerAuthUser()
-    if (!user?.id || !user.email) {
+    if (!user?.id) {
       return NextResponse.json({ error: "Sign in required." }, { status: 401 })
     }
 
@@ -32,6 +62,79 @@ export async function POST() {
       return NextResponse.json(
         { error: "Stripe billing is not configured yet." },
         { status: 503 }
+      )
+    }
+
+    let body: CheckoutBody = {}
+    try {
+      const raw = await request.json()
+      if (raw && typeof raw === "object") {
+        body = raw as CheckoutBody
+      }
+    } catch {
+      // Empty body is fine for users with a valid stored email
+    }
+
+    const storedEmail = user.email?.trim() || ""
+    const providedEmail = body.billingEmail
+      ? normalizeEmail(body.billingEmail)
+      : ""
+    const confirmEmail = body.confirmBillingEmail
+      ? normalizeEmail(body.confirmBillingEmail)
+      : ""
+
+    let billingEmail = ""
+
+    if (providedEmail || confirmEmail) {
+      const providedError = getEmailValidationError(providedEmail)
+      if (providedError) {
+        return NextResponse.json(
+          {
+            error: providedError,
+            code: "invalid_billing_email",
+            currentEmail: storedEmail || null,
+          },
+          { status: 422 }
+        )
+      }
+      if (providedEmail !== confirmEmail) {
+        return NextResponse.json(
+          {
+            error: "Billing email and confirmation do not match.",
+            code: "invalid_billing_email",
+            currentEmail: storedEmail || null,
+          },
+          { status: 422 }
+        )
+      }
+      billingEmail = providedEmail
+
+      if (normalizeEmail(storedEmail) !== billingEmail) {
+        await updateAuthEmail(user.id, billingEmail)
+      }
+    } else if (isValidEmail(storedEmail)) {
+      billingEmail = normalizeEmail(storedEmail)
+    } else {
+      return NextResponse.json(
+        {
+          error:
+            "Your account email is invalid. Enter a valid billing email to continue checkout.",
+          code: "invalid_billing_email",
+          currentEmail: storedEmail || null,
+        },
+        { status: 422 }
+      )
+    }
+
+    // Final guard — never send malformed emails to Stripe
+    if (!isValidEmail(billingEmail)) {
+      return NextResponse.json(
+        {
+          error: "Enter a valid billing email to continue.",
+          code: "invalid_billing_email",
+          currentEmail: storedEmail || null,
+        },
+        { status: 422 }
       )
     }
 
@@ -56,13 +159,15 @@ export async function POST() {
     // Never grant a second trial to the same user
     const allowTrial = !existing?.has_used_trial && !existing?.trial_start
 
+    const displayName =
+      (user.user_metadata?.full_name as string | undefined) ||
+      billingEmail.split("@")[0]
+
     let customerId = existing?.stripe_customer_id ?? null
     if (!customerId) {
       const customer = await stripe.customers.create({
-        email: user.email,
-        name:
-          (user.user_metadata?.full_name as string | undefined) ||
-          user.email.split("@")[0],
+        email: billingEmail,
+        name: displayName,
         metadata: { supabase_user_id: user.id },
       })
       customerId = customer.id
@@ -73,6 +178,8 @@ export async function POST() {
       })
     } else {
       await stripe.customers.update(customerId, {
+        email: billingEmail,
+        name: displayName,
         metadata: { supabase_user_id: user.id },
       })
     }
@@ -98,6 +205,7 @@ export async function POST() {
         supabase_user_id: user.id,
         plan_name: PLAN_NAME,
         listing_credits: String(MONTHLY_LISTING_CREDITS),
+        billing_email: billingEmail,
       },
       return_url: `${origin}/checkout/return?session_id={CHECKOUT_SESSION_ID}`,
     })
@@ -114,6 +222,7 @@ export async function POST() {
       sessionId: session.id,
       trialEligible: allowTrial,
       trialDays: allowTrial ? BILLING_TRIAL_DAYS : 0,
+      billingEmail,
     })
   } catch (error) {
     console.error("[billing/checkout]", error)

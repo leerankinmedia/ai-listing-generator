@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react"
 import Link from "next/link"
 import { loadStripe } from "@stripe/stripe-js"
 import {
@@ -12,12 +12,15 @@ import { Logo } from "@/components/brand/logo"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { useAuth } from "@/components/auth/auth-provider"
 import { useBillingStatus } from "@/components/billing/paywall"
-import { buttonVariants } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   BILLING_TRIAL_DAYS,
   getMembershipPriceLabel,
   PLAN_NAME,
 } from "@/lib/billing/config"
+import { getEmailValidationError } from "@/lib/auth/email"
 import { cn } from "@/lib/utils"
 import { useRouter } from "next/navigation"
 
@@ -32,6 +35,10 @@ export function EmbeddedCheckoutPage() {
   const [clientSecret, setClientSecret] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [needsBillingEmail, setNeedsBillingEmail] = useState(false)
+  const [currentEmail, setCurrentEmail] = useState<string | null>(null)
+  const [billingEmail, setBillingEmail] = useState("")
+  const [confirmBillingEmail, setConfirmBillingEmail] = useState("")
 
   const publishableKey = getPublishableKey()
   const stripePromise = useMemo(
@@ -39,23 +46,43 @@ export function EmbeddedCheckoutPage() {
     [publishableKey]
   )
 
-  const createSession = useCallback(async () => {
-    setCreating(true)
-    setError(null)
-    try {
-      const res = await fetch("/api/billing/checkout", { method: "POST" })
-      const data = await res.json()
-      if (!res.ok || !data.clientSecret) {
-        throw new Error(data.error || "Could not start checkout")
+  const createSession = useCallback(
+    async (payload?: {
+      billingEmail: string
+      confirmBillingEmail: string
+    }) => {
+      setCreating(true)
+      setError(null)
+      try {
+        const res = await fetch("/api/billing/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload ?? {}),
+        })
+        const data = await res.json()
+        if (res.status === 422 && data.code === "invalid_billing_email") {
+          setNeedsBillingEmail(true)
+          setCurrentEmail(
+            typeof data.currentEmail === "string" ? data.currentEmail : null
+          )
+          setClientSecret(null)
+          setError(data.error || "Enter a valid billing email to continue.")
+          return
+        }
+        if (!res.ok || !data.clientSecret) {
+          throw new Error(data.error || "Could not start checkout")
+        }
+        setNeedsBillingEmail(false)
+        setClientSecret(data.clientSecret as string)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Checkout failed")
+        setClientSecret(null)
+      } finally {
+        setCreating(false)
       }
-      setClientSecret(data.clientSecret as string)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Checkout failed")
-      setClientSecret(null)
-    } finally {
-      setCreating(false)
-    }
-  }, [])
+    },
+    []
+  )
 
   useEffect(() => {
     if (authLoading) return
@@ -65,10 +92,9 @@ export function EmbeddedCheckoutPage() {
     }
     if (billingLoading) return
     if (status?.unlocksApp) {
-      // Already trialing/active — do not start another checkout
       return
     }
-    if (!clientSecret && !creating && !error) {
+    if (!clientSecret && !creating && !error && !needsBillingEmail) {
       void createSession()
     }
   }, [
@@ -79,9 +105,27 @@ export function EmbeddedCheckoutPage() {
     clientSecret,
     creating,
     error,
+    needsBillingEmail,
     createSession,
     router,
   ])
+
+  async function onSubmitBillingEmail(e: FormEvent) {
+    e.preventDefault()
+    const emailError = getEmailValidationError(billingEmail)
+    if (emailError) {
+      setError(emailError)
+      return
+    }
+    if (billingEmail.trim().toLowerCase() !== confirmBillingEmail.trim().toLowerCase()) {
+      setError("Billing email and confirmation do not match.")
+      return
+    }
+    await createSession({
+      billingEmail: billingEmail.trim(),
+      confirmBillingEmail: confirmBillingEmail.trim(),
+    })
+  }
 
   if (authLoading || (user && billingLoading)) {
     return (
@@ -159,7 +203,77 @@ export function EmbeddedCheckoutPage() {
           </p>
         </div>
 
-        {error && (
+        {needsBillingEmail && (
+          <form
+            onSubmit={(e) => void onSubmitBillingEmail(e)}
+            className="space-y-4 rounded-2xl border border-border bg-card/90 p-5 sm:p-6"
+          >
+            <div>
+              <h2 className="font-display text-lg font-semibold tracking-tight">
+                Confirm your billing email
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Your account email
+                {currentEmail ? (
+                  <>
+                    {" "}
+                    (<span className="font-medium text-foreground">
+                      ({currentEmail})
+                    </span>
+                  </>
+                ) : null}{" "}
+                isn&apos;t valid for Stripe. Enter a correct email to continue —
+                we&apos;ll update your ListWise profile, then start checkout.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="billingEmail">Billing email</Label>
+              <Input
+                id="billingEmail"
+                type="email"
+                autoComplete="email"
+                required
+                placeholder="you@shop.com"
+                value={billingEmail}
+                onChange={(e) => setBillingEmail(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="confirmBillingEmail">Confirm billing email</Label>
+              <Input
+                id="confirmBillingEmail"
+                type="email"
+                autoComplete="email"
+                required
+                placeholder="you@shop.com"
+                value={confirmBillingEmail}
+                onChange={(e) => setConfirmBillingEmail(e.target.value)}
+              />
+            </div>
+            {error && (
+              <p className="text-sm text-destructive" role="alert">
+                {error}
+              </p>
+            )}
+            <Button
+              type="submit"
+              variant="accent"
+              className="w-full"
+              disabled={creating}
+            >
+              {creating ? (
+                <>
+                  <Loader2 className="animate-spin" />
+                  Updating and starting checkout…
+                </>
+              ) : (
+                "Save email and continue"
+              )}
+            </Button>
+          </form>
+        )}
+
+        {!needsBillingEmail && error && (
           <div className="space-y-3 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3">
             <p className="text-sm text-destructive" role="alert">
               {error}
@@ -174,7 +288,7 @@ export function EmbeddedCheckoutPage() {
           </div>
         )}
 
-        {(creating || (!clientSecret && !error)) && (
+        {!needsBillingEmail && (creating || (!clientSecret && !error)) && (
           <p className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             Preparing secure checkout…

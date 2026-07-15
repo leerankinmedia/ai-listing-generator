@@ -2,9 +2,11 @@ import { NextResponse } from "next/server"
 import {
   getMembershipPriceLabel,
   isBillingEnforcementEnabled,
+  isBillingPreviewLocksEnabled,
   isStripeBillingConfigured,
   statusGrantsAccess,
   paidToolsUnlocked,
+  arePaidToolLocksActive,
   BILLING_TRIAL_DAYS,
   MONTHLY_LISTING_CREDITS,
   PLAN_NAME,
@@ -38,9 +40,18 @@ export async function GET() {
   const periodEnd = subscription?.current_period_end ?? null
   const unlocks = statusGrantsAccess(subStatus, periodEnd)
   const enforcement = isBillingEnforcementEnabled()
+  const previewLocks = isBillingPreviewLocksEnabled()
+  const locksActive = arePaidToolLocksActive()
+  const toolsUnlocked = paidToolsUnlocked({
+    locksActive,
+    status: subStatus,
+    currentPeriodEnd: periodEnd,
+  })
 
   return NextResponse.json({
     enforcement,
+    previewLocks,
+    locksActive,
     stripeConfigured: isStripeBillingConfigured(),
     planName: PLAN_NAME,
     priceLabel: getMembershipPriceLabel(),
@@ -63,11 +74,7 @@ export async function GET() {
     stripeCustomerId: subscription?.stripe_customer_id ?? null,
     stripeSubscriptionId: subscription?.stripe_subscription_id ?? null,
     unlocksApp: unlocks,
-    paidToolsUnlocked: paidToolsUnlocked({
-      enforcement,
-      status: subStatus,
-      currentPeriodEnd: periodEnd,
-    }),
-    previewMode: enforcement && !unlocks,
+    paidToolsUnlocked: toolsUnlocked,
+    previewMode: locksActive && !toolsUnlocked,
   })
 }

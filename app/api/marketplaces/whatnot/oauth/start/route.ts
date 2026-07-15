@@ -20,7 +20,7 @@ export async function GET() {
     if (!access.allowed) {
       return NextResponse.json(
         {
-          error: "Start your 7-day free trial to unlock access.",
+          error: "Start your 7-day free trial to unlock this feature.",
           code: "subscription_required",
         },
         { status: 402 }

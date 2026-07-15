@@ -18,7 +18,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error:
-            "Start your 7-day free trial to unlock access.",
+            "Start your 7-day free trial to unlock this feature.",
           code: "subscription_required",
         },
         { status: 402 }

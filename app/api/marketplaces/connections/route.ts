@@ -29,7 +29,7 @@ export async function GET() {
     return NextResponse.json(
       {
         error:
-          "Start your 7-day free trial to unlock access.",
+          "Start your 7-day free trial to unlock this feature.",
         code: "subscription_required",
         connections: [],
       },
@@ -50,7 +50,7 @@ export async function DELETE(request: Request) {
     return NextResponse.json(
       {
         error:
-          "Start your 7-day free trial to unlock access.",
+          "Start your 7-day free trial to unlock this feature.",
         code: "subscription_required",
       },
       { status: 402 }

@@ -21,7 +21,6 @@ import {
   MONTHLY_LISTING_CREDITS,
   PLAN_NAME,
   getMembershipPriceLabel,
-  paidToolsUnlocked,
 } from "@/lib/billing/config"
 import { cn } from "@/lib/utils"
 
@@ -54,12 +53,8 @@ export function DashboardOverview() {
   const [listings, setListings] = useState<Listing[]>([])
   const firstName =
     user?.fullName?.split(" ")[0] || user?.email?.split("@")[0] || "Seller"
-  const toolsUnlocked = paidToolsUnlocked({
-    enforcement: Boolean(billing?.enforcement),
-    status: billing?.status,
-    currentPeriodEnd: billing?.currentPeriodEnd,
-  })
-  const previewMode = Boolean(billing?.enforcement && !toolsUnlocked)
+  const toolsUnlocked = billing?.paidToolsUnlocked ?? true
+  const previewMode = Boolean(billing?.previewMode ?? (!toolsUnlocked && billing?.locksActive))
 
   useEffect(() => {
     if (!user) return
@@ -134,11 +129,11 @@ export function DashboardOverview() {
 
       {previewMode && (
         <div className="animate-rise rounded-xl border border-accent/25 bg-accent/10 px-4 py-3 text-sm">
-          Start your {BILLING_TRIAL_DAYS}-day free trial to unlock access to AI
-          Generator, listings actions, and marketplace tools. Overview, Billing,
-          and Account stay available.{" "}
+          Start your {BILLING_TRIAL_DAYS}-day free trial to unlock this feature —
+          AI Generator, listings actions, and marketplace tools. Overview,
+          Billing, and Account stay available.{" "}
           <Link href="/checkout" className="font-semibold underline">
-            Get started
+            Start {BILLING_TRIAL_DAYS}-day trial
           </Link>
         </div>
       )}

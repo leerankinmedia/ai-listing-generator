@@ -2,12 +2,11 @@
 
 import { FeatureLockPreview, type LockedFeatureId } from "@/components/billing/feature-lock-preview"
 import { useBillingStatus } from "@/components/billing/paywall"
-import { paidToolsUnlocked } from "@/lib/billing/config"
 
 /**
- * Soft-lock wrapper: when enforcement is on and the user is not trialing/active
- * (or past_due within grace), show a feature preview instead of paid actions.
- * When BILLING_ENFORCEMENT=false, children always render.
+ * Soft-lock wrapper: when BILLING_PREVIEW_LOCKS and/or BILLING_ENFORCEMENT is on
+ * and the user is not trialing/active, show a feature preview instead of actions.
+ * Relies on /api/billing/status (server-side flag evaluation) — not client env.
  */
 export function PaidFeatureGate({
   feature,
@@ -26,11 +25,8 @@ export function PaidFeatureGate({
     )
   }
 
-  const unlocked = paidToolsUnlocked({
-    enforcement: Boolean(status?.enforcement),
-    status: status?.status,
-    currentPeriodEnd: status?.currentPeriodEnd,
-  })
+  // Prefer server-computed flag; default unlocked only when status missing
+  const unlocked = status?.paidToolsUnlocked ?? true
 
   if (unlocked) {
     return <>{children}</>
@@ -47,14 +43,10 @@ export function PaidFeatureGate({
 
 export function usePaidToolsAccess() {
   const { status, loading, error, refresh } = useBillingStatus()
-  const unlocked = paidToolsUnlocked({
-    enforcement: Boolean(status?.enforcement),
-    status: status?.status,
-    currentPeriodEnd: status?.currentPeriodEnd,
-  })
+  const unlocked = status?.paidToolsUnlocked ?? true
   return {
     unlocked,
-    previewMode: Boolean(status?.enforcement && !unlocked),
+    previewMode: Boolean(status?.previewMode ?? (!unlocked && status?.locksActive)),
     status,
     loading,
     error,

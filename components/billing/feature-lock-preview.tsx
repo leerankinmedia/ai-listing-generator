@@ -113,7 +113,7 @@ export function FeatureLockPreview({
       <div className="mt-6 flex items-start gap-2 rounded-xl border border-border bg-secondary/40 px-4 py-3 text-left">
         <Lock className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
         <p className="text-sm text-foreground">
-          Start your {BILLING_TRIAL_DAYS}-day free trial to unlock access.
+          Start your {BILLING_TRIAL_DAYS}-day free trial to unlock this feature.
         </p>
       </div>
 

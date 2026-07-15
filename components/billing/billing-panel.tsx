@@ -222,13 +222,31 @@ export function BillingPanel() {
 
       <p className="text-xs text-muted-foreground">
         Stripe is the source of truth. Listings stay saved if access is locked.
-        {!status.enforcement && (
+        {!status.enforcement && status.previewLocks && (
+          <>
+            {" "}
+            <span className="font-medium text-foreground">
+              Preview locks are on
+            </span>{" "}
+            (BILLING_PREVIEW_LOCKS=true) while BILLING_ENFORCEMENT stays false.
+          </>
+        )}
+        {!status.enforcement && !status.previewLocks && (
           <>
             {" "}
             <span className="font-medium text-foreground">
               Billing enforcement is currently off
             </span>{" "}
-            (BILLING_ENFORCEMENT=false) while test mode is verified.
+            (BILLING_ENFORCEMENT=false).
+          </>
+        )}
+        {status.enforcement && (
+          <>
+            {" "}
+            <span className="font-medium text-foreground">
+              Billing enforcement is on
+            </span>
+            .
           </>
         )}
       </p>

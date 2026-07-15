@@ -23,6 +23,19 @@ export function isBillingEnforcementEnabled() {
   return process.env.BILLING_ENFORCEMENT === "true"
 }
 
+/**
+ * Temporary test-mode flag: lock unpaid accounts behind feature previews
+ * even while BILLING_ENFORCEMENT=false. Does not globally hard-block the app.
+ */
+export function isBillingPreviewLocksEnabled() {
+  return process.env.BILLING_PREVIEW_LOCKS === "true"
+}
+
+/** True when paid-tool UI/API locks should run (preview locks and/or full enforcement). */
+export function arePaidToolLocksActive() {
+  return isBillingEnforcementEnabled() || isBillingPreviewLocksEnabled()
+}
+
 export function getStripeSecretKey() {
   return process.env.STRIPE_SECRET_KEY?.trim() || ""
 }
@@ -96,15 +109,22 @@ export function statusGrantsAccess(
 }
 
 /**
- * Paid tools are unlocked when enforcement is off (test mode), or when the
- * Stripe subscription grants access (trialing / active / past_due within grace).
+ * Paid tools unlock when:
+ * - neither BILLING_ENFORCEMENT nor BILLING_PREVIEW_LOCKS is on, OR
+ * - Stripe status is trialing / active (or past_due within grace).
  */
 export function paidToolsUnlocked(input: {
-  enforcement: boolean
+  enforcement?: boolean
+  previewLocks?: boolean
+  /** Prefer this when available — true if either lock mode is active. */
+  locksActive?: boolean
   status: string | null | undefined
   currentPeriodEnd?: string | null
 }) {
-  if (!input.enforcement) return true
+  const locksActive =
+    input.locksActive ??
+    (Boolean(input.enforcement) || Boolean(input.previewLocks))
+  if (!locksActive) return true
   return statusGrantsAccess(input.status, input.currentPeriodEnd)
 }
 

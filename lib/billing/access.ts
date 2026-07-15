@@ -1,5 +1,6 @@
 import "server-only"
 import {
+  arePaidToolLocksActive,
   isBillingEnforcementEnabled,
   isStripeBillingConfigured,
   statusGrantsAccess,
@@ -9,6 +10,7 @@ import { getSubscriptionByUserId } from "@/lib/billing/subscription-store"
 export interface SubscriptionAccessResult {
   allowed: boolean
   reason:
+    | "locks_off"
     | "enforcement_off"
     | "stripe_unconfigured"
     | "missing_user"
@@ -22,23 +24,29 @@ export interface SubscriptionAccessResult {
 /**
  * Server-side guard for paid tool actions (generate, publish, connect, …).
  * Preview-first: dashboard pages stay reachable; this blocks mutations/APIs.
- * When BILLING_ENFORCEMENT=false, always allowed (locking logic stays wired).
+ *
+ * Locks run when BILLING_PREVIEW_LOCKS=true and/or BILLING_ENFORCEMENT=true.
+ * When both are false, actions are allowed (dev convenience).
  */
 export async function checkSubscriptionAccess(
   userId: string | null | undefined
 ): Promise<SubscriptionAccessResult> {
   const subscription = userId ? await getSubscriptionByUserId(userId) : null
+  const locksActive = arePaidToolLocksActive()
 
-  if (!isBillingEnforcementEnabled()) {
+  if (!locksActive) {
     return {
       allowed: true,
-      reason: "enforcement_off",
+      reason: "locks_off",
       status: subscription?.status ?? null,
       subscription,
     }
   }
 
-  if (!isStripeBillingConfigured()) {
+  // Full enforcement without Stripe configured → fail closed.
+  // Preview locks can still lock unpaid users when Stripe is configured;
+  // if Stripe isn't configured, treat as no paid access.
+  if (isBillingEnforcementEnabled() && !isStripeBillingConfigured()) {
     return {
       allowed: false,
       reason: "stripe_unconfigured",
@@ -90,7 +98,7 @@ export async function assertSubscriptionAccess(
   const result = await checkSubscriptionAccess(userId)
   if (!result.allowed) {
     const error = new Error(
-      "Start your 7-day free trial to unlock access."
+      "Start your 7-day free trial to unlock this feature."
     )
     ;(error as Error & { status: number; code: string }).status = 402
     ;(error as Error & { status: number; code: string }).code =

@@ -16,6 +16,8 @@ import { cn } from "@/lib/utils"
 
 export interface BillingStatusPayload {
   enforcement: boolean
+  previewLocks: boolean
+  locksActive: boolean
   stripeConfigured: boolean
   planName: string
   priceLabel: string

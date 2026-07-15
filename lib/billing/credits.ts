@@ -2,8 +2,8 @@ import "server-only"
 import { createServiceRoleClient, isSupabaseConfigured } from "@/lib/supabase/index"
 import {
   MONTHLY_LISTING_CREDITS,
-  isBillingEnforcementEnabled,
 } from "@/lib/billing/config"
+import { isBillingEnforcementEnabled } from "@/lib/billing/env-flags"
 
 /**
  * Customer billing credits vs internal OpenAI usage:

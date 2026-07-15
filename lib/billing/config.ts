@@ -19,19 +19,28 @@ export function getMembershipPriceLabel() {
   )
 }
 
+/**
+ * @deprecated Prefer lib/billing/env-flags on the server. Client code must use
+ * /api/billing/status flags — non-NEXT_PUBLIC env is unavailable in the browser.
+ */
 export function isBillingEnforcementEnabled() {
-  return process.env.BILLING_ENFORCEMENT === "true"
+  return (
+    typeof process.env.BILLING_ENFORCEMENT === "string" &&
+    process.env.BILLING_ENFORCEMENT.trim().toLowerCase() === "true"
+  )
 }
 
 /**
- * Temporary test-mode flag: lock unpaid accounts behind feature previews
- * even while BILLING_ENFORCEMENT=false. Does not globally hard-block the app.
+ * @deprecated Prefer lib/billing/env-flags on the server.
  */
 export function isBillingPreviewLocksEnabled() {
-  return process.env.BILLING_PREVIEW_LOCKS === "true"
+  return (
+    typeof process.env.BILLING_PREVIEW_LOCKS === "string" &&
+    process.env.BILLING_PREVIEW_LOCKS.trim().toLowerCase() === "true"
+  )
 }
 
-/** True when paid-tool UI/API locks should run (preview locks and/or full enforcement). */
+/** @deprecated Prefer lib/billing/env-flags on the server. */
 export function arePaidToolLocksActive() {
   return isBillingEnforcementEnabled() || isBillingPreviewLocksEnabled()
 }

@@ -1,12 +1,15 @@
 "use client"
 
-import { FeatureLockPreview, type LockedFeatureId } from "@/components/billing/feature-lock-preview"
+import {
+  FeatureLockPreview,
+  type LockedFeatureId,
+} from "@/components/billing/feature-lock-preview"
 import { useBillingStatus } from "@/components/billing/paywall"
 
 /**
- * Soft-lock wrapper: when BILLING_PREVIEW_LOCKS and/or BILLING_ENFORCEMENT is on
- * and the user is not trialing/active, show a feature preview instead of actions.
- * Relies on /api/billing/status (server-side flag evaluation) — not client env.
+ * Soft-lock wrapper for paid tools.
+ * Fail closed: only render actions when the server explicitly returns
+ * paidToolsUnlocked === true. Missing/errored status shows the lock preview.
  */
 export function PaidFeatureGate({
   feature,
@@ -17,36 +20,41 @@ export function PaidFeatureGate({
   children: React.ReactNode
   className?: string
 }) {
-  const { status, loading } = useBillingStatus()
+  const { status, loading, error } = useBillingStatus()
 
   if (loading) {
-    return (
-      <p className="text-sm text-muted-foreground">Loading access…</p>
-    )
+    return <p className="text-sm text-muted-foreground">Loading access…</p>
   }
 
-  // Prefer server-computed flag; default unlocked only when status missing
-  const unlocked = status?.paidToolsUnlocked ?? true
+  // Fail closed — never default to unlocked when status is missing
+  const unlocked = status?.paidToolsUnlocked === true
 
   if (unlocked) {
     return <>{children}</>
   }
 
   return (
-    <FeatureLockPreview
-      feature={feature}
-      className={className}
-      trialEligible={status?.trialEligible ?? true}
-    />
+    <div className="space-y-3">
+      {error && (
+        <p className="text-center text-xs text-muted-foreground" role="status">
+          Could not verify access ({error}). Showing locked preview.
+        </p>
+      )}
+      <FeatureLockPreview
+        feature={feature}
+        className={className}
+        trialEligible={status?.trialEligible ?? true}
+      />
+    </div>
   )
 }
 
 export function usePaidToolsAccess() {
   const { status, loading, error, refresh } = useBillingStatus()
-  const unlocked = status?.paidToolsUnlocked ?? true
+  const unlocked = status?.paidToolsUnlocked === true
   return {
     unlocked,
-    previewMode: Boolean(status?.previewMode ?? (!unlocked && status?.locksActive)),
+    previewMode: Boolean(status?.previewMode || (!unlocked && status)),
     status,
     loading,
     error,

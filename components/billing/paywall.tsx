@@ -42,6 +42,16 @@ export interface BillingStatusPayload {
   unlocksApp: boolean
   paidToolsUnlocked: boolean
   previewMode: boolean
+  accessDebug?: {
+    previewLocksEnabled: boolean
+    billingEnforcementEnabled: boolean
+    currentSubscriptionStatus: string
+    accessAllowed: boolean
+    paidToolsUnlocked: boolean
+    reason: string
+    previewLocksRaw: string | null
+    enforcementRaw: string | null
+  }
 }
 
 export function useBillingStatus(enabled = true) {
@@ -57,7 +67,11 @@ export function useBillingStatus(enabled = true) {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch("/api/billing/status")
+      const res = await fetch("/api/billing/status", {
+        method: "GET",
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+      })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Could not load billing status")
       setStatus(data as BillingStatusPayload)

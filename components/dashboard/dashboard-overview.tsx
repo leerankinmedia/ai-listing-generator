@@ -53,8 +53,10 @@ export function DashboardOverview() {
   const [listings, setListings] = useState<Listing[]>([])
   const firstName =
     user?.fullName?.split(" ")[0] || user?.email?.split("@")[0] || "Seller"
-  const toolsUnlocked = billing?.paidToolsUnlocked ?? true
-  const previewMode = Boolean(billing?.previewMode ?? (!toolsUnlocked && billing?.locksActive))
+  const toolsUnlocked = billing?.paidToolsUnlocked === true
+  const previewMode = Boolean(
+    billing?.previewMode || (billing && !toolsUnlocked && billing.locksActive)
+  )
 
   useEffect(() => {
     if (!user) return

@@ -1,12 +1,9 @@
 import { NextResponse } from "next/server"
 import {
   getMembershipPriceLabel,
-  isBillingEnforcementEnabled,
-  isBillingPreviewLocksEnabled,
   isStripeBillingConfigured,
   statusGrantsAccess,
   paidToolsUnlocked,
-  arePaidToolLocksActive,
   BILLING_TRIAL_DAYS,
   MONTHLY_LISTING_CREDITS,
   PLAN_NAME,
@@ -17,10 +14,12 @@ import {
   creditPeriodStartFromSubscription,
   getListingCreditsSummary,
 } from "@/lib/billing/credits"
+import { getBillingLockDebug } from "@/lib/billing/env-flags"
 import { getSubscriptionByUserId } from "@/lib/billing/subscription-store"
 import { getServerAuthUser } from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
 
 export async function GET() {
   const user = await getServerAuthUser()
@@ -28,6 +27,7 @@ export async function GET() {
     return NextResponse.json({ error: "Sign in required." }, { status: 401 })
   }
 
+  const lockDebug = getBillingLockDebug()
   const subscription = await getSubscriptionByUserId(user.id)
   const access = await checkSubscriptionAccess(user.id)
   const periodStart = creditPeriodStartFromSubscription(subscription)
@@ -39,42 +39,61 @@ export async function GET() {
   const subStatus = subscription?.status ?? "none"
   const periodEnd = subscription?.current_period_end ?? null
   const unlocks = statusGrantsAccess(subStatus, periodEnd)
-  const enforcement = isBillingEnforcementEnabled()
-  const previewLocks = isBillingPreviewLocksEnabled()
-  const locksActive = arePaidToolLocksActive()
   const toolsUnlocked = paidToolsUnlocked({
-    locksActive,
+    locksActive: lockDebug.locksActive,
     status: subStatus,
     currentPeriodEnd: periodEnd,
   })
 
-  return NextResponse.json({
-    enforcement,
-    previewLocks,
-    locksActive,
-    stripeConfigured: isStripeBillingConfigured(),
-    planName: PLAN_NAME,
-    priceLabel: getMembershipPriceLabel(),
-    trialDays: BILLING_TRIAL_DAYS,
-    listingCreditsAllowance: MONTHLY_LISTING_CREDITS,
-    listingCreditsUsed: credits.used,
-    listingCreditsRemaining: credits.remaining,
-    listingCreditsPeriodStart: credits.periodStart,
-    listingCreditsEnforced: credits.enforced,
-    features: PLAN_FEATURES,
-    allowed: access.allowed,
-    reason: access.reason,
-    status: subStatus,
-    hasUsedTrial: Boolean(subscription?.has_used_trial || subscription?.trial_start),
-    trialEligible: !(subscription?.has_used_trial || subscription?.trial_start),
-    trialStart: subscription?.trial_start ?? null,
-    trialEnd: subscription?.trial_end ?? null,
-    currentPeriodEnd: periodEnd,
-    cancelAtPeriodEnd: Boolean(subscription?.cancel_at_period_end),
-    stripeCustomerId: subscription?.stripe_customer_id ?? null,
-    stripeSubscriptionId: subscription?.stripe_subscription_id ?? null,
-    unlocksApp: unlocks,
-    paidToolsUnlocked: toolsUnlocked,
-    previewMode: locksActive && !toolsUnlocked,
-  })
+  return NextResponse.json(
+    {
+      enforcement: lockDebug.billingEnforcementEnabled,
+      previewLocks: lockDebug.previewLocksEnabled,
+      locksActive: lockDebug.locksActive,
+      stripeConfigured: isStripeBillingConfigured(),
+      planName: PLAN_NAME,
+      priceLabel: getMembershipPriceLabel(),
+      trialDays: BILLING_TRIAL_DAYS,
+      listingCreditsAllowance: MONTHLY_LISTING_CREDITS,
+      listingCreditsUsed: credits.used,
+      listingCreditsRemaining: credits.remaining,
+      listingCreditsPeriodStart: credits.periodStart,
+      listingCreditsEnforced: credits.enforced,
+      features: PLAN_FEATURES,
+      allowed: access.allowed,
+      reason: access.reason,
+      status: subStatus,
+      hasUsedTrial: Boolean(
+        subscription?.has_used_trial || subscription?.trial_start
+      ),
+      trialEligible: !(
+        subscription?.has_used_trial || subscription?.trial_start
+      ),
+      trialStart: subscription?.trial_start ?? null,
+      trialEnd: subscription?.trial_end ?? null,
+      currentPeriodEnd: periodEnd,
+      cancelAtPeriodEnd: Boolean(subscription?.cancel_at_period_end),
+      stripeCustomerId: subscription?.stripe_customer_id ?? null,
+      stripeSubscriptionId: subscription?.stripe_subscription_id ?? null,
+      unlocksApp: unlocks,
+      paidToolsUnlocked: toolsUnlocked,
+      previewMode: lockDebug.locksActive && !toolsUnlocked,
+      // Temporary visible production debug (Billing page)
+      accessDebug: {
+        previewLocksEnabled: lockDebug.previewLocksEnabled,
+        billingEnforcementEnabled: lockDebug.billingEnforcementEnabled,
+        currentSubscriptionStatus: subStatus,
+        accessAllowed: access.allowed,
+        paidToolsUnlocked: toolsUnlocked,
+        reason: access.reason,
+        previewLocksRaw: lockDebug.previewLocksRaw,
+        enforcementRaw: lockDebug.enforcementRaw,
+      },
+    },
+    {
+      headers: {
+        "Cache-Control": "no-store, max-age=0",
+      },
+    }
+  )
 }

@@ -102,6 +102,48 @@ export function BillingPanel() {
 
   return (
     <div className="space-y-6">
+      <div
+        className="rounded-xl border border-dashed border-amber-500/40 bg-amber-500/10 px-4 py-3 font-mono text-xs leading-relaxed text-foreground"
+        role="status"
+      >
+        <p className="font-sans text-[11px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+          Temporary access debug
+        </p>
+        <p className="mt-2">
+          preview locks enabled:{" "}
+          {String(
+            status.accessDebug?.previewLocksEnabled ?? status.previewLocks
+          )}
+        </p>
+        <p>
+          billing enforcement enabled:{" "}
+          {String(
+            status.accessDebug?.billingEnforcementEnabled ?? status.enforcement
+          )}
+        </p>
+        <p>
+          current subscription status:{" "}
+          {status.accessDebug?.currentSubscriptionStatus ?? status.status}
+        </p>
+        <p>
+          access allowed:{" "}
+          {String(status.accessDebug?.accessAllowed ?? status.allowed)}
+        </p>
+        <p>
+          paid tools unlocked:{" "}
+          {String(
+            status.accessDebug?.paidToolsUnlocked ?? status.paidToolsUnlocked
+          )}
+        </p>
+        <p className="text-muted-foreground">
+          raw BILLING_PREVIEW_LOCKS:{" "}
+          {JSON.stringify(status.accessDebug?.previewLocksRaw ?? null)} · raw
+          BILLING_ENFORCEMENT:{" "}
+          {JSON.stringify(status.accessDebug?.enforcementRaw ?? null)} · reason:{" "}
+          {status.accessDebug?.reason ?? status.reason}
+        </p>
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-border bg-card/70 px-4 py-3">
           <p className="text-[11px] uppercase tracking-wider text-muted-foreground">

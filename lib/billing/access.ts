@@ -1,10 +1,9 @@
 import "server-only"
+import { isStripeBillingConfigured, statusGrantsAccess } from "@/lib/billing/config"
 import {
   arePaidToolLocksActive,
   isBillingEnforcementEnabled,
-  isStripeBillingConfigured,
-  statusGrantsAccess,
-} from "@/lib/billing/config"
+} from "@/lib/billing/env-flags"
 import { getSubscriptionByUserId } from "@/lib/billing/subscription-store"
 
 export interface SubscriptionAccessResult {
@@ -23,10 +22,7 @@ export interface SubscriptionAccessResult {
 
 /**
  * Server-side guard for paid tool actions (generate, publish, connect, …).
- * Preview-first: dashboard pages stay reachable; this blocks mutations/APIs.
- *
- * Locks run when BILLING_PREVIEW_LOCKS=true and/or BILLING_ENFORCEMENT=true.
- * When both are false, actions are allowed (dev convenience).
+ * Uses request-time env flags from env-flags.ts (bracket access, not inlined).
  */
 export async function checkSubscriptionAccess(
   userId: string | null | undefined
@@ -43,9 +39,6 @@ export async function checkSubscriptionAccess(
     }
   }
 
-  // Full enforcement without Stripe configured → fail closed.
-  // Preview locks can still lock unpaid users when Stripe is configured;
-  // if Stripe isn't configured, treat as no paid access.
   if (isBillingEnforcementEnabled() && !isStripeBillingConfigured()) {
     return {
       allowed: false,

@@ -18,7 +18,7 @@ import { getServerAuthUser } from "@/lib/supabase/index"
 export const runtime = "nodejs"
 
 /**
- * Create an Embedded Checkout Session (ui_mode: embedded).
+ * Create an Embedded Checkout Session (ui_mode: embedded_page).
  * Returns clientSecret for Stripe.js — no redirect to checkout.stripe.com.
  */
 export async function POST() {
@@ -78,7 +78,7 @@ export async function POST() {
     }
 
     const session = await stripe.checkout.sessions.create({
-      ui_mode: "embedded",
+      ui_mode: "embedded_page",
       mode: "subscription",
       customer: customerId,
       client_reference_id: user.id,

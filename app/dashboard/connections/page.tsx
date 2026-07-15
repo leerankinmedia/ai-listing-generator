@@ -4,6 +4,7 @@ import { Suspense, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { DashboardShell } from "@/components/layout/dashboard-shell"
 import { MarketplaceConnectionsPanel } from "@/components/marketplaces/marketplace-connections-panel"
+import { PaidFeatureGate } from "@/components/billing/paid-feature-gate"
 import { useAuth } from "@/components/auth/auth-provider"
 
 export default function ConnectionsPage() {
@@ -28,13 +29,15 @@ export default function ConnectionsPage() {
 
   return (
     <DashboardShell>
-      <Suspense
-        fallback={
-          <div className="text-sm text-muted-foreground">Loading…</div>
-        }
-      >
-        <MarketplaceConnectionsPanel />
-      </Suspense>
+      <PaidFeatureGate feature="connections">
+        <Suspense
+          fallback={
+            <div className="text-sm text-muted-foreground">Loading…</div>
+          }
+        >
+          <MarketplaceConnectionsPanel />
+        </Suspense>
+      </PaidFeatureGate>
     </DashboardShell>
   )
 }

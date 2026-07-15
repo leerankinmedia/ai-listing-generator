@@ -29,7 +29,7 @@ export async function GET() {
     return NextResponse.json(
       {
         error:
-          "Subscription required. Start your trial or renew to unlock ListWise.",
+          "Start your 7-day free trial to unlock access.",
         code: "subscription_required",
         connections: [],
       },
@@ -50,7 +50,7 @@ export async function DELETE(request: Request) {
     return NextResponse.json(
       {
         error:
-          "Subscription required. Start your trial or renew to unlock ListWise.",
+          "Start your 7-day free trial to unlock access.",
         code: "subscription_required",
       },
       { status: 402 }

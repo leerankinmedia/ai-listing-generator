@@ -1,9 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { updateSession } from "@/lib/supabase/middleware"
-import { isBillingEnforcementEnabled } from "@/lib/billing/config"
-import { createServerClient } from "@supabase/ssr"
-import { createServiceRoleClient } from "@/lib/supabase/index"
-import { statusGrantsAccess } from "@/lib/billing/config"
 
 const PROTECTED_PREFIXES = ["/dashboard"]
 
@@ -19,9 +15,11 @@ const PUBLIC_AUTH_PREFIXES = [
   "/checkout",
 ]
 
-/** Dashboard paths locked users may still open. */
-const BILLING_EXEMPT_DASHBOARD = ["/dashboard/billing"]
-
+/**
+ * Preview-first: signed-in users can explore the dashboard without a trial.
+ * Paid actions are locked by API guards + PaidFeatureGate when
+ * BILLING_ENFORCEMENT=true. Middleware no longer redirects to /pricing.
+ */
 export async function middleware(request: NextRequest) {
   const { pathname, searchParams } = request.nextUrl
 
@@ -56,63 +54,8 @@ export async function middleware(request: NextRequest) {
     return response
   }
 
-  const demoSession = request.cookies.get("listwise_demo_session")?.value
-  if (demoSession) {
-    return response
-  }
-
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-  const supabaseReady =
-    url && key && url !== "https://your-project.supabase.co"
-
-  if (!supabaseReady) {
-    return response
-  }
-
-  // Subscription enforcement (off by default while Stripe test mode is verified)
-  if (isBillingEnforcementEnabled()) {
-    const exempt = BILLING_EXEMPT_DASHBOARD.some((prefix) =>
-      pathname.startsWith(prefix)
-    )
-    if (!exempt) {
-      try {
-        let userId: string | null = null
-        const supabase = createServerClient(url, key, {
-          cookies: {
-            getAll() {
-              return request.cookies.getAll()
-            },
-            setAll() {
-              // Session already refreshed above
-            },
-          },
-        })
-        const { data } = await supabase.auth.getUser()
-        userId = data.user?.id ?? null
-
-        if (userId) {
-          const admin = createServiceRoleClient()
-          if (admin) {
-            const { data: sub } = await admin
-              .from("subscriptions")
-              .select("status")
-              .eq("user_id", userId)
-              .maybeSingle()
-            if (!statusGrantsAccess(sub?.status)) {
-              const pricing = request.nextUrl.clone()
-              pricing.pathname = "/pricing"
-              pricing.search = ""
-              return NextResponse.redirect(pricing)
-            }
-          }
-        }
-      } catch (error) {
-        console.error("[middleware] billing check failed", error)
-      }
-    }
-  }
-
+  // Auth requirement for /dashboard is handled by page-level client checks.
+  // Do not hard-redirect for missing subscriptions (preview-first trial flow).
   return response
 }
 

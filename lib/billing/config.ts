@@ -66,13 +66,46 @@ export function getBillingAppOrigin() {
   return "https://ai-listing-generator-n2ji.vercel.app"
 }
 
-/** Stripe statuses that unlock the full app. */
+/** Stripe statuses that unlock paid tools. */
 export const ACCESS_STATUSES = new Set(["trialing", "active"] as const)
 
 export type AccessStatus = "trialing" | "active"
 
-export function statusGrantsAccess(status: string | null | undefined) {
-  return Boolean(status && ACCESS_STATUSES.has(status as AccessStatus))
+/**
+ * Extra days past current_period_end while status is past_due before tools lock.
+ * Set to 0 to lock immediately on past_due.
+ */
+export const PAST_DUE_GRACE_DAYS = 3
+
+export function statusGrantsAccess(
+  status: string | null | undefined,
+  currentPeriodEnd?: string | null
+) {
+  if (!status) return false
+  if (ACCESS_STATUSES.has(status as AccessStatus)) return true
+
+  // Brief grace for past_due (failed payment) while still within period + grace
+  if (status === "past_due" && PAST_DUE_GRACE_DAYS > 0 && currentPeriodEnd) {
+    const endMs = new Date(currentPeriodEnd).getTime()
+    if (!Number.isFinite(endMs)) return false
+    const graceMs = PAST_DUE_GRACE_DAYS * 24 * 60 * 60 * 1000
+    return Date.now() <= endMs + graceMs
+  }
+
+  return false
+}
+
+/**
+ * Paid tools are unlocked when enforcement is off (test mode), or when the
+ * Stripe subscription grants access (trialing / active / past_due within grace).
+ */
+export function paidToolsUnlocked(input: {
+  enforcement: boolean
+  status: string | null | undefined
+  currentPeriodEnd?: string | null
+}) {
+  if (!input.enforcement) return true
+  return statusGrantsAccess(input.status, input.currentPeriodEnd)
 }
 
 export type PlanFeature = {

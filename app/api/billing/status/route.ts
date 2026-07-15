@@ -4,6 +4,7 @@ import {
   isBillingEnforcementEnabled,
   isStripeBillingConfigured,
   statusGrantsAccess,
+  paidToolsUnlocked,
   BILLING_TRIAL_DAYS,
   MONTHLY_LISTING_CREDITS,
   PLAN_NAME,
@@ -33,8 +34,13 @@ export async function GET() {
     periodStartIso: periodStart,
   })
 
+  const subStatus = subscription?.status ?? "none"
+  const periodEnd = subscription?.current_period_end ?? null
+  const unlocks = statusGrantsAccess(subStatus, periodEnd)
+  const enforcement = isBillingEnforcementEnabled()
+
   return NextResponse.json({
-    enforcement: isBillingEnforcementEnabled(),
+    enforcement,
     stripeConfigured: isStripeBillingConfigured(),
     planName: PLAN_NAME,
     priceLabel: getMembershipPriceLabel(),
@@ -47,15 +53,21 @@ export async function GET() {
     features: PLAN_FEATURES,
     allowed: access.allowed,
     reason: access.reason,
-    status: subscription?.status ?? "none",
+    status: subStatus,
     hasUsedTrial: Boolean(subscription?.has_used_trial || subscription?.trial_start),
     trialEligible: !(subscription?.has_used_trial || subscription?.trial_start),
     trialStart: subscription?.trial_start ?? null,
     trialEnd: subscription?.trial_end ?? null,
-    currentPeriodEnd: subscription?.current_period_end ?? null,
+    currentPeriodEnd: periodEnd,
     cancelAtPeriodEnd: Boolean(subscription?.cancel_at_period_end),
     stripeCustomerId: subscription?.stripe_customer_id ?? null,
     stripeSubscriptionId: subscription?.stripe_subscription_id ?? null,
-    unlocksApp: statusGrantsAccess(subscription?.status),
+    unlocksApp: unlocks,
+    paidToolsUnlocked: paidToolsUnlocked({
+      enforcement,
+      status: subStatus,
+      currentPeriodEnd: periodEnd,
+    }),
+    previewMode: enforcement && !unlocks,
   })
 }

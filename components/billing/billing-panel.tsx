@@ -135,12 +135,23 @@ export function BillingPanel() {
               : "limits not enforced yet"}
           </p>
         </div>
-        <div className="rounded-xl border border-border bg-card/70 px-4 py-3">
+        <div className="rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 sm:col-span-2">
           <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
-            Trial ends
+            Trial expiration
           </p>
-          <p className="mt-1 text-sm font-semibold">
-            {formatDate(status.trialEnd)}
+          <p className="mt-1 font-display text-xl font-semibold">
+            {status.status === "trialing" || status.trialEnd
+              ? formatDate(status.trialEnd)
+              : "—"}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {status.status === "trialing" && status.trialEnd
+              ? `Your ${trialDays}-day free trial ends on this date. A payment method is already on file.`
+              : status.trialEnd
+                ? "Previous trial end date on file."
+                : status.trialEligible
+                  ? `Start a ${trialDays}-day free trial to unlock paid tools.`
+                  : "No active trial."}
           </p>
         </div>
         <div className="rounded-xl border border-border bg-card/70 px-4 py-3">

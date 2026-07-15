@@ -11,14 +11,17 @@ import {
 } from "lucide-react"
 import { useAuth } from "@/components/auth/auth-provider"
 import { useBillingStatus } from "@/components/billing/paywall"
+import { FeatureLockPreview } from "@/components/billing/feature-lock-preview"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import { fetchListings } from "@/lib/listings/repository"
 import { buttonVariants } from "@/components/ui/button"
 import type { Listing } from "@/lib/types"
 import {
+  BILLING_TRIAL_DAYS,
   MONTHLY_LISTING_CREDITS,
   PLAN_NAME,
   getMembershipPriceLabel,
+  paidToolsUnlocked,
 } from "@/lib/billing/config"
 import { cn } from "@/lib/utils"
 
@@ -51,6 +54,12 @@ export function DashboardOverview() {
   const [listings, setListings] = useState<Listing[]>([])
   const firstName =
     user?.fullName?.split(" ")[0] || user?.email?.split("@")[0] || "Seller"
+  const toolsUnlocked = paidToolsUnlocked({
+    enforcement: Boolean(billing?.enforcement),
+    status: billing?.status,
+    currentPeriodEnd: billing?.currentPeriodEnd,
+  })
+  const previewMode = Boolean(billing?.enforcement && !toolsUnlocked)
 
   useEffect(() => {
     if (!user) return
@@ -103,21 +112,36 @@ export function DashboardOverview() {
             {firstName}&apos;s workspace
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Production AI listing engine is live
+            {previewMode
+              ? "Explore your workspace — start a free trial when you’re ready to generate listings."
+              : "Production AI listing engine is live"}
             {isDemo ? " · running in demo auth mode" : ""}.
           </p>
         </div>
         <Link
-          href="/dashboard/listings/new"
+          href={previewMode ? "/checkout" : "/dashboard/listings/new"}
           className={cn(
             buttonVariants({ variant: "accent" }),
             "self-start sm:self-auto"
           )}
         >
-          New listing
+          {previewMode
+            ? `Start ${BILLING_TRIAL_DAYS}-day trial`
+            : "New listing"}
           <ArrowUpRight className="h-4 w-4" />
         </Link>
       </div>
+
+      {previewMode && (
+        <div className="animate-rise rounded-xl border border-accent/25 bg-accent/10 px-4 py-3 text-sm">
+          Start your {BILLING_TRIAL_DAYS}-day free trial to unlock access to AI
+          Generator, listings actions, and marketplace tools. Overview, Billing,
+          and Account stay available.{" "}
+          <Link href="/checkout" className="font-semibold underline">
+            Get started
+          </Link>
+        </div>
+      )}
 
       <div className="animate-rise-delay-1 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map((stat) => {
@@ -163,10 +187,12 @@ export function DashboardOverview() {
               Upload photos and generate SEO-ready copy in seconds.
             </p>
             <Link
-              href="/dashboard/listings/new"
+              href={previewMode ? "/checkout" : "/dashboard/listings/new"}
               className={cn(buttonVariants({ variant: "accent" }), "mt-5 inline-flex")}
             >
-              Open AI generator
+              {previewMode
+                ? `Start ${BILLING_TRIAL_DAYS}-day trial`
+                : "Open AI generator"}
             </Link>
           </div>
         ) : (
@@ -239,25 +265,38 @@ export function DashboardOverview() {
         </div>
       </section>
 
-      <section id="automation" className="scroll-mt-24">
-        <h2 className="font-display text-xl font-semibold">Coming next</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Crosslisting, automation, and analytics phases.
-        </p>
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          {roadmap.map((item) => (
-            <div
-              key={item.id}
-              id={item.id}
-              className="rounded-xl border border-border bg-card/80 p-4"
-            >
-              <p className="text-sm font-semibold">{item.title}</p>
-              <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                {item.body}
-              </p>
-            </div>
-          ))}
+      <section id="automation" className="scroll-mt-24 space-y-4">
+        <div>
+          <h2 className="font-display text-xl font-semibold">Coming next</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Crosslisting, automation, and analytics phases.
+          </p>
         </div>
+        {previewMode ? (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div id="inventory" className="scroll-mt-24">
+              <FeatureLockPreview feature="inventory" />
+            </div>
+            <div id="automation" className="scroll-mt-24">
+              <FeatureLockPreview feature="automation" />
+            </div>
+          </div>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {roadmap.map((item) => (
+              <div
+                key={item.id}
+                id={item.id}
+                className="rounded-xl border border-border bg-card/80 p-4"
+              >
+                <p className="text-sm font-semibold">{item.title}</p>
+                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                  {item.body}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section

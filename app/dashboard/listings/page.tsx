@@ -4,6 +4,7 @@ import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { DashboardShell } from "@/components/layout/dashboard-shell"
 import { ListingsGrid } from "@/components/listings/listings-grid"
+import { PaidFeatureGate } from "@/components/billing/paid-feature-gate"
 import { useAuth } from "@/components/auth/auth-provider"
 
 export default function ListingsPage() {
@@ -24,7 +25,9 @@ export default function ListingsPage() {
 
   return (
     <DashboardShell>
-      <ListingsGrid />
+      <PaidFeatureGate feature="listings">
+        <ListingsGrid />
+      </PaidFeatureGate>
     </DashboardShell>
   )
 }

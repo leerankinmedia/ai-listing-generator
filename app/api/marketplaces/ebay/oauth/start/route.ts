@@ -3,16 +3,30 @@ import {
   buildEbayAuthorizeUrl,
   isEbayConfigured,
 } from "@/lib/marketplaces/adapters/ebay/oauth"
+import { checkSubscriptionAccess } from "@/lib/billing/access"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import {
   createOAuthState,
   persistOAuthState,
 } from "@/lib/marketplaces/oauth-state"
+import { getServerAuthUser } from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
 
 export async function GET() {
   try {
+    const user = await getServerAuthUser()
+    const access = await checkSubscriptionAccess(user?.id)
+    if (!access.allowed) {
+      return NextResponse.json(
+        {
+          error: "Start your 7-day free trial to unlock access.",
+          code: "subscription_required",
+        },
+        { status: 402 }
+      )
+    }
+
     if (!isConnectionsCryptoConfigured()) {
       return NextResponse.json(
         {

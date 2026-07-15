@@ -20,29 +20,30 @@ export interface SubscriptionAccessResult {
 }
 
 /**
- * Reusable server-side subscription access guard.
- * Full access only when Stripe status is trialing or active
- * (unless BILLING_ENFORCEMENT=false).
+ * Server-side guard for paid tool actions (generate, publish, connect, …).
+ * Preview-first: dashboard pages stay reachable; this blocks mutations/APIs.
+ * When BILLING_ENFORCEMENT=false, always allowed (locking logic stays wired).
  */
 export async function checkSubscriptionAccess(
   userId: string | null | undefined
 ): Promise<SubscriptionAccessResult> {
+  const subscription = userId ? await getSubscriptionByUserId(userId) : null
+
   if (!isBillingEnforcementEnabled()) {
     return {
       allowed: true,
       reason: "enforcement_off",
-      status: null,
-      subscription: null,
+      status: subscription?.status ?? null,
+      subscription,
     }
   }
 
   if (!isStripeBillingConfigured()) {
-    // Fail closed when enforcement is on but Stripe isn't configured
     return {
       allowed: false,
       reason: "stripe_unconfigured",
-      status: null,
-      subscription: null,
+      status: subscription?.status ?? null,
+      subscription,
     }
   }
 
@@ -55,7 +56,6 @@ export async function checkSubscriptionAccess(
     }
   }
 
-  const subscription = await getSubscriptionByUserId(userId)
   if (!subscription) {
     return {
       allowed: false,
@@ -65,7 +65,9 @@ export async function checkSubscriptionAccess(
     }
   }
 
-  if (statusGrantsAccess(subscription.status)) {
+  if (
+    statusGrantsAccess(subscription.status, subscription.current_period_end)
+  ) {
     return {
       allowed: true,
       reason: "active",
@@ -82,11 +84,13 @@ export async function checkSubscriptionAccess(
   }
 }
 
-export async function assertSubscriptionAccess(userId: string | null | undefined) {
+export async function assertSubscriptionAccess(
+  userId: string | null | undefined
+) {
   const result = await checkSubscriptionAccess(userId)
   if (!result.allowed) {
     const error = new Error(
-      "Subscription required. Start your trial or renew to unlock ListWise."
+      "Start your 7-day free trial to unlock access."
     )
     ;(error as Error & { status: number; code: string }).status = 402
     ;(error as Error & { status: number; code: string }).code =

@@ -41,7 +41,9 @@ export async function POST() {
     const existing = await getSubscriptionByUserId(user.id)
 
     // Block users who already have a trial or active subscription
-    if (statusGrantsAccess(existing?.status)) {
+    if (
+      statusGrantsAccess(existing?.status, existing?.current_period_end)
+    ) {
       return NextResponse.json(
         {
           error:

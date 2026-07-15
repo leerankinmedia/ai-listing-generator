@@ -38,6 +38,8 @@ export interface BillingStatusPayload {
   stripeCustomerId: string | null
   stripeSubscriptionId: string | null
   unlocksApp: boolean
+  paidToolsUnlocked: boolean
+  previewMode: boolean
 }
 
 export function useBillingStatus(enabled = true) {

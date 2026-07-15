@@ -2,7 +2,10 @@ import { handleStripeWebhookPost } from "@/lib/billing/webhook-handler"
 
 export const runtime = "nodejs"
 
-/** @deprecated Prefer /api/stripe/webhook — kept for older Stripe endpoint configs. */
+/**
+ * Production Stripe webhook endpoint.
+ * Endpoint URL: https://ai-listing-generator-n2ji.vercel.app/api/stripe/webhook
+ */
 export async function POST(request: Request) {
   return handleStripeWebhookPost(request)
 }

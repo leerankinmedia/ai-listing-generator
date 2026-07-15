@@ -16,8 +16,6 @@ import { cn } from "@/lib/utils"
 
 export interface BillingStatusPayload {
   enforcement: boolean
-  previewLocks: boolean
-  locksActive: boolean
   stripeConfigured: boolean
   planName: string
   priceLabel: string
@@ -42,16 +40,6 @@ export interface BillingStatusPayload {
   unlocksApp: boolean
   paidToolsUnlocked: boolean
   previewMode: boolean
-  accessDebug?: {
-    previewLocksEnabled: boolean
-    billingEnforcementEnabled: boolean
-    currentSubscriptionStatus: string
-    accessAllowed: boolean
-    paidToolsUnlocked: boolean
-    reason: string
-    previewLocksRaw: string | null
-    enforcementRaw: string | null
-  }
 }
 
 export function useBillingStatus(enabled = true) {

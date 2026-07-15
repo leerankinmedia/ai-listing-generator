@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { exchangeEbayCode } from "@/lib/marketplaces/adapters/ebay/oauth"
+import { checkSubscriptionAccess } from "@/lib/billing/access"
 import { getAppBaseUrl } from "@/lib/marketplaces/connections/crypto"
 import { saveConnection } from "@/lib/marketplaces/connections/store"
 import {
@@ -7,6 +8,7 @@ import {
   consumeOAuthStateRaw,
   verifyOAuthState,
 } from "@/lib/marketplaces/oauth-state"
+import { getServerAuthUser } from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
 
@@ -18,6 +20,15 @@ function redirectWith(status: "connected" | "error", message?: string) {
 }
 
 export async function GET(request: Request) {
+  const user = await getServerAuthUser()
+  const access = await checkSubscriptionAccess(user?.id)
+  if (!access.allowed) {
+    return redirectWith(
+      "error",
+      "Start your 7-day free trial to unlock this feature."
+    )
+  }
+
   const { searchParams } = new URL(request.url)
   const error = searchParams.get("error")
   const errorDescription = searchParams.get("error_description")

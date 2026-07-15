@@ -7,7 +7,7 @@ export const BILLING_TRIAL_DAYS = 7
 /**
  * Customer AI listing credits included per billing cycle.
  * One completed AI-generated listing = 1 credit (not per internal OpenAI call).
- * Enforcement is gated by BILLING_ENFORCEMENT — keep false until ready.
+ * Credit limit enforcement is gated by BILLING_ENFORCEMENT only.
  */
 export const MONTHLY_LISTING_CREDITS = 600
 
@@ -20,29 +20,14 @@ export function getMembershipPriceLabel() {
 }
 
 /**
- * @deprecated Prefer lib/billing/env-flags on the server. Client code must use
- * /api/billing/status flags — non-NEXT_PUBLIC env is unavailable in the browser.
+ * Optional account-wide redirect enforcement (not used for paid-feature locks).
+ * Prefer lib/billing/env-flags on the server.
  */
 export function isBillingEnforcementEnabled() {
   return (
     typeof process.env.BILLING_ENFORCEMENT === "string" &&
     process.env.BILLING_ENFORCEMENT.trim().toLowerCase() === "true"
   )
-}
-
-/**
- * @deprecated Prefer lib/billing/env-flags on the server.
- */
-export function isBillingPreviewLocksEnabled() {
-  return (
-    typeof process.env.BILLING_PREVIEW_LOCKS === "string" &&
-    process.env.BILLING_PREVIEW_LOCKS.trim().toLowerCase() === "true"
-  )
-}
-
-/** @deprecated Prefer lib/billing/env-flags on the server. */
-export function arePaidToolLocksActive() {
-  return isBillingEnforcementEnabled() || isBillingPreviewLocksEnabled()
 }
 
 export function getStripeSecretKey() {
@@ -88,53 +73,23 @@ export function getBillingAppOrigin() {
   return "https://ai-listing-generator-n2ji.vercel.app"
 }
 
-/** Stripe statuses that unlock paid tools. */
+/** Stripe statuses that unlock paid tools — nothing else qualifies. */
 export const ACCESS_STATUSES = new Set(["trialing", "active"] as const)
 
 export type AccessStatus = "trialing" | "active"
 
 /**
- * Extra days past current_period_end while status is past_due before tools lock.
- * Set to 0 to lock immediately on past_due.
+ * Paid access rule (always on):
+ * trialing | active → allowed
+ * every other status, including none / missing → denied
  */
-export const PAST_DUE_GRACE_DAYS = 3
-
-export function statusGrantsAccess(
-  status: string | null | undefined,
-  currentPeriodEnd?: string | null
-) {
-  if (!status) return false
-  if (ACCESS_STATUSES.has(status as AccessStatus)) return true
-
-  // Brief grace for past_due (failed payment) while still within period + grace
-  if (status === "past_due" && PAST_DUE_GRACE_DAYS > 0 && currentPeriodEnd) {
-    const endMs = new Date(currentPeriodEnd).getTime()
-    if (!Number.isFinite(endMs)) return false
-    const graceMs = PAST_DUE_GRACE_DAYS * 24 * 60 * 60 * 1000
-    return Date.now() <= endMs + graceMs
-  }
-
-  return false
+export function statusGrantsAccess(status: string | null | undefined) {
+  return Boolean(status && ACCESS_STATUSES.has(status as AccessStatus))
 }
 
-/**
- * Paid tools unlock when:
- * - neither BILLING_ENFORCEMENT nor BILLING_PREVIEW_LOCKS is on, OR
- * - Stripe status is trialing / active (or past_due within grace).
- */
-export function paidToolsUnlocked(input: {
-  enforcement?: boolean
-  previewLocks?: boolean
-  /** Prefer this when available — true if either lock mode is active. */
-  locksActive?: boolean
-  status: string | null | undefined
-  currentPeriodEnd?: string | null
-}) {
-  const locksActive =
-    input.locksActive ??
-    (Boolean(input.enforcement) || Boolean(input.previewLocks))
-  if (!locksActive) return true
-  return statusGrantsAccess(input.status, input.currentPeriodEnd)
+/** Alias for clarity in UI/status payloads. */
+export function paidToolsUnlocked(status: string | null | undefined) {
+  return statusGrantsAccess(status)
 }
 
 export type PlanFeature = {

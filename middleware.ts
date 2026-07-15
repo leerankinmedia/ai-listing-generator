@@ -17,8 +17,9 @@ const PUBLIC_AUTH_PREFIXES = [
 
 /**
  * Preview-first: signed-in users can explore the dashboard without a trial.
- * Paid actions are locked by API guards + PaidFeatureGate when
- * BILLING_ENFORCEMENT=true. Middleware no longer redirects to /pricing.
+ * Paid actions are always locked by API guards + PaidFeatureGate unless
+ * subscription status is trialing or active. BILLING_ENFORCEMENT does not
+ * gate those paid features (it only reserves account-wide redirect behavior).
  */
 export async function middleware(request: NextRequest) {
   const { pathname, searchParams } = request.nextUrl

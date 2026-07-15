@@ -1,53 +1,26 @@
 import "server-only"
-import { isStripeBillingConfigured, statusGrantsAccess } from "@/lib/billing/config"
-import {
-  arePaidToolLocksActive,
-  isBillingEnforcementEnabled,
-} from "@/lib/billing/env-flags"
+import { statusGrantsAccess } from "@/lib/billing/config"
 import { getSubscriptionByUserId } from "@/lib/billing/subscription-store"
 
 export interface SubscriptionAccessResult {
   allowed: boolean
-  reason:
-    | "locks_off"
-    | "enforcement_off"
-    | "stripe_unconfigured"
-    | "missing_user"
-    | "no_subscription"
-    | "inactive"
-    | "active"
+  reason: "missing_user" | "no_subscription" | "inactive" | "active"
   status: string | null
   subscription: Awaited<ReturnType<typeof getSubscriptionByUserId>>
 }
 
 /**
  * Server-side guard for paid tool actions (generate, publish, connect, …).
- * Uses request-time env flags from env-flags.ts (bracket access, not inlined).
+ *
+ * Always enforced — independent of BILLING_ENFORCEMENT / BILLING_PREVIEW_LOCKS:
+ * - trialing or active → allowed
+ * - every other status, including no subscription row → denied
+ *
+ * BILLING_ENFORCEMENT only affects optional account-wide redirects elsewhere.
  */
 export async function checkSubscriptionAccess(
   userId: string | null | undefined
 ): Promise<SubscriptionAccessResult> {
-  const subscription = userId ? await getSubscriptionByUserId(userId) : null
-  const locksActive = arePaidToolLocksActive()
-
-  if (!locksActive) {
-    return {
-      allowed: true,
-      reason: "locks_off",
-      status: subscription?.status ?? null,
-      subscription,
-    }
-  }
-
-  if (isBillingEnforcementEnabled() && !isStripeBillingConfigured()) {
-    return {
-      allowed: false,
-      reason: "stripe_unconfigured",
-      status: subscription?.status ?? null,
-      subscription,
-    }
-  }
-
   if (!userId) {
     return {
       allowed: false,
@@ -56,6 +29,8 @@ export async function checkSubscriptionAccess(
       subscription: null,
     }
   }
+
+  const subscription = await getSubscriptionByUserId(userId)
 
   if (!subscription) {
     return {
@@ -66,9 +41,7 @@ export async function checkSubscriptionAccess(
     }
   }
 
-  if (
-    statusGrantsAccess(subscription.status, subscription.current_period_end)
-  ) {
+  if (statusGrantsAccess(subscription.status)) {
     return {
       allowed: true,
       reason: "active",

@@ -8,8 +8,8 @@ import { useBillingStatus } from "@/components/billing/paywall"
 
 /**
  * Soft-lock wrapper for paid tools.
- * Fail closed: only render actions when the server explicitly returns
- * paidToolsUnlocked === true. Missing/errored status shows the lock preview.
+ * Access is decided server-side (/api/billing/status + protected APIs).
+ * Fail closed: only render actions when paidToolsUnlocked === true.
  */
 export function PaidFeatureGate({
   feature,
@@ -26,7 +26,6 @@ export function PaidFeatureGate({
     return <p className="text-sm text-muted-foreground">Loading access…</p>
   }
 
-  // Fail closed — never default to unlocked when status is missing
   const unlocked = status?.paidToolsUnlocked === true
 
   if (unlocked) {
@@ -54,7 +53,7 @@ export function usePaidToolsAccess() {
   const unlocked = status?.paidToolsUnlocked === true
   return {
     unlocked,
-    previewMode: Boolean(status?.previewMode || (!unlocked && status)),
+    previewMode: Boolean(status?.previewMode || (status && !unlocked)),
     status,
     loading,
     error,

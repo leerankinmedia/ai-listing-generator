@@ -14,7 +14,7 @@ import {
   creditPeriodStartFromSubscription,
   getListingCreditsSummary,
 } from "@/lib/billing/credits"
-import { getBillingLockDebug } from "@/lib/billing/env-flags"
+import { isBillingEnforcementEnabled } from "@/lib/billing/env-flags"
 import { getSubscriptionByUserId } from "@/lib/billing/subscription-store"
 import { getServerAuthUser } from "@/lib/supabase/index"
 
@@ -27,7 +27,6 @@ export async function GET() {
     return NextResponse.json({ error: "Sign in required." }, { status: 401 })
   }
 
-  const lockDebug = getBillingLockDebug()
   const subscription = await getSubscriptionByUserId(user.id)
   const access = await checkSubscriptionAccess(user.id)
   const periodStart = creditPeriodStartFromSubscription(subscription)
@@ -38,18 +37,11 @@ export async function GET() {
 
   const subStatus = subscription?.status ?? "none"
   const periodEnd = subscription?.current_period_end ?? null
-  const unlocks = statusGrantsAccess(subStatus, periodEnd)
-  const toolsUnlocked = paidToolsUnlocked({
-    locksActive: lockDebug.locksActive,
-    status: subStatus,
-    currentPeriodEnd: periodEnd,
-  })
+  const toolsUnlocked = paidToolsUnlocked(subStatus)
 
   return NextResponse.json(
     {
-      enforcement: lockDebug.billingEnforcementEnabled,
-      previewLocks: lockDebug.previewLocksEnabled,
-      locksActive: lockDebug.locksActive,
+      enforcement: isBillingEnforcementEnabled(),
       stripeConfigured: isStripeBillingConfigured(),
       planName: PLAN_NAME,
       priceLabel: getMembershipPriceLabel(),
@@ -75,20 +67,9 @@ export async function GET() {
       cancelAtPeriodEnd: Boolean(subscription?.cancel_at_period_end),
       stripeCustomerId: subscription?.stripe_customer_id ?? null,
       stripeSubscriptionId: subscription?.stripe_subscription_id ?? null,
-      unlocksApp: unlocks,
+      unlocksApp: statusGrantsAccess(subStatus),
       paidToolsUnlocked: toolsUnlocked,
-      previewMode: lockDebug.locksActive && !toolsUnlocked,
-      // Temporary visible production debug (Billing page)
-      accessDebug: {
-        previewLocksEnabled: lockDebug.previewLocksEnabled,
-        billingEnforcementEnabled: lockDebug.billingEnforcementEnabled,
-        currentSubscriptionStatus: subStatus,
-        accessAllowed: access.allowed,
-        paidToolsUnlocked: toolsUnlocked,
-        reason: access.reason,
-        previewLocksRaw: lockDebug.previewLocksRaw,
-        enforcementRaw: lockDebug.enforcementRaw,
-      },
+      previewMode: !toolsUnlocked,
     },
     {
       headers: {

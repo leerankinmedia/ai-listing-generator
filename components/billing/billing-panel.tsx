@@ -1,12 +1,8 @@
 "use client"
 
 import { useState } from "react"
-import { CreditCard, Loader2, RefreshCw } from "lucide-react"
-import {
-  openBillingPortal,
-  startCheckout,
-  useBillingStatus,
-} from "@/components/billing/paywall"
+import { CreditCard, Loader2, RefreshCw, XCircle } from "lucide-react"
+import { startCheckout, useBillingStatus } from "@/components/billing/paywall"
 import { PlanFeaturesList } from "@/components/billing/plan-features"
 import { Button } from "@/components/ui/button"
 import {
@@ -48,13 +44,36 @@ function statusLabel(status: string) {
   }
 }
 
+async function updateSubscription(action: "cancel" | "reactivate") {
+  const res = await fetch("/api/billing/subscription", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({ action }),
+  })
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || "Could not update subscription")
+  }
+  return data as {
+    cancelAtPeriodEnd: boolean
+    cancelsOn: string | null
+    status: string
+  }
+}
+
 export function BillingPanel() {
   const { status, loading, error, refresh } = useBillingStatus()
-  const [busy, setBusy] = useState<"checkout" | "portal" | null>(null)
+  const [busy, setBusy] = useState<"checkout" | "cancel" | "reactivate" | null>(
+    null
+  )
+  const [confirmCancel, setConfirmCancel] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
 
   async function onSubscribe() {
     setActionError(null)
+    setActionMessage(null)
     setBusy("checkout")
     try {
       await startCheckout()
@@ -64,13 +83,39 @@ export function BillingPanel() {
     }
   }
 
-  async function onManage() {
+  async function onConfirmCancel() {
     setActionError(null)
-    setBusy("portal")
+    setActionMessage(null)
+    setBusy("cancel")
     try {
-      await openBillingPortal()
+      const result = await updateSubscription("cancel")
+      setConfirmCancel(false)
+      setActionMessage(
+        `Cancellation scheduled. Access continues until ${formatDate(result.cancelsOn)}.`
+      )
+      await refresh()
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Portal failed")
+      setActionError(
+        err instanceof Error ? err.message : "Could not cancel subscription"
+      )
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function onReactivate() {
+    setActionError(null)
+    setActionMessage(null)
+    setBusy("reactivate")
+    try {
+      await updateSubscription("reactivate")
+      setActionMessage("Subscription reactivated. Billing will continue as scheduled.")
+      await refresh()
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : "Could not reactivate subscription"
+      )
+    } finally {
       setBusy(null)
     }
   }
@@ -99,6 +144,14 @@ export function BillingPanel() {
     status.listingCreditsAllowance ?? MONTHLY_LISTING_CREDITS
   const creditsUsed = status.listingCreditsUsed ?? 0
   const features = status.features?.length ? status.features : PLAN_FEATURES
+  const accessContinuesUntil =
+    status.cancelsOn ||
+    (status.status === "trialing"
+      ? status.trialEnd || status.currentPeriodEnd
+      : status.currentPeriodEnd)
+  const canManageSubscription =
+    Boolean(status.stripeSubscriptionId) &&
+    (status.status === "trialing" || status.status === "active")
 
   return (
     <div className="space-y-6">
@@ -114,6 +167,11 @@ export function BillingPanel() {
             Status
           </p>
           <p className="mt-1 text-sm font-semibold">{statusLabel(status.status)}</p>
+          {status.cancelAtPeriodEnd && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Cancels on {formatDate(accessContinuesUntil)}
+            </p>
+          )}
         </div>
         <div className="rounded-xl border border-border bg-card/70 px-4 py-3">
           <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
@@ -173,15 +231,83 @@ export function BillingPanel() {
         </div>
       </div>
 
-      {status.cancelAtPeriodEnd && (
-        <p className="rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-sm">
-          Cancellation scheduled — access continues until the period end date.
-        </p>
+      {status.cancelAtPeriodEnd && canManageSubscription && (
+        <div className="rounded-xl border border-accent/30 bg-accent/10 px-4 py-4 space-y-3">
+          <p className="text-sm font-semibold">
+            Status: {statusLabel(status.status)}
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Cancels on {formatDate(accessContinuesUntil)}. Paid features stay
+            unlocked until then. Your saved listings and data remain preserved.
+          </p>
+          <Button
+            variant="accent"
+            disabled={busy !== null}
+            onClick={() => void onReactivate()}
+          >
+            {busy === "reactivate" ? (
+              <Loader2 className="animate-spin" />
+            ) : null}
+            Reactivate subscription
+          </Button>
+        </div>
+      )}
+
+      {confirmCancel && (
+        <div
+          className="rounded-2xl border border-border bg-card/95 p-5 shadow-[0_24px_60px_-40px_rgba(10,15,26,0.45)] space-y-4"
+          role="dialog"
+          aria-labelledby="cancel-subscription-title"
+        >
+          <h2
+            id="cancel-subscription-title"
+            className="font-display text-xl font-semibold tracking-tight"
+          >
+            Cancel subscription?
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Your access will continue until{" "}
+            <span className="font-medium text-foreground">
+              {formatDate(accessContinuesUntil)}
+            </span>
+            . You will not be charged again.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            This does not cancel immediately. You can reactivate anytime before
+            that date. Saved listings and account data stay preserved.
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button
+              variant="accent"
+              disabled={busy !== null}
+              onClick={() => void onConfirmCancel()}
+            >
+              {busy === "cancel" ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <XCircle />
+              )}
+              Confirm cancellation
+            </Button>
+            <Button
+              variant="outline"
+              disabled={busy !== null}
+              onClick={() => setConfirmCancel(false)}
+            >
+              Keep subscription
+            </Button>
+          </div>
+        </div>
       )}
 
       {(actionError || error) && (
         <p className="text-sm text-destructive" role="alert">
           {actionError}
+        </p>
+      )}
+      {actionMessage && (
+        <p className="text-sm text-foreground" role="status">
+          {actionMessage}
         </p>
       )}
 
@@ -202,32 +328,36 @@ export function BillingPanel() {
               : "Subscribe and unlock"}
           </Button>
         )}
-        <Button
-          variant="outline"
-          disabled={busy !== null || !status.stripeCustomerId}
-          onClick={() => void onManage()}
-        >
-          {busy === "portal" ? (
-            <Loader2 className="animate-spin" />
-          ) : (
-            <CreditCard />
+        {canManageSubscription &&
+          !status.cancelAtPeriodEnd &&
+          !confirmCancel && (
+            <Button
+              variant="outline"
+              disabled={busy !== null}
+              onClick={() => {
+                setActionError(null)
+                setActionMessage(null)
+                setConfirmCancel(true)
+              }}
+            >
+              <XCircle />
+              Cancel subscription
+            </Button>
           )}
-          Manage billing / cancel
-        </Button>
-        <Button variant="ghost" disabled={busy !== null} onClick={() => void refresh()}>
+        <Button
+          variant="ghost"
+          disabled={busy !== null}
+          onClick={() => void refresh()}
+        >
           <RefreshCw />
           Refresh
         </Button>
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Stripe is the source of truth. Listings stay saved if access is locked.
-        Paid tools require an active trial or subscription.{" "}
-        {!status.enforcement && (
-          <>
-            Account-wide redirect enforcement is off (BILLING_ENFORCEMENT=false).
-          </>
-        )}
+        Manage cancellation inside ListWise — no redirect to Stripe. Listings
+        stay saved if access is locked later. Paid tools stay unlocked while
+        status is trialing or active.
       </p>
     </div>
   )

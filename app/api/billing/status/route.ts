@@ -37,7 +37,14 @@ export async function GET() {
 
   const subStatus = subscription?.status ?? "none"
   const periodEnd = subscription?.current_period_end ?? null
+  const trialEnd = subscription?.trial_end ?? null
+  const cancelAtPeriodEnd = Boolean(subscription?.cancel_at_period_end)
   const toolsUnlocked = paidToolsUnlocked(subStatus)
+  const cancelsOn = cancelAtPeriodEnd
+    ? subStatus === "trialing"
+      ? trialEnd || periodEnd
+      : periodEnd
+    : null
 
   return NextResponse.json(
     {
@@ -62,9 +69,10 @@ export async function GET() {
         subscription?.has_used_trial || subscription?.trial_start
       ),
       trialStart: subscription?.trial_start ?? null,
-      trialEnd: subscription?.trial_end ?? null,
+      trialEnd,
       currentPeriodEnd: periodEnd,
-      cancelAtPeriodEnd: Boolean(subscription?.cancel_at_period_end),
+      cancelAtPeriodEnd,
+      cancelsOn,
       stripeCustomerId: subscription?.stripe_customer_id ?? null,
       stripeSubscriptionId: subscription?.stripe_subscription_id ?? null,
       unlocksApp: statusGrantsAccess(subStatus),

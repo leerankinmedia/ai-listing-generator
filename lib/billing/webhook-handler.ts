@@ -123,13 +123,20 @@ export async function handleStripeWebhookPost(request: Request) {
         break
       case "customer.subscription.created":
       case "customer.subscription.updated":
+        // Syncs status, cancel_at_period_end, trial_end, current_period_end
+        await handleSubscriptionEvent(
+          event.data.object as Stripe.Subscription
+        )
+        break
       case "customer.subscription.deleted":
+        // Marks canceled / ended — paid tools lock via status !== trialing|active
         await handleSubscriptionEvent(
           event.data.object as Stripe.Subscription
         )
         break
       case "invoice.paid":
       case "invoice.payment_failed":
+        // Failed first invoice after trial → past_due/unpaid sync + lock
         await handleInvoiceEvent(event.data.object as Stripe.Invoice)
         break
       default:

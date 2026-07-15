@@ -1,8 +1,9 @@
 "use client"
 
+import Link from "next/link"
 import { useCallback, useEffect, useState } from "react"
-import { CreditCard, Loader2, Lock, Sparkles } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { Loader2, Lock, Sparkles } from "lucide-react"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { PlanFeaturesList } from "@/components/billing/plan-features"
 import {
   getMembershipPriceLabel,
@@ -35,6 +36,7 @@ export interface BillingStatusPayload {
   trialEnd: string | null
   currentPeriodEnd: string | null
   cancelAtPeriodEnd: boolean
+  cancelsOn: string | null
   stripeCustomerId: string | null
   stripeSubscriptionId: string | null
   unlocksApp: boolean
@@ -83,15 +85,6 @@ export async function startCheckout() {
   window.location.href = "/checkout"
 }
 
-export async function openBillingPortal() {
-  const res = await fetch("/api/billing/portal", { method: "POST" })
-  const data = await res.json()
-  if (!res.ok || !data.url) {
-    throw new Error(data.error || "Could not open billing portal")
-  }
-  window.location.href = data.url as string
-}
-
 /** Polished mobile paywall for expired/inactive subscriptions. */
 export function PaywallCard({
   status,
@@ -100,7 +93,7 @@ export function PaywallCard({
   status?: BillingStatusPayload | null
   className?: string
 }) {
-  const [busy, setBusy] = useState<"checkout" | "portal" | null>(null)
+  const [busy, setBusy] = useState<"checkout" | null>(null)
   const [error, setError] = useState<string | null>(null)
   const planName = status?.planName || PLAN_NAME
   const priceLabel = status?.priceLabel || getMembershipPriceLabel()
@@ -122,17 +115,6 @@ export function PaywallCard({
       await startCheckout()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Checkout failed")
-      setBusy(null)
-    }
-  }
-
-  async function onManage() {
-    setError(null)
-    setBusy("portal")
-    try {
-      await openBillingPortal()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Portal failed")
       setBusy(null)
     }
   }
@@ -202,19 +184,12 @@ export function PaywallCard({
             : `Subscribe to ${planName}`}
         </Button>
         {(status?.stripeCustomerId || status?.hasUsedTrial) && (
-          <Button
-            variant="outline"
-            className="w-full"
-            disabled={busy !== null}
-            onClick={() => void onManage()}
+          <Link
+            href="/billing"
+            className={cn(buttonVariants({ variant: "outline" }), "w-full")}
           >
-            {busy === "portal" ? (
-              <Loader2 className="animate-spin" />
-            ) : (
-              <CreditCard />
-            )}
             Manage billing
-          </Button>
+          </Link>
         )}
       </div>
 

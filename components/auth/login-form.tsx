@@ -18,6 +18,11 @@ export function LoginForm() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const resetSuccess = searchParams.get("reset") === "success"
+  const nextRaw = searchParams.get("next")
+  const nextPath =
+    nextRaw && nextRaw.startsWith("/") && !nextRaw.startsWith("//")
+      ? nextRaw
+      : "/dashboard"
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -29,7 +34,7 @@ export function LoginForm() {
       setError(result.error)
       return
     }
-    router.push("/dashboard")
+    router.push(nextPath)
   }
 
   return (

@@ -6,6 +6,7 @@ import {
   isStripeBillingConfigured,
   MONTHLY_LISTING_CREDITS,
   PLAN_NAME,
+  statusGrantsAccess,
 } from "@/lib/billing/config"
 import { getStripe } from "@/lib/billing/stripe"
 import {
@@ -16,6 +17,10 @@ import { getServerAuthUser } from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
 
+/**
+ * Create an Embedded Checkout Session (ui_mode: embedded).
+ * Returns clientSecret for Stripe.js — no redirect to checkout.stripe.com.
+ */
 export async function POST() {
   try {
     const user = await getServerAuthUser()
@@ -34,6 +39,19 @@ export async function POST() {
     const stripe = getStripe()
     const origin = getBillingAppOrigin()
     const existing = await getSubscriptionByUserId(user.id)
+
+    // Block users who already have a trial or active subscription
+    if (statusGrantsAccess(existing?.status)) {
+      return NextResponse.json(
+        {
+          error:
+            "You already have an active ListWise Pro trial or subscription.",
+          code: "already_subscribed",
+          status: existing?.status,
+        },
+        { status: 409 }
+      )
+    }
 
     // Never grant a second trial to the same user
     const allowTrial = !existing?.has_used_trial && !existing?.trial_start
@@ -60,10 +78,12 @@ export async function POST() {
     }
 
     const session = await stripe.checkout.sessions.create({
+      ui_mode: "embedded",
       mode: "subscription",
       customer: customerId,
       client_reference_id: user.id,
       allow_promotion_codes: true,
+      // Card required before the 7-day trial begins
       payment_method_collection: "always",
       line_items: [{ price: priceId, quantity: 1 }],
       subscription_data: {
@@ -79,19 +99,19 @@ export async function POST() {
         plan_name: PLAN_NAME,
         listing_credits: String(MONTHLY_LISTING_CREDITS),
       },
-      success_url: `${origin}/dashboard?checkout=success`,
-      cancel_url: `${origin}/pricing?checkout=canceled`,
+      return_url: `${origin}/checkout/return?session_id={CHECKOUT_SESSION_ID}`,
     })
 
-    if (!session.url) {
+    if (!session.client_secret) {
       return NextResponse.json(
-        { error: "Could not create Checkout session." },
+        { error: "Could not create Embedded Checkout session." },
         { status: 500 }
       )
     }
 
     return NextResponse.json({
-      url: session.url,
+      clientSecret: session.client_secret,
+      sessionId: session.id,
       trialEligible: allowTrial,
       trialDays: allowTrial ? BILLING_TRIAL_DAYS : 0,
     })

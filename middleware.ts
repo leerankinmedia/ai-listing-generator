@@ -16,6 +16,7 @@ const PUBLIC_AUTH_PREFIXES = [
   "/auth",
   "/pricing",
   "/billing",
+  "/checkout",
 ]
 
 /** Dashboard paths locked users may still open. */

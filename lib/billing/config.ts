@@ -35,6 +35,11 @@ export function getStripePriceId() {
   return process.env.STRIPE_PRICE_ID?.trim() || ""
 }
 
+/** Publishable key for Stripe.js Embedded Checkout (safe for the browser). */
+export function getStripePublishableKey() {
+  return process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.trim() || ""
+}
+
 export function isStripeBillingConfigured() {
   return Boolean(getStripeSecretKey() && getStripePriceId())
 }

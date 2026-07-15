@@ -11,7 +11,7 @@ import {
   type ListingCopy,
 } from "@/lib/listings/schema"
 import {
-  DEFAULT_LISTING_MODEL,
+  getListingModel,
   addTokenUsage,
   emptyTokenUsage,
   type TokenUsage,
@@ -23,7 +23,7 @@ type OpenAIClient = ReturnType<typeof createOpenAI>
 
 /** Prefer Chat Completions so usage is returned as prompt_tokens/completion_tokens. */
 function listingModel(openai: OpenAIClient) {
-  return openai.chat(DEFAULT_LISTING_MODEL)
+  return openai.chat(getListingModel())
 }
 
 export class ListingEngineError extends Error {
@@ -294,7 +294,7 @@ export async function generateListingFromImages(
   }
 
   const openai = getOpenAI()
-  const model = DEFAULT_LISTING_MODEL
+  const model = getListingModel()
   let usage = emptyTokenUsage()
 
   const batches: VisionImage[][] = []

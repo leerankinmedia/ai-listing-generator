@@ -4,7 +4,7 @@ import {
   isOpenAIConfigured,
   ListingEngineError,
 } from "@/lib/ai/generate-listing"
-import { DEFAULT_LISTING_MODEL, emptyTokenUsage } from "@/lib/ai/pricing"
+import { getListingModel, emptyTokenUsage } from "@/lib/ai/pricing"
 import { recordAiUsage } from "@/lib/ai/usage"
 import { checkSubscriptionAccess } from "@/lib/billing/access"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
@@ -136,7 +136,7 @@ export async function POST(request: Request) {
       const recorded = await recordAiUsage({
         userId: user.id,
         listingId,
-        model: DEFAULT_LISTING_MODEL,
+        model: getListingModel(),
         imagesAnalyzed,
         usage: emptyTokenUsage(),
         status: "failed",

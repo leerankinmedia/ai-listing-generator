@@ -47,16 +47,29 @@ export const OPENAI_MODEL_PRICING: Record<string, ModelPricing> = {
     notes: "Standard tier list price",
     verifiedAt: "2026-07-14",
   },
+  "gpt-4.1-mini": {
+    model: "gpt-4.1-mini",
+    inputPerMillionUsd: 0.4,
+    outputPerMillionUsd: 1.6,
+    notes: "Standard tier list price",
+    verifiedAt: "2026-07-15",
+  },
 }
 
 export const DEFAULT_LISTING_MODEL = "gpt-4o"
 
+/** Active listing-engine model — override with OPENAI_LISTING_MODEL. */
+export function getListingModel() {
+  const configured = process.env.OPENAI_LISTING_MODEL?.trim()
+  return configured || DEFAULT_LISTING_MODEL
+}
+
 export function getModelPricing(model: string): ModelPricing | null {
   if (OPENAI_MODEL_PRICING[model]) return OPENAI_MODEL_PRICING[model]
-  // Versioned ids like gpt-4o-2024-08-06 → fall back to base family
-  const base = Object.keys(OPENAI_MODEL_PRICING).find((key) =>
-    model.startsWith(key)
-  )
+  // Prefer longest prefix match (gpt-4.1-mini before gpt-4.1)
+  const base = Object.keys(OPENAI_MODEL_PRICING)
+    .sort((a, b) => b.length - a.length)
+    .find((key) => model === key || model.startsWith(`${key}-`))
   return base ? OPENAI_MODEL_PRICING[base] : null
 }
 

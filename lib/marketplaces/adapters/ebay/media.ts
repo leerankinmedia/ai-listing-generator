@@ -1,8 +1,9 @@
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
+import { ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
 
 function ebayMediaBase() {
   // Media API uses apim host in production docs; sandbox mirrors api.sandbox.
-  return process.env.EBAY_ENV === "sandbox"
+  return ebayEnv() === "sandbox"
     ? "https://apim.sandbox.ebay.com"
     : "https://apim.ebay.com"
 }

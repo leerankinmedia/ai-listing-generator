@@ -72,10 +72,4 @@ export function isConnectionsCryptoConfigured() {
   return Boolean(process.env.CONNECTIONS_SECRET && process.env.CONNECTIONS_SECRET.length >= 16)
 }
 
-export function getAppBaseUrl() {
-  return (
-    process.env.NEXT_PUBLIC_APP_URL ||
-    process.env.APP_URL ||
-    "http://localhost:3000"
-  ).replace(/\/$/, "")
-}
+export { getAppBaseUrl, resolveRequestAppBaseUrl, PRODUCTION_APP_URL } from "@/lib/app-url"

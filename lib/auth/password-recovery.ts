@@ -2,14 +2,15 @@
  * Password-recovery redirects must use the live production origin.
  * Never send users to localhost or a stale hardcoded preview domain.
  */
-export const PRODUCTION_APP_URL =
-  "https://ai-listing-generator-n2ji.vercel.app"
+import {
+  PRODUCTION_APP_URL,
+  isLocalAppHost,
+} from "@/lib/app-url"
+
+export { PRODUCTION_APP_URL }
 
 function isLocalHost(hostnameOrUrl: string) {
-  return (
-    hostnameOrUrl.includes("localhost") ||
-    hostnameOrUrl.includes("127.0.0.1")
-  )
+  return isLocalAppHost(hostnameOrUrl)
 }
 
 /** Resolve the public app origin for auth email redirects. */

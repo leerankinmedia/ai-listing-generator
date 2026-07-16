@@ -5,6 +5,7 @@ import {
 } from "@/lib/marketplaces/adapters/ebay/oauth"
 import {
   PRODUCTION_APP_URL,
+  PRODUCTION_HOST,
   isCanonicalProductionHost,
   isLocalAppHost,
   isVercelDeploymentHost,
@@ -30,18 +31,29 @@ export async function GET(request: NextRequest) {
   try {
     const host = requestHost(request)
 
-    // Only bounce off temporary deployment hosts (never 308 — browsers cache those).
-    // Skip when already on canonical production or localhost.
+    // Bounce off temporary deployment hosts so the state cookie is set on the
+    // canonical production host (must match RuName Auth Accepted URL).
+    // Use nextUrl.clone() so any query string is preserved; never 308.
     if (
       !isLocalAppHost(host) &&
       !isCanonicalProductionHost(host) &&
       isVercelDeploymentHost(host)
     ) {
-      const to = toCanonicalProductionUrl(
-        `${request.nextUrl.pathname}${request.nextUrl.search}`
-      )
-      console.info("[ebay/oauth] start → canonical host", { from: host, to })
-      return NextResponse.redirect(to, 307)
+      const url = request.nextUrl.clone()
+      const originalSearch = request.nextUrl.search
+      url.host = "ai-listing-generator-n2ji.vercel.app"
+      url.protocol = "https:"
+      url.port = ""
+      if (originalSearch && url.search !== originalSearch) {
+        url.search = originalSearch
+      }
+      console.info("[ebay/oauth] start → canonical host", {
+        from: host,
+        to: `${url.pathname}${url.search}`,
+        queryPreserved: url.search === originalSearch,
+        redirected: true,
+      })
+      return NextResponse.redirect(url, 307)
     }
 
     const user = await getServerAuthUser()

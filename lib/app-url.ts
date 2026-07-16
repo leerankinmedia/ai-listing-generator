@@ -75,23 +75,6 @@ export function toCanonicalProductionUrl(pathWithSearch: string) {
   return `${PRODUCTION_APP_URL}${path}`
 }
 
-/**
- * If the request is on a non-canonical public host, return a 308 Location
- * to the same path+query on the canonical production domain.
- * Localhost is left unchanged for local OAuth testing.
- */
-export function canonicalProductionRedirectIfNeeded(request: {
-  nextUrl: { host: string; pathname: string; search: string }
-}): string | null {
-  const host = request.nextUrl.host
-  if (isLocalAppHost(host) || isCanonicalProductionHost(host)) {
-    return null
-  }
-  return toCanonicalProductionUrl(
-    `${request.nextUrl.pathname}${request.nextUrl.search}`
-  )
-}
-
 /** @deprecated Prefer getAppBaseUrl() — kept for call-site compatibility. */
 export function resolveRequestAppBaseUrl(_request?: { url: string }) {
   return getAppBaseUrl()

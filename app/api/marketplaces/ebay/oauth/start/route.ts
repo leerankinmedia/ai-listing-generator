@@ -85,6 +85,7 @@ export async function GET(request: NextRequest) {
     }
 
     const { urlState, cookieValue } = createOAuthState("ebay")
+    // Official ebay-oauth-nodejs-client builder (+ start checks logged inside).
     const authorizeUrl = buildEbayAuthorizeUrl(urlState)
 
     // Set Location manually so Next validateURL()/URL() cannot alter encoding.
@@ -92,11 +93,17 @@ export async function GET(request: NextRequest) {
     response.headers.set("Location", authorizeUrl)
     attachOAuthStateCookie(response, cookieValue)
 
+    const location = response.headers.get("Location") || ""
     console.info("[ebay/oauth] start redirect to eBay OAuth", {
       host,
       appOrigin: PRODUCTION_APP_URL,
       flow: "oauth2_authorization_code",
-      locationMatchesAuthorize: response.headers.get("Location") === authorizeUrl,
+      builder: "ebay-oauth-nodejs-client",
+      locationMatchesAuthorize: location === authorizeUrl,
+      locationParamNames: Array.from(
+        new URL(location).searchParams.keys()
+      ),
+      locationEndpoint: `${new URL(location).origin}${new URL(location).pathname}`,
     })
 
     return response

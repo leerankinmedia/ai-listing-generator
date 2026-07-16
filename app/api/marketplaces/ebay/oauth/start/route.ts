@@ -8,8 +8,8 @@ import {
 import { checkSubscriptionAccess } from "@/lib/billing/access"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import {
+  attachOAuthStateCookie,
   createOAuthState,
-  persistOAuthState,
 } from "@/lib/marketplaces/oauth-state"
 import { getServerAuthUser } from "@/lib/supabase/index"
 
@@ -32,6 +32,7 @@ function renderDebugHtml(debug: EbayAuthorizeDebug): string {
     ["scope encoding %20", debug.scope_encoding_uses_percent_20 ? "yes" : "no"],
     ["scope encoding +", debug.scope_encoding_uses_plus ? "YES (bad)" : "no"],
     ["param keys", debug.param_keys.join(", ")],
+    ["state cookie", "lw_oauth_state (httpOnly, SameSite=Lax, path=/)"],
   ]
 
   const scopeList = debug.scopes_decoded
@@ -135,29 +136,27 @@ export async function GET(request: NextRequest) {
       format === "json" ||
       (request.headers.get("accept") || "").includes("application/json")
 
-    const state = createOAuthState("ebay")
-    await persistOAuthState(state)
+    const { urlState, cookieValue } = createOAuthState("ebay")
 
     if (debugMode) {
-      const debug = inspectEbayAuthorizeRequest(state)
-      if (wantsJson) {
-        return NextResponse.json(debug, {
-          headers: {
-            "Cache-Control": "no-store",
-          },
-        })
-      }
-      return new NextResponse(renderDebugHtml(debug), {
-        status: 200,
-        headers: {
-          "Content-Type": "text/html; charset=utf-8",
-          "Cache-Control": "no-store",
-        },
-      })
+      const debug = inspectEbayAuthorizeRequest(urlState)
+      const response = wantsJson
+        ? NextResponse.json(debug, {
+            headers: { "Cache-Control": "no-store" },
+          })
+        : new NextResponse(renderDebugHtml(debug), {
+            status: 200,
+            headers: {
+              "Content-Type": "text/html; charset=utf-8",
+              "Cache-Control": "no-store",
+            },
+          })
+      return attachOAuthStateCookie(response, cookieValue)
     }
 
-    const url = buildEbayAuthorizeUrl(state)
-    return NextResponse.redirect(url)
+    const url = buildEbayAuthorizeUrl(urlState)
+    const response = NextResponse.redirect(url)
+    return attachOAuthStateCookie(response, cookieValue)
   } catch (error) {
     return NextResponse.json(
       {

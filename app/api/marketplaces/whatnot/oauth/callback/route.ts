@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server"
+import { NextRequest, NextResponse } from "next/server"
 import { exchangeWhatnotCode } from "@/lib/marketplaces/adapters/whatnot/oauth"
 import {
   PRODUCTION_APP_URL,
@@ -6,12 +6,12 @@ import {
   resolveRequestAppBaseUrl,
 } from "@/lib/app-url"
 import { checkSubscriptionAccess } from "@/lib/billing/access"
-import { saveConnection } from "@/lib/marketplaces/connections/store"
 import {
-  assertStateMatches,
+  assertCookieMatchesQueryState,
+  clearOAuthStateCookie,
   consumeOAuthStateRaw,
-  verifyOAuthState,
 } from "@/lib/marketplaces/oauth-state"
+import { saveConnection } from "@/lib/marketplaces/connections/store"
 import { getServerAuthUser } from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
@@ -22,19 +22,18 @@ function redirectWith(
   message?: string
 ) {
   let base = resolveRequestAppBaseUrl(request)
-  if (
-    isLocalAppHost(base) ||
-    process.env["VERCEL_ENV"] === "production"
-  ) {
+  if (isLocalAppHost(base) || process.env["VERCEL_ENV"] === "production") {
     base = PRODUCTION_APP_URL
   }
   const url = new URL("/dashboard/connections", base)
   url.searchParams.set("whatnot", status)
   if (message) url.searchParams.set("message", message.slice(0, 240))
-  return NextResponse.redirect(url)
+  const response = NextResponse.redirect(url)
+  clearOAuthStateCookie(response)
+  return response
 }
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   const user = await getServerAuthUser()
   const access = await checkSubscriptionAccess(user?.id)
   if (!access.allowed) {
@@ -45,7 +44,7 @@ export async function GET(request: Request) {
     )
   }
 
-  const { searchParams } = new URL(request.url)
+  const { searchParams } = request.nextUrl
   const error = searchParams.get("error")
   const errorDescription = searchParams.get("error_description")
   if (error) {
@@ -53,8 +52,8 @@ export async function GET(request: Request) {
   }
 
   const code = searchParams.get("code")
-  const state = searchParams.get("state")
-  if (!code || !state) {
+  let state = searchParams.get("state")
+  if (!code) {
     return redirectWith(
       request,
       "error",
@@ -63,9 +62,9 @@ export async function GET(request: Request) {
   }
 
   try {
-    const cookieState = await consumeOAuthStateRaw()
-    assertStateMatches(cookieState, state)
-    verifyOAuthState(state, "whatnot")
+    const cookieValue = await consumeOAuthStateRaw()
+    const parsed = assertCookieMatchesQueryState(cookieValue, state, "whatnot")
+    if (!state) state = parsed.nonce
 
     const tokens = await exchangeWhatnotCode(code)
     const now = new Date().toISOString()

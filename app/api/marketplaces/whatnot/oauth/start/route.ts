@@ -6,8 +6,8 @@ import {
 import { checkSubscriptionAccess } from "@/lib/billing/access"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import {
+  attachOAuthStateCookie,
   createOAuthState,
-  persistOAuthState,
 } from "@/lib/marketplaces/oauth-state"
 import { getServerAuthUser } from "@/lib/supabase/index"
 
@@ -46,10 +46,10 @@ export async function GET() {
       )
     }
 
-    const state = createOAuthState("whatnot")
-    await persistOAuthState(state)
-    const url = buildWhatnotAuthorizeUrl(state)
-    return NextResponse.redirect(url)
+    const { urlState, cookieValue } = createOAuthState("whatnot")
+    const url = buildWhatnotAuthorizeUrl(urlState)
+    const response = NextResponse.redirect(url)
+    return attachOAuthStateCookie(response, cookieValue)
   } catch (error) {
     return NextResponse.json(
       {

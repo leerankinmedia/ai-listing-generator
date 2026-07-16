@@ -112,7 +112,37 @@ function buildAuthorizeQuery(params: Record<string, string>): string {
     .join("&")
 }
 
-export function buildEbayAuthorizeUrl(state: string) {
+/** Redact client_id for logs/UI — keep only last 6 characters. */
+export function redactEbayClientId(clientId: string): string {
+  const id = clientId.trim()
+  if (!id) return "(missing)"
+  if (id.length <= 6) return `***${id}`
+  return `***${id.slice(-6)}`
+}
+
+export type EbayAuthorizeDebug = {
+  temporaryDebug: true
+  ebayEnv: "sandbox" | "production"
+  authDomain: string
+  authBase: string
+  authorizePath: "/oauth2/authorize"
+  response_type: string
+  redirect_uri: string
+  redirect_uri_looks_like_url: boolean
+  scopes_decoded: string[]
+  scope_separator: "space"
+  scope_encoding_uses_percent_20: boolean
+  scope_encoding_uses_plus: boolean
+  state_present: boolean
+  state_length: number
+  client_id_redacted: string
+  /** Authorize URL with client_id redacted — safe to view on mobile. */
+  authorize_url_redacted: string
+  param_keys: string[]
+  notes: string[]
+}
+
+function buildEbayAuthorizeParts(state: string) {
   if (!isEbayConfigured()) {
     throw new Error(
       "eBay is not configured. Set EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, and EBAY_RU_NAME."
@@ -129,35 +159,85 @@ export function buildEbayAuthorizeUrl(state: string) {
     throw new Error("eBay authorize URL missing client_id or state.")
   }
 
-  // Required eBay consent params (order matches eBay docs).
-  const query = buildAuthorizeQuery({
+  const queryParams = {
     client_id: clientId,
     response_type: responseType,
     redirect_uri: redirectUri,
     scope,
     state,
-  })
-
+  }
+  const query = buildAuthorizeQuery(queryParams)
   const url = `${authBase}/oauth2/authorize?${query}`
 
-  // Log exact request shape for debugging invalid_request (RuName is not secret).
-  console.info("[ebay/oauth] authorize URL", {
-    env,
+  const scopesDecoded = scope.split(" ").filter(Boolean)
+  const scopeEncoded = encodeURIComponent(scope)
+  const debug: EbayAuthorizeDebug = {
+    temporaryDebug: true,
+    ebayEnv: env,
+    authDomain: new URL(authBase).host,
     authBase,
-    client_id: clientId,
+    authorizePath: "/oauth2/authorize",
     response_type: responseType,
     redirect_uri: redirectUri,
-    scope,
-    scopeEncodedSample: encodeURIComponent(scope).slice(0, 80),
-    stateLength: state.length,
-    url,
-  })
+    redirect_uri_looks_like_url: /^https?:\/\//i.test(redirectUri),
+    scopes_decoded: scopesDecoded,
+    scope_separator: "space",
+    scope_encoding_uses_percent_20: scopeEncoded.includes("%20"),
+    scope_encoding_uses_plus: query.includes("scope=") && /scope=[^&]*\+/.test(query),
+    state_present: Boolean(state),
+    state_length: state.length,
+    client_id_redacted: redactEbayClientId(clientId),
+    authorize_url_redacted: url.replace(
+      encodeURIComponent(clientId),
+      encodeURIComponent(redactEbayClientId(clientId))
+    ),
+    param_keys: Object.keys(queryParams),
+    notes: [
+      "redirect_uri must be the OAuth RuName from EBAY_RU_NAME, not the Vercel callback URL.",
+      "client_secret is never included in the authorize URL.",
+      "Temporary debug — remove after Sandbox OAuth is working.",
+    ],
+  }
 
-  if (query.includes("+") && /scope=/.test(query)) {
-    // Defense: never ship + as scope separators.
+  return { url, query, debug }
+}
+
+/** Temporary safe debug payload for mobile/JSON inspection (no secrets). */
+export function inspectEbayAuthorizeRequest(state: string): EbayAuthorizeDebug {
+  const { debug } = buildEbayAuthorizeParts(state)
+  logEbayAuthorizeDebug(debug)
+  return debug
+}
+
+export function logEbayAuthorizeDebug(debug: EbayAuthorizeDebug) {
+  console.info("[ebay/oauth] authorize debug (redacted)", {
+    ebayEnv: debug.ebayEnv,
+    authDomain: debug.authDomain,
+    authBase: debug.authBase,
+    response_type: debug.response_type,
+    redirect_uri: debug.redirect_uri,
+    scopes_decoded: debug.scopes_decoded,
+    state_present: debug.state_present,
+    state_length: debug.state_length,
+    client_id_redacted: debug.client_id_redacted,
+    scope_encoding_uses_percent_20: debug.scope_encoding_uses_percent_20,
+    scope_encoding_uses_plus: debug.scope_encoding_uses_plus,
+    authorize_url_redacted: debug.authorize_url_redacted,
+  })
+}
+
+export function buildEbayAuthorizeUrl(state: string) {
+  const { url, query, debug } = buildEbayAuthorizeParts(state)
+  logEbayAuthorizeDebug(debug)
+
+  if (debug.scope_encoding_uses_plus) {
     console.warn(
       "[ebay/oauth] authorize query unexpectedly contains '+'; eBay requires %20 between scopes"
     )
+  }
+  if (query.includes("client_secret") || /client_secret=/i.test(url)) {
+    console.error("[ebay/oauth] refuse: client_secret must never appear in authorize URL")
+    throw new Error("Internal error: authorize URL must not include secrets.")
   }
 
   return url

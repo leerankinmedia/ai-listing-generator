@@ -1,15 +1,9 @@
 /**
  * eBay OAuth 2.0 authorization code grant (NOT Auth'n'Auth).
- * Docs:
- * - https://developer.ebay.com/api-docs/static/oauth-authorization-code-grant.html
- * - Authorize: GET {auth.sandbox.ebay.com|auth.ebay.com}/oauth2/authorize
- * - Token: POST {api.sandbox.ebay.com|api.ebay.com}/identity/v1/oauth2/token
- *
- * Requires an OAuth-enabled RuName (Developer Portal → User Tokens → OAuth).
- * Auth'n'Auth RuNames redirect to the accepted URL without ?code=&state=.
- *
- * Set EBAY_ENV=sandbox for Sandbox credentials.
- * redirect_uri must be the RuName from EBAY_RU_NAME, not the Vercel callback URL.
+ * Authorize URL format matches ebay-oauth-nodejs-client:
+ *   client_id, redirect_uri (RuName), response_type, scope (URIs + literal %20), state
+ * Do not encodeURIComponent the whole query — that double-encodes scopes into %253A/%252F
+ * and breaks the Sandbox consent page ("Something went wrong on our end").
  */
 import { PRODUCTION_APP_URL } from "@/lib/app-url"
 
@@ -41,7 +35,6 @@ export function ebayApiBase() {
     : "https://api.ebay.com"
 }
 
-/** OAuth 2.0 authorize host (never Auth'n'Auth / eBayISAPI SignIn). */
 export function ebayAuthBase() {
   return ebayEnv() === "sandbox"
     ? "https://auth.sandbox.ebay.com"
@@ -83,23 +76,30 @@ export function ebayRuName(): string {
   return ruName
 }
 
-export const EBAY_SCOPES = [
+/** Decoded scope list — joined with literal "%20" for the authorize URL (eBay client style). */
+export const EBAY_SCOPE_LIST = [
   "https://api.ebay.com/oauth/api_scope",
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
   "https://api.ebay.com/oauth/api_scope/sell.account",
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
-].join(" ")
+] as const
 
-/** RFC 3986 query encoding — scope spaces must be %20, not +. */
-function buildAuthorizeQuery(params: Record<string, string>): string {
-  return Object.entries(params)
-    .map(
-      ([key, value]) =>
-        `${encodeURIComponent(key)}=${encodeURIComponent(value)}`
-    )
-    .join("&")
+/** Space-separated scopes for token refresh bodies (form-urlencoded). */
+export const EBAY_SCOPES = EBAY_SCOPE_LIST.join(" ")
+
+function assertUrlSafeOAuthValue(name: string, value: string) {
+  // Values are placed raw in the query string (per ebay-oauth-nodejs-client).
+  // Reject anything that would alter the query structure.
+  if (!value || /[\s&?#]/.test(value)) {
+    throw new Error(`Invalid eBay OAuth ${name} value.`)
+  }
 }
 
+/**
+ * Build Sandbox/Production authorize URL.
+ * Matches https://github.com/eBay/ebay-oauth-nodejs-client generateUserAuthorizationUrl:
+ * scopes joined with "%20", client_id / redirect_uri / state left unencoded.
+ */
 export function buildEbayAuthorizeUrl(state: string) {
   if (!isEbayConfigured()) {
     throw new Error(
@@ -112,33 +112,54 @@ export function buildEbayAuthorizeUrl(state: string) {
     throw new Error("eBay authorize URL missing client_id or state.")
   }
 
+  assertUrlSafeOAuthValue("client_id", clientId)
+  assertUrlSafeOAuthValue("redirect_uri", redirectUri)
+  assertUrlSafeOAuthValue("state", state)
+
   const authBase = ebayAuthBase()
-  const query = buildAuthorizeQuery({
-    client_id: clientId,
-    response_type: "code",
-    redirect_uri: redirectUri,
-    scope: EBAY_SCOPES,
-    state,
-  })
+  // Literal %20 between scope URIs — do NOT encodeURIComponent the scope string
+  // (that turns https:// into https%3A%2F%2F and can break Sandbox consent).
+  const scope = EBAY_SCOPE_LIST.join("%20")
 
-  // Explicit OAuth 2.0 path — never Auth'n'Auth SignIn / eBayISAPI.
-  const url = `${authBase}/oauth2/authorize?${query}`
+  const queryParam = [
+    `client_id=${clientId}`,
+    `redirect_uri=${redirectUri}`,
+    `response_type=code`,
+    `scope=${scope}`,
+    `state=${state}`,
+  ].join("&")
 
-  console.info("[ebay/oauth] authorize", {
+  const url = `${authBase}/oauth2/authorize?${queryParam}`
+
+  // Safe log: redact client_id, never log secrets. Detect accidental double-encoding.
+  const clientIdRedacted =
+    clientId.length <= 6 ? `***${clientId}` : `***${clientId.slice(-6)}`
+  const authorizeUrlRedacted = url.replace(
+    `client_id=${clientId}`,
+    `client_id=${clientIdRedacted}`
+  )
+  console.info("[ebay/oauth] authorize URL", {
     flow: "oauth2_authorization_code",
     env: ebayEnv(),
     authBase,
-    authorizePath: "/oauth2/authorize",
     response_type: "code",
     redirect_uri: redirectUri,
-    statePresent: true,
-    scopeCount: EBAY_SCOPES.split(" ").length,
+    stateLength: state.length,
+    scopeCount: EBAY_SCOPE_LIST.length,
+    scopeUsesLiteralPercent20: scope.includes("%20"),
+    scopeDoubleEncoded: scope.includes("%253A") || scope.includes("%252F"),
+    authorizeUrlRedacted,
   })
+
+  if (scope.includes("%253A") || url.includes("%2520") || url.includes("%253A")) {
+    throw new Error(
+      "eBay authorize URL appears double-encoded. Refusing to redirect."
+    )
+  }
 
   return url
 }
 
-/** Canonical production callback — must match RuName Auth Accepted URL. */
 export function ebayCallbackUrl() {
   return `${PRODUCTION_APP_URL}/api/marketplaces/ebay/oauth/callback`
 }

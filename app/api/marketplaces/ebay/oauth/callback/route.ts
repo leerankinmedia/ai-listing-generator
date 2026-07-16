@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server"
 import { exchangeEbayCode } from "@/lib/marketplaces/adapters/ebay/oauth"
 import {
   PRODUCTION_APP_URL,
-  canonicalProductionRedirectIfNeeded,
+  isCanonicalProductionHost,
+  isLocalAppHost,
+  isVercelDeploymentHost,
+  toCanonicalProductionUrl,
 } from "@/lib/app-url"
 import { checkSubscriptionAccess } from "@/lib/billing/access"
 import {
@@ -56,17 +59,26 @@ export async function GET(request: NextRequest) {
     xForwardedHost: request.headers.get("x-forwarded-host") || null,
   })
 
-  // If eBay (or an old RuName URL) hit a deployment-specific *.vercel.app host,
-  // bounce to canonical production WHILE PRESERVING the query string. Dropping
-  // ?code=&state= was the root cause of empty paramNames on production.
-  const canonical = canonicalProductionRedirectIfNeeded(request)
-  if (canonical) {
+  // If eBay hit a deployment-specific *.vercel.app host, bounce to canonical
+  // production WHILE PRESERVING ?code=&state= (use 307 — never cacheable 308).
+  const forwarded =
+    request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
+    request.headers.get("host") ||
+    request.nextUrl.host
+  if (
+    !isLocalAppHost(forwarded) &&
+    !isCanonicalProductionHost(forwarded) &&
+    isVercelDeploymentHost(forwarded)
+  ) {
+    const to = toCanonicalProductionUrl(
+      `${request.nextUrl.pathname}${request.nextUrl.search}`
+    )
     console.info("[ebay/oauth] callback → canonical host (preserving query)", {
-      from: request.nextUrl.host,
-      to: canonical,
+      from: forwarded,
+      to,
       paramNames,
     })
-    return NextResponse.redirect(canonical, 308)
+    return NextResponse.redirect(to, 307)
   }
 
   const user = await getServerAuthUser()

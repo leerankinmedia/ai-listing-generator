@@ -5,7 +5,10 @@ import {
 } from "@/lib/marketplaces/adapters/ebay/oauth"
 import {
   PRODUCTION_APP_URL,
-  canonicalProductionRedirectIfNeeded,
+  isCanonicalProductionHost,
+  isLocalAppHost,
+  isVercelDeploymentHost,
+  toCanonicalProductionUrl,
 } from "@/lib/app-url"
 import { checkSubscriptionAccess } from "@/lib/billing/access"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
@@ -17,17 +20,28 @@ import { getServerAuthUser } from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
 
+function requestHost(request: NextRequest): string {
+  const forwarded = request.headers.get("x-forwarded-host")
+  if (forwarded) return forwarded.split(",")[0].trim()
+  return request.headers.get("host") || request.nextUrl.host
+}
+
 export async function GET(request: NextRequest) {
   try {
-    // eBay OAuth must start on the canonical production host so the state
-    // cookie and RuName Auth Accepted URL share one domain.
-    const canonical = canonicalProductionRedirectIfNeeded(request)
-    if (canonical) {
-      console.info("[ebay/oauth] start → canonical host", {
-        from: request.nextUrl.host,
-        to: canonical,
-      })
-      return NextResponse.redirect(canonical, 308)
+    const host = requestHost(request)
+
+    // Only bounce off temporary deployment hosts (never 308 — browsers cache those).
+    // Skip when already on canonical production or localhost.
+    if (
+      !isLocalAppHost(host) &&
+      !isCanonicalProductionHost(host) &&
+      isVercelDeploymentHost(host)
+    ) {
+      const to = toCanonicalProductionUrl(
+        `${request.nextUrl.pathname}${request.nextUrl.search}`
+      )
+      console.info("[ebay/oauth] start → canonical host", { from: host, to })
+      return NextResponse.redirect(to, 307)
     }
 
     const user = await getServerAuthUser()
@@ -62,14 +76,21 @@ export async function GET(request: NextRequest) {
     }
 
     const { urlState, cookieValue } = createOAuthState("ebay")
-    const url = buildEbayAuthorizeUrl(urlState)
-    const response = NextResponse.redirect(url)
+    const authorizeUrl = buildEbayAuthorizeUrl(urlState)
+
+    // Set Location manually so Next validateURL()/URL() cannot alter encoding.
+    const response = new NextResponse(null, { status: 302 })
+    response.headers.set("Location", authorizeUrl)
+    attachOAuthStateCookie(response, cookieValue)
+
     console.info("[ebay/oauth] start redirect to eBay OAuth", {
-      host: request.nextUrl.host,
+      host,
       appOrigin: PRODUCTION_APP_URL,
       flow: "oauth2_authorization_code",
+      locationMatchesAuthorize: response.headers.get("Location") === authorizeUrl,
     })
-    return attachOAuthStateCookie(response, cookieValue)
+
+    return response
   } catch (error) {
     return NextResponse.json(
       {

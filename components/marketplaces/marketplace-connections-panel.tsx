@@ -13,7 +13,6 @@ import {
 } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { PasswordInput } from "@/components/auth/password-input"
-import { PRODUCTION_APP_URL } from "@/lib/app-url"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import type { MarketplaceId } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -288,11 +287,7 @@ export function MarketplaceConnectionsPanel() {
                       </Button>
                     ) : adapter.authMethod === "oauth" ? (
                       <a
-                        href={
-                          adapter.id === "ebay"
-                            ? `${PRODUCTION_APP_URL}/api/marketplaces/ebay/oauth/start`
-                            : `/api/marketplaces/${adapter.id}/oauth/start`
-                        }
+                        href={`/api/marketplaces/${adapter.id}/oauth/start`}
                         className={cn(
                           buttonVariants({ variant: "accent", size: "sm" }),
                           (!isLive || !status?.connectionsSecretConfigured) &&

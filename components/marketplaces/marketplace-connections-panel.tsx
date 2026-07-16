@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { PasswordInput } from "@/components/auth/password-input"
+import { PRODUCTION_APP_URL } from "@/lib/app-url"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import type { MarketplaceId } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -167,7 +168,7 @@ export function MarketplaceConnectionsPanel() {
         </p>
       </header>
 
-      {!status?.connectionsSecretConfigured && (
+      {!loading && status && !status.connectionsSecretConfigured && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           Set <code className="font-mono text-xs">CONNECTIONS_SECRET</code> (min
           16 chars) in the server environment before connecting accounts.
@@ -286,35 +287,24 @@ export function MarketplaceConnectionsPanel() {
                         Disconnect
                       </Button>
                     ) : adapter.authMethod === "oauth" ? (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <a
-                          href={`/api/marketplaces/${adapter.id}/oauth/start`}
-                          className={cn(
-                            buttonVariants({ variant: "accent", size: "sm" }),
-                            (!isLive || !status?.connectionsSecretConfigured) &&
-                              "pointer-events-none opacity-50"
-                          )}
-                          aria-disabled={
-                            !isLive || !status?.connectionsSecretConfigured
-                          }
-                        >
-                          <Plug />
-                          Connect with OAuth
-                        </a>
-                        {adapter.id === "ebay" && (
-                          <a
-                            href="/api/marketplaces/ebay/oauth/start?debug=1"
-                            className={cn(
-                              buttonVariants({ variant: "outline", size: "sm" }),
-                              (!isLive ||
-                                !status?.connectionsSecretConfigured) &&
-                                "pointer-events-none opacity-50"
-                            )}
-                          >
-                            Inspect OAuth (temp)
-                          </a>
+                      <a
+                        href={
+                          adapter.id === "ebay"
+                            ? `${PRODUCTION_APP_URL}/api/marketplaces/ebay/oauth/start`
+                            : `/api/marketplaces/${adapter.id}/oauth/start`
+                        }
+                        className={cn(
+                          buttonVariants({ variant: "accent", size: "sm" }),
+                          (!isLive || !status?.connectionsSecretConfigured) &&
+                            "pointer-events-none opacity-50"
                         )}
-                      </div>
+                        aria-disabled={
+                          !isLive || !status?.connectionsSecretConfigured
+                        }
+                      >
+                        <Plug />
+                        Connect with OAuth
+                      </a>
                     ) : adapter.authMethod === "api_token" ? (
                       <Button
                         variant="accent"

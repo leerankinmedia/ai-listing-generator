@@ -1,9 +1,11 @@
 /**
  * Canonical public origin for ListWise Production.
- * Used whenever env/base-URL resolution would otherwise yield localhost.
+ * Never use deployment-specific *.vercel.app hosts for OAuth redirects.
  */
 export const PRODUCTION_APP_URL =
   "https://ai-listing-generator-n2ji.vercel.app"
+
+export const PRODUCTION_HOST = "ai-listing-generator-n2ji.vercel.app"
 
 export function isLocalAppHost(value: string) {
   const v = value.toLowerCase()
@@ -14,11 +16,29 @@ export function isLocalAppHost(value: string) {
   )
 }
 
+export function hostnameOf(value: string) {
+  try {
+    if (/^https?:\/\//i.test(value)) return new URL(value).hostname
+  } catch {
+    // fall through
+  }
+  return value.replace(/^https?:\/\//i, "").split("/")[0].split(":")[0]
+}
+
+export function isCanonicalProductionHost(hostOrUrl: string) {
+  return hostnameOf(hostOrUrl).toLowerCase() === PRODUCTION_HOST
+}
+
+/** True for *.vercel.app hosts that are not the canonical production alias. */
+export function isVercelDeploymentHost(hostOrUrl: string) {
+  const host = hostnameOf(hostOrUrl).toLowerCase()
+  return host.endsWith(".vercel.app") && host !== PRODUCTION_HOST
+}
+
 function cleanOrigin(value: string | undefined | null): string | null {
   if (!value || typeof value !== "string") return null
   const cleaned = value.trim().replace(/\/$/, "")
   if (!cleaned) return null
-  // VERCEL_URL is host-only; normalize to https origin
   if (!/^https?:\/\//i.test(cleaned)) {
     if (isLocalAppHost(cleaned)) return null
     return `https://${cleaned.replace(/^\/\//, "")}`
@@ -28,43 +48,51 @@ function cleanOrigin(value: string | undefined | null): string | null {
 }
 
 /**
- * Public app origin for redirects, OAuth return URLs, and absolute links.
- * Never returns localhost when running on Vercel or in production builds.
+ * Public app origin for redirects and absolute links.
+ * On Vercel / production builds always returns the canonical production alias —
+ * never a deployment-specific VERCEL_URL (those break eBay OAuth cookies/params).
  */
 export function getAppBaseUrl() {
-  const configured = cleanOrigin(process.env["NEXT_PUBLIC_APP_URL"])
-  if (configured) return configured
-
-  const appUrl = cleanOrigin(process.env["APP_URL"])
-  if (appUrl) return appUrl
-
-  const vercel = cleanOrigin(process.env["VERCEL_URL"])
-  if (vercel) return vercel
-
-  const onVercel = Boolean(process.env["VERCEL"])
-  const isProdBuild = process.env["NODE_ENV"] === "production"
-  if (onVercel || isProdBuild) {
-    return PRODUCTION_APP_URL
+  if (!process.env["VERCEL"] && process.env["NODE_ENV"] !== "production") {
+    const local =
+      cleanOrigin(process.env["NEXT_PUBLIC_APP_URL"]) ||
+      cleanOrigin(process.env["APP_URL"])
+    return local && isLocalAppHost(local) ? local : "http://localhost:3000"
   }
 
-  return "http://localhost:3000"
+  // Production / Vercel: always canonical. Ignore VERCEL_URL and preview aliases.
+  return PRODUCTION_APP_URL
 }
 
 /**
- * Prefer the origin of the incoming request when it is a real public host
- * (e.g. Vercel callback hit). Falls back to getAppBaseUrl(); never localhost
- * on Vercel/production.
+ * Absolute URL on the canonical production host (keeps path + query).
+ * Used to bounce eBay OAuth off temporary deployment URLs without dropping params.
  */
-export function resolveRequestAppBaseUrl(request?: { url: string }) {
-  if (request?.url) {
-    try {
-      const origin = new URL(request.url).origin
-      if (!isLocalAppHost(origin)) {
-        return origin.replace(/\/$/, "")
-      }
-    } catch {
-      // ignore malformed request.url
-    }
+export function toCanonicalProductionUrl(pathWithSearch: string) {
+  const path = pathWithSearch.startsWith("/")
+    ? pathWithSearch
+    : `/${pathWithSearch}`
+  return `${PRODUCTION_APP_URL}${path}`
+}
+
+/**
+ * If the request is on a non-canonical public host, return a 308 Location
+ * to the same path+query on the canonical production domain.
+ * Localhost is left unchanged for local OAuth testing.
+ */
+export function canonicalProductionRedirectIfNeeded(request: {
+  nextUrl: { host: string; pathname: string; search: string }
+}): string | null {
+  const host = request.nextUrl.host
+  if (isLocalAppHost(host) || isCanonicalProductionHost(host)) {
+    return null
   }
+  return toCanonicalProductionUrl(
+    `${request.nextUrl.pathname}${request.nextUrl.search}`
+  )
+}
+
+/** @deprecated Prefer getAppBaseUrl() — kept for call-site compatibility. */
+export function resolveRequestAppBaseUrl(_request?: { url: string }) {
   return getAppBaseUrl()
 }

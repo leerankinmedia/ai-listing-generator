@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { exchangeWhatnotCode } from "@/lib/marketplaces/adapters/whatnot/oauth"
-import {
-  PRODUCTION_APP_URL,
-  isLocalAppHost,
-  resolveRequestAppBaseUrl,
-} from "@/lib/app-url"
+import { PRODUCTION_APP_URL } from "@/lib/app-url"
 import { checkSubscriptionAccess } from "@/lib/billing/access"
 import {
   assertCookieMatchesQueryState,
@@ -16,16 +12,8 @@ import { getServerAuthUser } from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
 
-function redirectWith(
-  request: Request,
-  status: "connected" | "error",
-  message?: string
-) {
-  let base = resolveRequestAppBaseUrl(request)
-  if (isLocalAppHost(base) || process.env["VERCEL_ENV"] === "production") {
-    base = PRODUCTION_APP_URL
-  }
-  const url = new URL("/dashboard/connections", base)
+function redirectWith(status: "connected" | "error", message?: string) {
+  const url = new URL("/dashboard/connections", PRODUCTION_APP_URL)
   url.searchParams.set("whatnot", status)
   if (message) url.searchParams.set("message", message.slice(0, 240))
   const response = NextResponse.redirect(url)
@@ -38,7 +26,6 @@ export async function GET(request: NextRequest) {
   const access = await checkSubscriptionAccess(user?.id)
   if (!access.allowed) {
     return redirectWith(
-      request,
       "error",
       "Start your 7-day free trial to unlock this feature."
     )
@@ -48,17 +35,13 @@ export async function GET(request: NextRequest) {
   const error = searchParams.get("error")
   const errorDescription = searchParams.get("error_description")
   if (error) {
-    return redirectWith(request, "error", errorDescription || error)
+    return redirectWith("error", errorDescription || error)
   }
 
   const code = searchParams.get("code")
   let state = searchParams.get("state")
   if (!code) {
-    return redirectWith(
-      request,
-      "error",
-      "Missing OAuth code or state from Whatnot."
-    )
+    return redirectWith("error", "Missing OAuth code or state from Whatnot.")
   }
 
   try {
@@ -78,10 +61,9 @@ export async function GET(request: NextRequest) {
       connectedAt: now,
       updatedAt: now,
     })
-    return redirectWith(request, "connected")
+    return redirectWith("connected")
   } catch (err) {
     return redirectWith(
-      request,
       "error",
       err instanceof Error ? err.message : "Whatnot OAuth failed."
     )

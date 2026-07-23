@@ -6,6 +6,11 @@ import {
   mapListingToEbayInventory,
   mapListingToEbayOffer,
 } from "@/lib/marketplaces/adapters/ebay/client"
+import {
+  applyRequiredEbayAspects,
+  fetchEbayItemAspectsForCategory,
+  missingAspectsError,
+} from "@/lib/marketplaces/adapters/ebay/aspects"
 import { ensureEbayMerchantLocationKey } from "@/lib/marketplaces/adapters/ebay/location"
 import { resolveEbayImageUrls } from "@/lib/marketplaces/adapters/ebay/media"
 import { isEbayConfigured, refreshEbayToken } from "@/lib/marketplaces/adapters/ebay/oauth"
@@ -69,7 +74,6 @@ async function resolveOfferId(
       err.status === 409 ||
       msg.includes("already exists") ||
       msg.includes("offer exists") ||
-      msg.includes("25002") ||
       msg.includes("25707") ||
       msg.includes("25709")
 
@@ -140,7 +144,28 @@ export const ebayAdapter: MarketplaceAdapter = {
     const { sku, inventoryItem } = mapListingToEbayInventory(listing)
     attachEbayImageUrls(inventoryItem, imageUrls)
 
-    // 3) Create/replace inventory item
+    // 3) Leaf category from Taxonomy suggestions (never a hardcoded parent ID)
+    const { categoryId } = await resolveEbayLeafCategoryId(
+      withLocation.accessToken,
+      listing.title
+    )
+
+    // 4) Required item aspects for this leaf category — before inventory write
+    const taxonomyAspects = await fetchEbayItemAspectsForCategory(
+      withLocation.accessToken,
+      categoryId
+    )
+    const { aspects, missingRequired } = applyRequiredEbayAspects(
+      listing,
+      taxonomyAspects,
+      inventoryItem.product.aspects
+    )
+    if (missingRequired.length > 0) {
+      throw missingAspectsError(missingRequired)
+    }
+    inventoryItem.product.aspects = aspects
+
+    // 5) Create/replace inventory item (with required aspects filled)
     await ebayFetch(
       `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
       withLocation.accessToken,
@@ -149,12 +174,6 @@ export const ebayAdapter: MarketplaceAdapter = {
         step: "createOrReplaceInventoryItem",
         body: JSON.stringify(inventoryItem),
       }
-    )
-
-    // 4) Leaf category from Taxonomy suggestions (never a hardcoded parent ID)
-    const { categoryId } = await resolveEbayLeafCategoryId(
-      withLocation.accessToken,
-      listing.title
     )
 
     const offer = mapListingToEbayOffer(
@@ -175,10 +194,10 @@ export const ebayAdapter: MarketplaceAdapter = {
       sameKeyAsSaved: merchantLocationKey === withLocation.meta?.merchantLocationKey,
     })
 
-    // 5) Create (or update existing) offer with the verified location key
+    // 6) Create (or update existing) offer with the verified location key
     const offerId = await resolveOfferId(withLocation.accessToken, sku, offer)
 
-    // 6) Publish offer
+    // 7) Publish offer
     const published = (await ebayFetch(
       `/sell/inventory/v1/offer/${offerId}/publish`,
       withLocation.accessToken,

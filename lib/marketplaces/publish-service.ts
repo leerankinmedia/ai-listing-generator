@@ -98,6 +98,10 @@ export async function publishListingOneClick(
         ok: false,
         status: "error",
         message,
+        requiredFields:
+          error instanceof MarketplaceError
+            ? error.details?.requiredFields
+            : undefined,
       })
     }
   }

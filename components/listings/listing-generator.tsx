@@ -279,7 +279,14 @@ export function ListingGenerator() {
             onChange={setListing}
             disabled={saving}
           />
-          <OneClickPublishBar listing={{ ...listing, images }} disabled={saving} />
+          <OneClickPublishBar
+            listing={{ ...listing, images }}
+            disabled={saving}
+            onListingChange={(next) => {
+              setListing(next)
+              setImages(next.images)
+            }}
+          />
           {error && (
             <p className="text-sm text-destructive" role="alert">
               {error}

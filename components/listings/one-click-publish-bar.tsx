@@ -4,11 +4,23 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { Loader2, Rocket } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import type { Listing, MarketplaceId, OneClickPublishResult } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const PHASE5_IDS: MarketplaceId[] = ["ebay", "vinted", "whatnot"]
+
+const KNOWN_SPECIFIC_KEYS = new Set([
+  "brand",
+  "size",
+  "color",
+  "material",
+  "style",
+  "pattern",
+  "gender",
+])
 
 interface PublicConnection {
   marketplaceId: MarketplaceId
@@ -16,12 +28,22 @@ interface PublicConnection {
   accountLabel?: string | null
 }
 
+function mapAspectToListingField(aspectName: string): keyof Listing["specifics"] | "extras" {
+  const key = aspectName.trim().toLowerCase()
+  if (KNOWN_SPECIFIC_KEYS.has(key)) return key as keyof Listing["specifics"]
+  if (key === "department") return "gender"
+  if (key === "colour") return "color"
+  return "extras"
+}
+
 export function OneClickPublishBar({
   listing,
   disabled,
+  onListingChange,
 }: {
   listing: Listing
   disabled?: boolean
+  onListingChange?: (listing: Listing) => void
 }) {
   const [publishing, setPublishing] = useState(false)
   const [results, setResults] = useState<OneClickPublishResult[] | null>(null)
@@ -29,6 +51,17 @@ export function OneClickPublishBar({
   const [connections, setConnections] = useState<PublicConnection[]>([])
   const [selected, setSelected] = useState<MarketplaceId[]>([])
   const [loadingConnections, setLoadingConnections] = useState(true)
+
+  const requiredFields = useMemo(() => {
+    const fields = (results || []).flatMap((r) => r.requiredFields || [])
+    const seen = new Set<string>()
+    return fields.filter((f) => {
+      const key = f.name.toLowerCase()
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [results])
 
   const loadConnections = useCallback(async () => {
     setLoadingConnections(true)
@@ -73,6 +106,41 @@ export function OneClickPublishBar({
     setSelected((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     )
+  }
+
+  function readAspectValue(name: string) {
+    const target = mapAspectToListingField(name)
+    if (target === "extras") {
+      return listing.specifics.extras?.[name] ?? ""
+    }
+    return (listing.specifics[target] as string | undefined) ?? ""
+  }
+
+  function writeAspectValue(name: string, value: string) {
+    if (!onListingChange) return
+    const target = mapAspectToListingField(name)
+    if (target === "extras") {
+      onListingChange({
+        ...listing,
+        specifics: {
+          ...listing.specifics,
+          extras: {
+            ...(listing.specifics.extras || {}),
+            [name]: value,
+          },
+        },
+        updatedAt: new Date().toISOString(),
+      })
+      return
+    }
+    onListingChange({
+      ...listing,
+      specifics: {
+        ...listing.specifics,
+        [target]: value,
+      },
+      updatedAt: new Date().toISOString(),
+    })
   }
 
   async function handlePublish() {
@@ -201,6 +269,56 @@ export function OneClickPublishBar({
             </li>
           ))}
         </ul>
+      )}
+
+      {requiredFields.length > 0 && onListingChange && (
+        <div className="space-y-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+          <div>
+            <h3 className="text-sm font-semibold">Required eBay item specifics</h3>
+            <p className="text-xs text-muted-foreground">
+              Fill these fields for the selected category, then publish again.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {requiredFields.map((field) => {
+              const value = readAspectValue(field.name)
+              const options = field.allowedValues || []
+              return (
+                <div key={field.name} className="space-y-1.5">
+                  <Label htmlFor={`ebay-aspect-${field.name}`}>
+                    {field.name}
+                    <span className="text-destructive"> *</span>
+                  </Label>
+                  {options.length > 0 ? (
+                    <select
+                      id={`ebay-aspect-${field.name}`}
+                      value={value}
+                      disabled={disabled || publishing}
+                      onChange={(e) => writeAspectValue(field.name, e.target.value)}
+                      className="flex h-10 w-full rounded-lg border border-input bg-card px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <option value="">Select {field.name}</option>
+                      {options.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <Input
+                      id={`ebay-aspect-${field.name}`}
+                      value={value}
+                      disabled={disabled || publishing}
+                      onChange={(e) => writeAspectValue(field.name, e.target.value)}
+                      placeholder={`Enter ${field.name}`}
+                      required
+                    />
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
       )}
     </section>
   )

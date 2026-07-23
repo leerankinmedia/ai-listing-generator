@@ -22,9 +22,12 @@ export function mapListingToEbayInventory(listing: Listing) {
   if (listing.specifics.gender) {
     aspects.Department = [listing.specifics.gender]
   }
-  // Clothing category defaults often require Brand/Size; provide safe fallbacks.
-  if (!aspects.Brand) aspects.Brand = ["Unbranded"]
-  if (!aspects.Size) aspects.Size = ["One Size"]
+  // Also carry any seller-edited extras (e.g. Size Type) into aspects.
+  for (const [key, value] of Object.entries(listing.specifics.extras || {})) {
+    const trimmed = value?.trim()
+    if (!key.trim() || !trimmed) continue
+    if (!aspects[key]) aspects[key] = [trimmed]
+  }
 
   return {
     sku,

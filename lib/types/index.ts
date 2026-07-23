@@ -162,6 +162,11 @@ export interface OneClickPublishResult {
   status: "published" | "queued" | "skipped" | "error"
   message: string
   listingRef?: MarketplaceListingRef
+  /** eBay (and similar) required item specifics the seller must fill before retry */
+  requiredFields?: Array<{
+    name: string
+    allowedValues?: string[]
+  }>
 }
 
 export interface InventoryItem {

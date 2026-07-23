@@ -8,11 +8,23 @@ import type { StoredMarketplaceConnection } from "@/lib/marketplaces/connections
 export class MarketplaceError extends Error {
   status: number
   code: string
-  constructor(message: string, code = "marketplace_error", status = 400) {
+  details?: {
+    requiredFields?: Array<{
+      name: string
+      allowedValues?: string[]
+    }>
+  }
+  constructor(
+    message: string,
+    code = "marketplace_error",
+    status = 400,
+    details?: MarketplaceError["details"]
+  ) {
     super(message)
     this.name = "MarketplaceError"
     this.code = code
     this.status = status
+    this.details = details
   }
 }
 

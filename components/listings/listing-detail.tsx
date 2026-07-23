@@ -196,7 +196,11 @@ export function ListingDetail({ listingId }: { listingId: string }) {
       </section>
 
       <ListingEditorForm listing={listing} onChange={setListing} disabled={saving} />
-      <OneClickPublishBar listing={listing} disabled={saving} />
+      <OneClickPublishBar
+        listing={listing}
+        disabled={saving}
+        onListingChange={setListing}
+      />
 
       <div className="sticky bottom-3 z-20 flex flex-wrap gap-2 rounded-2xl border border-border bg-background/90 p-3 backdrop-blur-xl sm:hidden">
         <Button

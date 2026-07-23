@@ -1,4 +1,3 @@
-import { randomBytes } from "crypto"
 import type { StoredMarketplaceConnection } from "@/lib/marketplaces/connections/crypto"
 import {
   ebayFetch,
@@ -8,6 +7,9 @@ import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { saveConnection } from "@/lib/marketplaces/connections/store"
 
 const META_LOCATION_KEY = "merchantLocationKey"
+
+/** Fixed Sandbox merchant location key — get/create by key only (no list required). */
+export const SANDBOX_MERCHANT_LOCATION_KEY = "listwise-toledo"
 
 type EbayInventoryLocation = {
   merchantLocationKey?: string
@@ -30,15 +32,14 @@ type EbayInventoryLocationsResponse = {
 }
 
 /**
- * Warehouse locations only require city + state/province + country
- * (or postalCode + country). Omit street to avoid Sandbox address
- * validation rejecting a fabricated full street address.
+ * Valid US warehouse address with country + postalCode (required for offers).
+ * Street omitted — warehouse locations only need city/state/country or postal+country.
  */
 function sandboxWarehouseAddress() {
   return {
-    city: process.env["EBAY_LOCATION_CITY"] || "San Jose",
-    stateOrProvince: process.env["EBAY_LOCATION_STATE"] || "CA",
-    postalCode: process.env["EBAY_LOCATION_POSTAL"] || "95125",
+    city: process.env["EBAY_LOCATION_CITY"] || "Toledo",
+    stateOrProvince: process.env["EBAY_LOCATION_STATE"] || "OH",
+    postalCode: process.env["EBAY_LOCATION_POSTAL"] || "43604",
     country: process.env["EBAY_LOCATION_COUNTRY"] || "US",
   }
 }
@@ -54,30 +55,40 @@ function logLocationSafe(
   console.info(`[ebay/location] TEMP ${event}`, details)
 }
 
-async function listInventoryLocations(accessToken: string) {
-  const payload = (await ebayFetch(
-    "/sell/inventory/v1/location?limit=100",
-    accessToken,
-    { method: "GET", step: "listLocations" }
-  )) as EbayInventoryLocationsResponse | null
+/**
+ * Optional diagnostics only — never required for publish.
+ * Failures are logged and swallowed.
+ */
+async function listInventoryLocationsOptional(accessToken: string) {
+  try {
+    const payload = (await ebayFetch(
+      "/sell/inventory/v1/location?limit=100",
+      accessToken,
+      { method: "GET", step: "listLocationsDiagnostics" }
+    )) as EbayInventoryLocationsResponse | null
 
-  const locations = payload?.locations ?? []
-  logLocationSafe("list-locations", {
-    total: payload?.total ?? locations.length,
-    keys: locations
-      .map((loc) => loc.merchantLocationKey)
-      .filter(Boolean)
-      .join(","),
-    statuses: locations
-      .map((loc) => loc.merchantLocationStatus || "UNKNOWN")
-      .join(","),
-  })
-  return locations
+    const locations = payload?.locations ?? []
+    logLocationSafe("list-locations diagnostics (optional)", {
+      total: payload?.total ?? locations.length,
+      keys: locations
+        .map((loc) => loc.merchantLocationKey)
+        .filter(Boolean)
+        .join(","),
+      statuses: locations
+        .map((loc) => loc.merchantLocationStatus || "UNKNOWN")
+        .join(","),
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "listLocations failed"
+    logLocationSafe("list-locations diagnostics skipped", {
+      ok: false,
+      message: message.slice(0, 240),
+    })
+  }
 }
 
 /**
- * GET /location/{key} — confirms the key exists on eBay and returns status.
- * Does not log full address fields; only whether postalCode/country are present.
+ * GET /location/{key} — does not log full address fields.
  */
 async function getInventoryLocation(
   accessToken: string,
@@ -102,7 +113,6 @@ async function getInventoryLocation(
       hasPostalCode: Boolean(address?.postalCode),
       hasCountry: Boolean(address?.country),
       country: address?.country || undefined,
-      // Never log street/city/full address — postal presence only.
       postalCodePresent: Boolean(address?.postalCode),
     })
     return {
@@ -110,7 +120,10 @@ async function getInventoryLocation(
       merchantLocationKey: returnedKey,
     }
   } catch (err) {
-    if (err instanceof MarketplaceError && (err.status === 404 || err.status === 400)) {
+    if (
+      err instanceof MarketplaceError &&
+      (err.status === 404 || err.status === 400)
+    ) {
       logLocationSafe("get-location missing", {
         requestedKey: merchantLocationKey,
         httpStatus: err.status,
@@ -146,11 +159,12 @@ async function createInventoryLocation(
     hasPostalCode: Boolean(address.postalCode),
     hasCountry: Boolean(address.country),
     country: address.country,
-    // Do not log city/postalCode values beyond country flag needs; postal presence only.
     postalCodePresent: Boolean(address.postalCode),
+    locationTypes: "WAREHOUSE",
+    merchantLocationStatus: "ENABLED",
   })
 
-  // POST returns 204 No Content on success; the path key is what eBay stores.
+  // POST returns 204 No Content on success; path key is what eBay stores.
   const { status } = await ebayFetchResult(
     `/sell/inventory/v1/location/${encodeURIComponent(merchantLocationKey)}`,
     accessToken,
@@ -159,8 +173,8 @@ async function createInventoryLocation(
       step: "createLocation",
       body: JSON.stringify({
         name: "ListWise Sandbox Warehouse",
+        merchantLocationStatus: "ENABLED",
         locationTypes: ["WAREHOUSE"],
-        // Omit merchantLocationStatus — eBay defaults new locations to ENABLED.
         location: {
           address,
         },
@@ -177,7 +191,7 @@ async function createInventoryLocation(
 
   if (status !== 204) {
     throw new MarketplaceError(
-      `eBay createInventoryLocation returned HTTP ${status}; expected 204.`,
+      `[createLocation] eBay createInventoryLocation returned HTTP ${status}; expected 204.`,
       "ebay_location_create_unexpected_status",
       502
     )
@@ -190,10 +204,9 @@ function locationHasRequiredAddress(location: EbayInventoryLocation) {
 }
 
 /**
- * Verify a candidate key via GET. Enable if disabled. Returns the key eBay
- * returned (must match) only when ENABLED and address has postalCode+country.
+ * Confirm key via GET: same key, ENABLED, postalCode + country present.
  */
-async function resolveEnabledLocationKey(
+async function verifyEnabledLocationKey(
   accessToken: string,
   candidateKey: string
 ): Promise<string | null> {
@@ -211,7 +224,10 @@ async function resolveEnabledLocationKey(
   if (!isEnabledStatus(location.merchantLocationStatus)) {
     await enableInventoryLocation(accessToken, candidateKey)
     location = await getInventoryLocation(accessToken, candidateKey)
-    if (!location?.merchantLocationKey || !isEnabledStatus(location.merchantLocationStatus)) {
+    if (
+      !location?.merchantLocationKey ||
+      !isEnabledStatus(location.merchantLocationStatus)
+    ) {
       return null
     }
   }
@@ -237,26 +253,6 @@ async function resolveEnabledLocationKey(
   return location.merchantLocationKey
 }
 
-function pickEnabledLocationKey(locations: EbayInventoryLocation[]) {
-  const enabled = locations.find(
-    (loc) => loc.merchantLocationKey && isEnabledStatus(loc.merchantLocationStatus)
-  )
-  return enabled?.merchantLocationKey
-}
-
-async function clearStoredLocationKey(connection: StoredMarketplaceConnection) {
-  if (!connection.meta?.[META_LOCATION_KEY]) return connection
-  const nextMeta = { ...connection.meta }
-  delete nextMeta[META_LOCATION_KEY]
-  const next: StoredMarketplaceConnection = {
-    ...connection,
-    meta: nextMeta,
-    updatedAt: new Date().toISOString(),
-  }
-  await saveConnection(next)
-  return next
-}
-
 async function persistLocationKey(
   connection: StoredMarketplaceConnection,
   merchantLocationKey: string
@@ -278,98 +274,66 @@ async function persistLocationKey(
 }
 
 /**
- * Ensure the connected eBay seller has an ENABLED inventory location.
+ * Ensure Sandbox inventory location without calling getInventoryLocations.
  *
- * Never returns a key that was not confirmed via GET /location/{key} with
- * merchantLocationStatus=ENABLED. Never invents a key without create+GET.
+ * Flow:
+ * 1) getInventoryLocation(listwise-toledo) [or env override key]
+ * 2) if missing → createInventoryLocation with that exact key
+ * 3) getInventoryLocation again and require ENABLED + postalCode + country
+ * 4) optional listLocations diagnostics only (never required)
  */
 export async function ensureEbayMerchantLocationKey(
   accessToken: string,
   connection: StoredMarketplaceConnection
 ): Promise<{ merchantLocationKey: string; connection: StoredMarketplaceConnection }> {
-  let current = connection
+  const merchantLocationKey =
+    process.env["EBAY_MERCHANT_LOCATION_KEY"]?.trim() ||
+    SANDBOX_MERCHANT_LOCATION_KEY
 
-  const stored = current.meta?.[META_LOCATION_KEY]?.trim()
-  if (stored) {
-    const verified = await resolveEnabledLocationKey(accessToken, stored)
-    if (verified) {
-      logLocationSafe("using stored verified key", { merchantLocationKey: verified })
-      return { merchantLocationKey: verified, connection: current }
-    }
-    logLocationSafe("stored key invalid; clearing", { merchantLocationKey: stored })
-    current = await clearStoredLocationKey(current)
-  }
+  logLocationSafe("ensure location via get/create (no list required)", {
+    merchantLocationKey,
+  })
 
-  const envKey = process.env["EBAY_MERCHANT_LOCATION_KEY"]?.trim()
-  if (envKey) {
-    const verified = await resolveEnabledLocationKey(accessToken, envKey)
-    if (verified) {
-      const next = await persistLocationKey(current, verified)
-      return { merchantLocationKey: verified, connection: next }
-    }
-    logLocationSafe("env key not found or not enabled on eBay", {
-      merchantLocationKey: envKey,
+  let verified = await verifyEnabledLocationKey(accessToken, merchantLocationKey)
+
+  if (!verified) {
+    logLocationSafe("fixed key not found or not usable; creating", {
+      merchantLocationKey,
     })
-  }
-
-  const existing = await listInventoryLocations(accessToken)
-  const existingKey = pickEnabledLocationKey(existing)
-  if (existingKey) {
-    const verified = await resolveEnabledLocationKey(accessToken, existingKey)
-    if (verified) {
-      const next = await persistLocationKey(current, verified)
-      return { merchantLocationKey: verified, connection: next }
-    }
-  }
-
-  // Disabled-but-present: try enabling the first listed key.
-  for (const loc of existing) {
-    if (!loc.merchantLocationKey) continue
-    const verified = await resolveEnabledLocationKey(accessToken, loc.merchantLocationKey)
-    if (verified) {
-      const next = await persistLocationKey(current, verified)
-      return { merchantLocationKey: verified, connection: next }
-    }
-  }
-
-  // Alphanumeric-only key (max 36). Underscores avoided for Sandbox quirks.
-  const merchantLocationKey = `lw${randomBytes(8).toString("hex")}` // lw + 16 hex = 18 chars
-  try {
-    await createInventoryLocation(accessToken, merchantLocationKey)
-  } catch (err) {
-    const after = await listInventoryLocations(accessToken)
-    for (const loc of after) {
-      if (!loc.merchantLocationKey) continue
-      const recovered = await resolveEnabledLocationKey(
-        accessToken,
-        loc.merchantLocationKey
-      )
-      if (recovered) {
-        const next = await persistLocationKey(current, recovered)
-        return { merchantLocationKey: recovered, connection: next }
+    try {
+      await createInventoryLocation(accessToken, merchantLocationKey)
+    } catch (err) {
+      // Location may already exist (race / prior create) — verify again.
+      verified = await verifyEnabledLocationKey(accessToken, merchantLocationKey)
+      if (verified) {
+        const next = await persistLocationKey(connection, verified)
+        void listInventoryLocationsOptional(accessToken)
+        return { merchantLocationKey: verified, connection: next }
       }
+      throw err instanceof MarketplaceError
+        ? err
+        : new MarketplaceError(
+            `[createLocation] Failed to create eBay inventory location ${merchantLocationKey}.`,
+            "ebay_location_create_failed",
+            502
+          )
     }
-    throw err instanceof MarketplaceError
-      ? err
-      : new MarketplaceError(
-          "Failed to create eBay inventory location.",
-          "ebay_location_create_failed",
-          502
-        )
+
+    verified = await verifyEnabledLocationKey(accessToken, merchantLocationKey)
   }
 
-  const confirmedKey = await resolveEnabledLocationKey(
-    accessToken,
-    merchantLocationKey
-  )
-  if (!confirmedKey) {
+  if (!verified) {
     throw new MarketplaceError(
-      "eBay inventory location was created but GET did not return an ENABLED location with that key.",
+      `[getLocation] Inventory location ${merchantLocationKey} was not ENABLED with postalCode+country after create.`,
       "ebay_location_missing",
       502
     )
   }
 
-  const next = await persistLocationKey(current, confirmedKey)
-  return { merchantLocationKey: confirmedKey, connection: next }
+  const next = await persistLocationKey(connection, verified)
+
+  // Optional diagnostics only — must not block publish.
+  void listInventoryLocationsOptional(accessToken)
+
+  return { merchantLocationKey: verified, connection: next }
 }

@@ -84,10 +84,20 @@ function mapCondition(condition?: string) {
   }
 }
 
-export function mapListingToEbayOffer(listing: Listing, sku: string) {
+export function mapListingToEbayOffer(
+  listing: Listing,
+  sku: string,
+  merchantLocationKey: string
+) {
   const categoryId = process.env.EBAY_DEFAULT_CATEGORY_ID || "15724"
   const marketplaceId = process.env.EBAY_MARKETPLACE_ID || "EBAY_US"
-  const merchantLocationKey = requirePolicyEnv("EBAY_MERCHANT_LOCATION_KEY")
+  if (!merchantLocationKey) {
+    throw new MarketplaceError(
+      "merchantLocationKey is required to publish to eBay.",
+      "ebay_location_missing",
+      400
+    )
+  }
 
   return {
     sku,

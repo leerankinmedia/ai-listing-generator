@@ -132,7 +132,14 @@ export const ebayAdapter: MarketplaceAdapter = {
     const { merchantLocationKey, connection: withLocation } =
       await ensureEbayMerchantLocationKey(auth.accessToken, auth)
 
-    const sourceUrls = listing.images.map((img) => img.url).filter(Boolean)
+    const sourceUrls = [...listing.images]
+      .sort((a, b) => {
+        if (a.isPrimary && !b.isPrimary) return -1
+        if (!a.isPrimary && b.isPrimary) return 1
+        return (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
+      })
+      .map((img) => img.url)
+      .filter(Boolean)
     if (sourceUrls.length === 0) {
       throw new MarketplaceError(
         "At least one listing photo is required to publish on eBay.",
@@ -143,6 +150,12 @@ export const ebayAdapter: MarketplaceAdapter = {
     const imageUrls = await resolveEbayImageUrls(withLocation.accessToken, sourceUrls)
     const { sku, inventoryItem } = mapListingToEbayInventory(listing)
     attachEbayImageUrls(inventoryItem, imageUrls)
+    console.info("[ebay/images] TEMP createOrReplaceInventoryItem imageUrls", {
+      sku,
+      count: inventoryItem.product.imageUrls.length,
+      orderPreserved: inventoryItem.product.imageUrls.length === imageUrls.length,
+      firstHttps: inventoryItem.product.imageUrls[0]?.startsWith("https://") || false,
+    })
 
     // 3) Leaf category from Taxonomy suggestions (never a hardcoded parent ID)
     const { categoryId } = await resolveEbayLeafCategoryId(

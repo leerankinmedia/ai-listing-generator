@@ -1,5 +1,7 @@
 import type { Listing } from "@/lib/types"
 import {
+  colorIsBlackFamily,
+  colorIsGrayFamily,
   isHighConfidenceField,
   matchExactEbayAspectValue,
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
@@ -119,7 +121,9 @@ function listingCandidatesForAspect(
       return [fromExtras, listing.specifics.size]
     case "color":
     case "colour":
-      return [fromExtras, listing.specifics.color]
+      // Prefer detected listing color before extras so a stale auto-mapped
+      // extras value (e.g. Black) cannot override Dark Gray → Gray.
+      return [listing.specifics.color, fromExtras]
     case "material":
       return [fromExtras, listing.specifics.material]
     case "style":
@@ -203,8 +207,17 @@ export function applyRequiredEbayAspects(
     )
 
     // Preserve exact manual / already-valid selections — never overwrite them.
+    // Exception: Color — do not keep a stale Black when detected color is gray-family.
     const current = aspects[name]?.[0]?.trim()
-    if (current && isExactAllowed(current, allowed)) {
+    const isColorAspect =
+      name.toLowerCase() === "color" || name.toLowerCase() === "colour"
+    const detectedColor = listing.specifics.color
+    const staleBlackForGray =
+      isColorAspect &&
+      colorIsGrayFamily(detectedColor) &&
+      colorIsBlackFamily(current)
+
+    if (current && isExactAllowed(current, allowed) && !staleBlackForGray) {
       const exact =
         allowed.find((a) => a.toLowerCase() === current.toLowerCase()) || current
       aspects[name] = [exact]
@@ -213,10 +226,18 @@ export function applyRequiredEbayAspects(
       continue
     }
 
-    // If current AI wording is present but not exact, try normalize onto allowed list.
+    // If extras already holds an exact allowed value, keep it — unless it's a
+    // stale Black overriding a gray-family detection.
     const extrasExact = (() => {
       const raw = listing.specifics.extras?.[name]?.trim()
       if (!raw) return undefined
+      if (
+        isColorAspect &&
+        colorIsGrayFamily(detectedColor) &&
+        colorIsBlackFamily(raw)
+      ) {
+        return undefined
+      }
       if (isExactAllowed(raw, allowed)) {
         return (
           allowed.find((a) => a.toLowerCase() === raw.toLowerCase()) || raw

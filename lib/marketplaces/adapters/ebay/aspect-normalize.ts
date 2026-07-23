@@ -132,6 +132,12 @@ function expandCandidates(
     // Also add uppercase/common ebay forms for sizes
     out.add(canonical.toUpperCase())
     out.add(canonical.replace(/\b\w/g, (c) => c.toUpperCase()))
+    // Gray/Grey spelling variants for color matching against eBay lists.
+    if (canonical === "gray") {
+      out.add("grey")
+      out.add("Gray")
+      out.add("Grey")
+    }
   }
 
   if (name === "size") {
@@ -148,6 +154,103 @@ function expandCandidates(
   }
 
   return [...out]
+}
+
+function isGrayFamily(value: string): boolean {
+  const c = collapse(value)
+  return (
+    COLOR_LOOKUP.get(c) === "gray" ||
+    /\b(gray|grey|charcoal|slate|gunmetal|heather)\b/.test(c)
+  )
+}
+
+function isBlackFamily(value: string): boolean {
+  const c = collapse(value)
+  return COLOR_LOOKUP.get(c) === "black" || /\b(black|onyx|noir)\b/.test(c)
+}
+
+/**
+ * Color-only: map detected wording onto an exact allowed eBay color.
+ * Prefers synonym/exact matches (Dark Gray → Gray). Never maps gray-family
+ * values onto Black. Fuzzy nearest-color is last resort and family-safe.
+ */
+function matchExactEbayColorValue(
+  candidates: Array<string | undefined>,
+  allowed: string[],
+  highConfidence: boolean
+): { value?: string; detected?: string; path?: string } {
+  if (allowed.length === 0) {
+    for (const c of candidates) {
+      const v = c?.trim()
+      if (v) return { value: v, detected: v, path: "free_text" }
+    }
+    return {}
+  }
+
+  // Index allowed values with gray≡grey equivalence.
+  const allowedByKey = new Map<string, string>()
+  for (const v of allowed) {
+    const key = collapse(v)
+    allowedByKey.set(key, v)
+    if (key === "gray") allowedByKey.set("grey", v)
+    if (key === "grey") allowedByKey.set("gray", v)
+  }
+
+  const findGrayAllowed = () =>
+    allowed.find((a) => {
+      const k = collapse(a)
+      return k === "gray" || k === "grey"
+    })
+
+  for (const candidate of candidates) {
+    const raw = candidate?.trim()
+    if (!raw) continue
+
+    // 1) Direct case-insensitive match
+    const direct = allowedByKey.get(collapse(raw))
+    if (direct) {
+      return { value: direct, detected: raw, path: "exact" }
+    }
+
+    // 2) Synonym / normalized expansions (Dark Gray, Charcoal, Grey → gray)
+    for (const expanded of expandCandidates("color", raw)) {
+      const hit = allowedByKey.get(collapse(expanded))
+      if (hit) {
+        // Guard: never accept Black for a gray-family detection.
+        if (isGrayFamily(raw) && isBlackFamily(hit)) continue
+        return { value: hit, detected: raw, path: "synonym" }
+      }
+    }
+
+    // Explicit gray-family → preferred Gray/Grey allowed option.
+    if (isGrayFamily(raw)) {
+      const grayOpt = findGrayAllowed()
+      if (grayOpt) {
+        return { value: grayOpt, detected: raw, path: "gray_family" }
+      }
+      // No Gray in this category — do not fall through to Black via fuzzy.
+      continue
+    }
+  }
+
+  // 3) Nearest-color fallback only when synonym/exact failed — never gray→black.
+  if (highConfidence) {
+    for (const candidate of candidates) {
+      const raw = candidate?.trim()
+      if (!raw) continue
+      if (isGrayFamily(raw)) continue
+      const fuzzy = closestAllowedByTokens(raw, allowed, true)
+      if (!fuzzy) continue
+      if (isGrayFamily(raw) && isBlackFamily(fuzzy)) continue
+      if (isBlackFamily(fuzzy) && !isBlackFamily(raw)) {
+        // Avoid mapping non-black detections onto Black.
+        continue
+      }
+      return { value: fuzzy, detected: raw, path: "fuzzy" }
+    }
+  }
+
+  return {}
 }
 
 function tokenSet(value: string): Set<string> {
@@ -173,13 +276,15 @@ function closestAllowedByTokens(
 
   let best: { value: string; score: number } | undefined
   for (const option of allowed) {
+    // Never consider Black as nearest for gray-family candidates.
+    if (isGrayFamily(candidate) && isBlackFamily(option)) continue
+
     const optTokens = tokenSet(option)
     if (optTokens.size === 0) continue
     let overlap = 0
     for (const t of candTokens) {
       if (optTokens.has(t)) overlap += 1
     }
-    // Also score synonym-canonical equality loosely via includes
     const cand = collapse(candidate)
     const opt = collapse(option)
     if (cand.includes(opt) || opt.includes(cand)) overlap += 1
@@ -187,7 +292,6 @@ function closestAllowedByTokens(
     if (!best || score > best.score) best = { value: option, score }
   }
 
-  // Only accept strong overlap (e.g. "dark gray" → "Gray")
   if (best && best.score >= 0.5) return best.value
   return undefined
 }
@@ -212,6 +316,20 @@ export function matchExactEbayAspectValue(
 ): string | undefined {
   const selectionOnly = Boolean(opts.selectionOnly)
   const highConfidence = opts.highConfidence !== false
+  const name = aspectName.trim().toLowerCase()
+
+  if (name === "color" || name === "colour") {
+    const matched = matchExactEbayColorValue(candidates, allowed, highConfidence)
+    if (matched.detected || matched.value) {
+      console.info("[ebay/color] TEMP detected-to-selected mapping", {
+        detected: matched.detected || null,
+        selected: matched.value || null,
+        path: matched.path || null,
+        allowedSample: allowed.slice(0, 12),
+      })
+    }
+    return matched.value
+  }
 
   if (allowed.length === 0) {
     // Open / free-text aspect — keep first non-empty candidate.
@@ -241,7 +359,7 @@ export function matchExactEbayAspectValue(
       if (hit) return hit
     }
 
-    // 3) High-confidence closest shade / token match
+    // 3) High-confidence closest shade / token match (non-color aspects)
     const fuzzy = closestAllowedByTokens(raw, allowed, highConfidence)
     if (fuzzy) return fuzzy
   }
@@ -255,4 +373,15 @@ export function isHighConfidenceField(
 ): boolean {
   if (typeof confidence !== "number" || Number.isNaN(confidence)) return true
   return confidence >= 0.7
+}
+
+/** Exported for aspect apply-layer guards (gray-family must not stick as Black). */
+export function colorIsGrayFamily(value: string | undefined): boolean {
+  if (!value?.trim()) return false
+  return isGrayFamily(value)
+}
+
+export function colorIsBlackFamily(value: string | undefined): boolean {
+  if (!value?.trim()) return false
+  return isBlackFamily(value)
 }

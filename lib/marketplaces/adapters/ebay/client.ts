@@ -247,11 +247,11 @@ function logEbayInventoryResponse(opts: {
   })
 }
 
-export async function ebayFetch(
+export async function ebayFetchResult(
   path: string,
   accessToken: string,
   init?: RequestInit & { contentLanguage?: string }
-) {
+): Promise<{ status: number; data: unknown }> {
   const headers = new Headers(init?.headers)
   headers.set("Authorization", `Bearer ${accessToken}`)
   headers.set("Content-Type", "application/json")
@@ -293,5 +293,14 @@ export async function ebayFetch(
     )
   }
 
-  return json
+  return { status: response.status, data: json }
+}
+
+export async function ebayFetch(
+  path: string,
+  accessToken: string,
+  init?: RequestInit & { contentLanguage?: string }
+) {
+  const result = await ebayFetchResult(path, accessToken, init)
+  return result.data
 }

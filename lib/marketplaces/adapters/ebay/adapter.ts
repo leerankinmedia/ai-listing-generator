@@ -85,6 +85,10 @@ export const ebayAdapter: MarketplaceAdapter = {
     )
 
     const offer = mapListingToEbayOffer(listing, sku, merchantLocationKey)
+    console.info("[ebay/location] TEMP offer request location key", {
+      merchantLocationKey,
+      sku,
+    })
     const created = (await ebayFetch(`/sell/inventory/v1/offer`, withLocation.accessToken, {
       method: "POST",
       body: JSON.stringify(offer),

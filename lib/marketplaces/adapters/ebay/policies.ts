@@ -94,9 +94,9 @@ async function createFulfillmentPolicy(accessToken: string) {
           costType: "FLAT_RATE",
           shippingServices: [
             {
-              shippingServiceCode: "USPSPriorityFlatRateBox",
-              shippingCost: { value: "0.0", currency: "USD" },
-              freeShipping: true,
+              sortOrder: 1,
+              shippingServiceCode: "USPSPriority",
+              shippingCost: { value: "5.99", currency: "USD" },
             },
           ],
         },

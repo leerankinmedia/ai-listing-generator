@@ -166,6 +166,12 @@ export interface OneClickPublishResult {
   requiredFields?: Array<{
     name: string
     allowedValues?: string[]
+    suggestedValue?: string
+  }>
+  /** Exact eBay aspect values already resolved — apply to listing state for preselect */
+  resolvedFields?: Array<{
+    name: string
+    value: string
   }>
 }
 

@@ -6,6 +6,7 @@ import { Loader2, Rocket } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { matchExactEbayAspectValue } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import type { Listing, MarketplaceId, OneClickPublishResult } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -28,12 +29,94 @@ interface PublicConnection {
   accountLabel?: string | null
 }
 
-function mapAspectToListingField(aspectName: string): keyof Listing["specifics"] | "extras" {
+function mapAspectToListingField(
+  aspectName: string
+): keyof Listing["specifics"] | "extras" {
   const key = aspectName.trim().toLowerCase()
   if (KNOWN_SPECIFIC_KEYS.has(key)) return key as keyof Listing["specifics"]
   if (key === "department") return "gender"
   if (key === "colour") return "color"
   return "extras"
+}
+
+function isExactOption(value: string, options: string[]): boolean {
+  const key = value.trim().toLowerCase()
+  return options.some((o) => o.trim().toLowerCase() === key)
+}
+
+/** Apply exact eBay values into listing state without overwriting manual exact picks. */
+function applyExactAspectsToListing(
+  listing: Listing,
+  fields: Array<{ name: string; value: string }>,
+  optionsByName?: Map<string, string[]>
+): Listing {
+  if (fields.length === 0) return listing
+
+  let specifics = { ...listing.specifics }
+  let extras = { ...(listing.specifics.extras || {}) }
+  let changed = false
+
+  for (const field of fields) {
+    const value = field.value?.trim()
+    if (!value) continue
+    const options = optionsByName?.get(field.name.toLowerCase())
+    if (options && options.length > 0 && !isExactOption(value, options)) {
+      continue
+    }
+
+    const target = mapAspectToListingField(field.name)
+    // Always keep exact eBay value in extras under the Taxonomy aspect name
+    // (this is what publish reads first for Size Type / Type / Theme / etc.).
+    const existingExtra = extras[field.name]?.trim()
+    if (existingExtra && isExactOption(existingExtra, options || [existingExtra])) {
+      // Preserve manual exact selection.
+    } else if (existingExtra !== value) {
+      extras = { ...extras, [field.name]: value }
+      changed = true
+    }
+
+    if (target !== "extras") {
+      const current = (specifics[target] as string | undefined)?.trim()
+      if (current && options && options.length > 0 && isExactOption(current, options)) {
+        // Preserve manual exact selection on the known field.
+      } else if (current !== value) {
+        specifics = { ...specifics, [target]: value }
+        changed = true
+      }
+    }
+  }
+
+  if (!changed) return listing
+  return {
+    ...listing,
+    specifics: { ...specifics, extras },
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+function resolveSelectValue(
+  fieldName: string,
+  rawValue: string,
+  options: string[],
+  suggestedValue?: string
+): string {
+  if (options.length === 0) return rawValue
+  if (rawValue && isExactOption(rawValue, options)) {
+    return (
+      options.find((o) => o.toLowerCase() === rawValue.toLowerCase()) || rawValue
+    )
+  }
+  if (suggestedValue && isExactOption(suggestedValue, options)) {
+    return (
+      options.find((o) => o.toLowerCase() === suggestedValue.toLowerCase()) ||
+      suggestedValue
+    )
+  }
+  const matched = matchExactEbayAspectValue(fieldName, [rawValue, suggestedValue], options, {
+    selectionOnly: true,
+    highConfidence: true,
+  })
+  return matched || ""
 }
 
 export function OneClickPublishBar({
@@ -62,6 +145,52 @@ export function OneClickPublishBar({
       return true
     })
   }, [results])
+
+  const resolvedFields = useMemo(() => {
+    const fields = (results || []).flatMap((r) => r.resolvedFields || [])
+    const byName = new Map<string, { name: string; value: string }>()
+    for (const f of fields) {
+      if (!f.name || !f.value) continue
+      byName.set(f.name.toLowerCase(), f)
+    }
+    return [...byName.values()]
+  }, [results])
+
+  // Sync exact eBay values into listing state (publish payload source of truth).
+  useEffect(() => {
+    if (!onListingChange || !results) return
+
+    const optionsByName = new Map<string, string[]>()
+    for (const field of requiredFields) {
+      if (field.allowedValues?.length) {
+        optionsByName.set(field.name.toLowerCase(), field.allowedValues)
+      }
+    }
+
+    const fromResolved = resolvedFields
+    const fromSuggested = requiredFields
+      .filter((f) => f.suggestedValue)
+      .map((f) => ({ name: f.name, value: f.suggestedValue! }))
+
+    // Also preselect normalized matches of current AI wording for missing dropdowns.
+    const fromNormalized = requiredFields.flatMap((f) => {
+      const options = f.allowedValues || []
+      if (options.length === 0) return []
+      const target = mapAspectToListingField(f.name)
+      const raw =
+        target === "extras"
+          ? listing.specifics.extras?.[f.name] || ""
+          : ((listing.specifics[target] as string | undefined) ?? "")
+      const exact = resolveSelectValue(f.name, raw, options, f.suggestedValue)
+      return exact ? [{ name: f.name, value: exact }] : []
+    })
+
+    const merged = [...fromResolved, ...fromSuggested, ...fromNormalized]
+    if (merged.length === 0) return
+    const next = applyExactAspectsToListing(listing, merged, optionsByName)
+    if (next !== listing) onListingChange(next)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-apply when publish results change
+  }, [results, onListingChange])
 
   const loadConnections = useCallback(async () => {
     setLoadingConnections(true)
@@ -109,26 +238,26 @@ export function OneClickPublishBar({
   }
 
   function readAspectValue(name: string) {
+    // Prefer Taxonomy-named extras (exact eBay value) when present.
+    const fromExtras = listing.specifics.extras?.[name]
+    if (fromExtras?.trim()) return fromExtras
     const target = mapAspectToListingField(name)
-    if (target === "extras") {
-      return listing.specifics.extras?.[name] ?? ""
-    }
+    if (target === "extras") return ""
     return (listing.specifics[target] as string | undefined) ?? ""
   }
 
   function writeAspectValue(name: string, value: string) {
     if (!onListingChange) return
+    // Manual selection always wins — store exact eBay option under extras + mapped field.
     const target = mapAspectToListingField(name)
+    const extras = {
+      ...(listing.specifics.extras || {}),
+      [name]: value,
+    }
     if (target === "extras") {
       onListingChange({
         ...listing,
-        specifics: {
-          ...listing.specifics,
-          extras: {
-            ...(listing.specifics.extras || {}),
-            [name]: value,
-          },
-        },
+        specifics: { ...listing.specifics, extras },
         updatedAt: new Date().toISOString(),
       })
       return
@@ -138,6 +267,7 @@ export function OneClickPublishBar({
       specifics: {
         ...listing.specifics,
         [target]: value,
+        extras,
       },
       updatedAt: new Date().toISOString(),
     })
@@ -276,13 +406,23 @@ export function OneClickPublishBar({
           <div>
             <h3 className="text-sm font-semibold">Required eBay item specifics</h3>
             <p className="text-xs text-muted-foreground">
-              Fill these fields for the selected category, then publish again.
+              Values must match eBay&apos;s exact options for this category. Preselected
+              matches use those exact values — then publish again.
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             {requiredFields.map((field) => {
-              const value = readAspectValue(field.name)
               const options = field.allowedValues || []
+              const raw = readAspectValue(field.name)
+              const value =
+                options.length > 0
+                  ? resolveSelectValue(
+                      field.name,
+                      raw,
+                      options,
+                      field.suggestedValue
+                    )
+                  : raw
               return (
                 <div key={field.name} className="space-y-1.5">
                   <Label htmlFor={`ebay-aspect-${field.name}`}>

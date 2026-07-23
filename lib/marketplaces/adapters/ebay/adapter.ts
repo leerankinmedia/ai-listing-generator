@@ -155,13 +155,13 @@ export const ebayAdapter: MarketplaceAdapter = {
       withLocation.accessToken,
       categoryId
     )
-    const { aspects, missingRequired } = applyRequiredEbayAspects(
+    const { aspects, missingRequired, resolvedFields } = applyRequiredEbayAspects(
       listing,
       taxonomyAspects,
       inventoryItem.product.aspects
     )
     if (missingRequired.length > 0) {
-      throw missingAspectsError(missingRequired)
+      throw missingAspectsError(missingRequired, resolvedFields)
     }
     inventoryItem.product.aspects = aspects
 

@@ -12,6 +12,11 @@ export class MarketplaceError extends Error {
     requiredFields?: Array<{
       name: string
       allowedValues?: string[]
+      suggestedValue?: string
+    }>
+    resolvedFields?: Array<{
+      name: string
+      value: string
     }>
   }
   constructor(

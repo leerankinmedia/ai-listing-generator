@@ -102,6 +102,10 @@ export async function publishListingOneClick(
           error instanceof MarketplaceError
             ? error.details?.requiredFields
             : undefined,
+        resolvedFields:
+          error instanceof MarketplaceError
+            ? error.details?.resolvedFields
+            : undefined,
       })
     }
   }

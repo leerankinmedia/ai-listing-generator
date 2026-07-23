@@ -2,16 +2,10 @@ import type { Listing } from "@/lib/types"
 import { ebayApiBase } from "@/lib/marketplaces/adapters/ebay/oauth"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 
-function requirePolicyEnv(name: string) {
-  const value = process.env[name]
-  if (!value) {
-    throw new MarketplaceError(
-      `${name} is required to publish to eBay (Business Policies).`,
-      "ebay_policy_missing",
-      400
-    )
-  }
-  return value
+export type EbayFetchInit = RequestInit & {
+  contentLanguage?: string
+  /** TEMP: labels which publish step made this call for logs + UI errors. */
+  step?: string
 }
 
 export function mapListingToEbayInventory(listing: Listing) {
@@ -28,6 +22,9 @@ export function mapListingToEbayInventory(listing: Listing) {
   if (listing.specifics.gender) {
     aspects.Department = [listing.specifics.gender]
   }
+  // Clothing category defaults often require Brand/Size; provide safe fallbacks.
+  if (!aspects.Brand) aspects.Brand = ["Unbranded"]
+  if (!aspects.Size) aspects.Size = ["One Size"]
 
   return {
     sku,
@@ -87,7 +84,12 @@ function mapCondition(condition?: string) {
 export function mapListingToEbayOffer(
   listing: Listing,
   sku: string,
-  merchantLocationKey: string
+  merchantLocationKey: string,
+  policies: {
+    fulfillmentPolicyId: string
+    paymentPolicyId: string
+    returnPolicyId: string
+  }
 ) {
   const categoryId = process.env.EBAY_DEFAULT_CATEGORY_ID || "15724"
   const marketplaceId = process.env.EBAY_MARKETPLACE_ID || "EBAY_US"
@@ -98,18 +100,30 @@ export function mapListingToEbayOffer(
       400
     )
   }
+  if (
+    !policies.fulfillmentPolicyId ||
+    !policies.paymentPolicyId ||
+    !policies.returnPolicyId
+  ) {
+    throw new MarketplaceError(
+      "Valid eBay Business Policy IDs are required to publish.",
+      "ebay_policy_missing",
+      400
+    )
+  }
 
   return {
     sku,
     marketplaceId,
-    format: "FIXED_PRICE",
+    format: "FIXED_PRICE" as const,
+    listingDuration: "GTC",
     availableQuantity: 1,
     categoryId,
     listingDescription: listing.description,
     listingPolicies: {
-      fulfillmentPolicyId: requirePolicyEnv("EBAY_FULFILLMENT_POLICY_ID"),
-      paymentPolicyId: requirePolicyEnv("EBAY_PAYMENT_POLICY_ID"),
-      returnPolicyId: requirePolicyEnv("EBAY_RETURN_POLICY_ID"),
+      fulfillmentPolicyId: policies.fulfillmentPolicyId,
+      paymentPolicyId: policies.paymentPolicyId,
+      returnPolicyId: policies.returnPolicyId,
     },
     merchantLocationKey,
     pricingSummary: {
@@ -149,7 +163,6 @@ function sanitizeEbayText(value: string | undefined, maxLen = 400): string | und
       /(access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization)\s*[:=]\s*["']?[^"'&\s]+/gi,
       "$1=[REDACTED]"
     )
-    // Avoid dumping street-level address fragments if eBay embeds them in messages.
     .replace(
       /\b\d{1,6}\s+[A-Za-z0-9.'#-]+(?:\s+[A-Za-z0-9.'#-]+){0,5}\s+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Lane|Ln|Way|Dr|Drive)\b/gi,
       "[ADDRESS REDACTED]"
@@ -196,9 +209,14 @@ function extractEbayErrorDetails(json: unknown): EbayErrorDetail[] {
   return []
 }
 
-function formatEbayUserMessage(errors: EbayErrorDetail[], status: number) {
+function formatEbayUserMessage(
+  errors: EbayErrorDetail[],
+  status: number,
+  step?: string
+) {
   const first = errors[0]
-  if (!first) return `eBay API error (${status})`
+  const stepPrefix = step ? `[${step}] ` : ""
+  if (!first) return `${stepPrefix}eBay API error (${status})`
 
   const shortMsg = sanitizeEbayText(first.message, 240)
   const longMsg = sanitizeEbayText(first.longMessage, 400)
@@ -213,28 +231,26 @@ function formatEbayUserMessage(errors: EbayErrorDetail[], status: number) {
   if (first.domain) meta.push(`domain=${first.domain}`)
   if (first.category) meta.push(`category=${first.category}`)
 
-  // When eBay only returns the useless "System error", surface longMessage + ids.
-  if (isGenericEbayMessage(shortMsg) && longMsg && longMsg !== preferred) {
-    return meta.length > 0 ? `${longMsg} (${meta.join(", ")})` : longMsg
-  }
-
-  return meta.length > 0 ? `${preferred} (${meta.join(", ")})` : preferred
+  const body =
+    meta.length > 0 ? `${preferred} (${meta.join(", ")})` : preferred
+  return `${stepPrefix}${body}`
 }
 
 /**
- * TEMP: safe Inventory API response logging (no tokens, secrets, or full addresses).
- * Logs HTTP status plus eBay error fields on every Inventory call used during publish.
+ * TEMP: safe Inventory/Account API response logging (no tokens, secrets, or full addresses).
  */
 function logEbayInventoryResponse(opts: {
   method: string
   path: string
   status: number
   ok: boolean
+  step?: string
   errors: EbayErrorDetail[]
 }) {
   console.info("[ebay/inventory] TEMP response", {
+    step: opts.step || null,
     method: opts.method,
-    path: opts.path.split("?")[0], // drop query values; keep resource path only
+    path: opts.path.split("?")[0],
     status: opts.status,
     ok: opts.ok,
     errors: opts.errors.map((err) => ({
@@ -250,20 +266,20 @@ function logEbayInventoryResponse(opts: {
 export async function ebayFetchResult(
   path: string,
   accessToken: string,
-  init?: RequestInit & { contentLanguage?: string }
+  init?: EbayFetchInit
 ): Promise<{ status: number; data: unknown }> {
-  const headers = new Headers(init?.headers)
+  const { contentLanguage, step, ...fetchInit } = init || {}
+  const headers = new Headers(fetchInit.headers)
   headers.set("Authorization", `Bearer ${accessToken}`)
   headers.set("Content-Type", "application/json")
   headers.set("Accept", "application/json")
-  // eBay Sell APIs require a valid marketplace locale (e.g. en-US for EBAY_US).
-  const locale = init?.contentLanguage || "en-US"
+  const locale = contentLanguage || "en-US"
   headers.set("Content-Language", locale)
   headers.set("Accept-Language", locale)
 
-  const method = (init?.method || "GET").toUpperCase()
+  const method = (fetchInit.method || "GET").toUpperCase()
   const response = await fetch(`${ebayApiBase()}${path}`, {
-    ...init,
+    ...fetchInit,
     headers,
   })
 
@@ -272,7 +288,6 @@ export async function ebayFetchResult(
   try {
     json = text ? JSON.parse(text) : null
   } catch {
-    // Do not retain raw body text in logs (may include address payloads).
     json = text ? { parseError: true } : null
   }
 
@@ -282,12 +297,13 @@ export async function ebayFetchResult(
     path,
     status: response.status,
     ok: response.ok,
+    step,
     errors,
   })
 
   if (!response.ok) {
     throw new MarketplaceError(
-      formatEbayUserMessage(errors, response.status),
+      formatEbayUserMessage(errors, response.status, step),
       "ebay_api_error",
       response.status
     )
@@ -299,7 +315,7 @@ export async function ebayFetchResult(
 export async function ebayFetch(
   path: string,
   accessToken: string,
-  init?: RequestInit & { contentLanguage?: string }
+  init?: EbayFetchInit
 ) {
   const result = await ebayFetchResult(path, accessToken, init)
   return result.data

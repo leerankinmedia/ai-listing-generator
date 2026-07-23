@@ -14,6 +14,14 @@ type EbayInventoryLocation = {
   name?: string
   merchantLocationStatus?: string
   locationTypes?: string[]
+  location?: {
+    address?: {
+      postalCode?: string
+      country?: string
+      city?: string
+      stateOrProvince?: string
+    }
+  }
 }
 
 type EbayInventoryLocationsResponse = {
@@ -50,7 +58,7 @@ async function listInventoryLocations(accessToken: string) {
   const payload = (await ebayFetch(
     "/sell/inventory/v1/location?limit=100",
     accessToken,
-    { method: "GET" }
+    { method: "GET", step: "listLocations" }
   )) as EbayInventoryLocationsResponse | null
 
   const locations = payload?.locations ?? []
@@ -69,7 +77,7 @@ async function listInventoryLocations(accessToken: string) {
 
 /**
  * GET /location/{key} — confirms the key exists on eBay and returns status.
- * Does not log address fields.
+ * Does not log full address fields; only whether postalCode/country are present.
  */
 async function getInventoryLocation(
   accessToken: string,
@@ -79,10 +87,11 @@ async function getInventoryLocation(
     const { status, data } = await ebayFetchResult(
       `/sell/inventory/v1/location/${encodeURIComponent(merchantLocationKey)}`,
       accessToken,
-      { method: "GET" }
+      { method: "GET", step: "getLocation" }
     )
     const location = (data || {}) as EbayInventoryLocation
     const returnedKey = location.merchantLocationKey || merchantLocationKey
+    const address = location.location?.address
     logLocationSafe("get-location response", {
       httpStatus: status,
       requestedKey: merchantLocationKey,
@@ -90,6 +99,11 @@ async function getInventoryLocation(
       merchantLocationStatus: location.merchantLocationStatus || "UNKNOWN",
       locationTypes: (location.locationTypes || []).join(",") || undefined,
       keyMatch: returnedKey === merchantLocationKey,
+      hasPostalCode: Boolean(address?.postalCode),
+      hasCountry: Boolean(address?.country),
+      country: address?.country || undefined,
+      // Never log street/city/full address — postal presence only.
+      postalCodePresent: Boolean(address?.postalCode),
     })
     return {
       ...location,
@@ -114,7 +128,7 @@ async function enableInventoryLocation(
   const { status } = await ebayFetchResult(
     `/sell/inventory/v1/location/${encodeURIComponent(merchantLocationKey)}/enable`,
     accessToken,
-    { method: "POST", body: "{}" }
+    { method: "POST", body: "{}", step: "enableLocation" }
   )
   logLocationSafe("enable-location response", {
     httpStatus: status,
@@ -126,18 +140,29 @@ async function createInventoryLocation(
   accessToken: string,
   merchantLocationKey: string
 ) {
+  const address = sandboxWarehouseAddress()
+  logLocationSafe("create-location request address fields", {
+    merchantLocationKey,
+    hasPostalCode: Boolean(address.postalCode),
+    hasCountry: Boolean(address.country),
+    country: address.country,
+    // Do not log city/postalCode values beyond country flag needs; postal presence only.
+    postalCodePresent: Boolean(address.postalCode),
+  })
+
   // POST returns 204 No Content on success; the path key is what eBay stores.
   const { status } = await ebayFetchResult(
     `/sell/inventory/v1/location/${encodeURIComponent(merchantLocationKey)}`,
     accessToken,
     {
       method: "POST",
+      step: "createLocation",
       body: JSON.stringify({
         name: "ListWise Sandbox Warehouse",
         locationTypes: ["WAREHOUSE"],
         // Omit merchantLocationStatus — eBay defaults new locations to ENABLED.
         location: {
-          address: sandboxWarehouseAddress(),
+          address,
         },
       }),
     }
@@ -159,9 +184,14 @@ async function createInventoryLocation(
   }
 }
 
+function locationHasRequiredAddress(location: EbayInventoryLocation) {
+  const address = location.location?.address
+  return Boolean(address?.postalCode && address?.country)
+}
+
 /**
  * Verify a candidate key via GET. Enable if disabled. Returns the key eBay
- * returned (must match) only when ENABLED.
+ * returned (must match) only when ENABLED and address has postalCode+country.
  */
 async function resolveEnabledLocationKey(
   accessToken: string,
@@ -185,6 +215,24 @@ async function resolveEnabledLocationKey(
       return null
     }
   }
+
+  if (!locationHasRequiredAddress(location)) {
+    logLocationSafe("location missing postalCode or country", {
+      merchantLocationKey: candidateKey,
+      merchantLocationStatus: location.merchantLocationStatus || "UNKNOWN",
+      hasPostalCode: Boolean(location.location?.address?.postalCode),
+      hasCountry: Boolean(location.location?.address?.country),
+    })
+    return null
+  }
+
+  logLocationSafe("verified ENABLED location for offer", {
+    merchantLocationKey: candidateKey,
+    merchantLocationStatus: location.merchantLocationStatus || "ENABLED",
+    hasPostalCode: true,
+    hasCountry: true,
+    country: location.location?.address?.country,
+  })
 
   return location.merchantLocationKey
 }

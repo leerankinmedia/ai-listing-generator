@@ -13,7 +13,7 @@ import {
 } from "@/lib/marketplaces/adapters/ebay/aspects"
 import { ensureEbayMerchantLocationKey } from "@/lib/marketplaces/adapters/ebay/location"
 import { resolveEbayImageUrls } from "@/lib/marketplaces/adapters/ebay/media"
-import { isEbayConfigured, refreshEbayToken } from "@/lib/marketplaces/adapters/ebay/oauth"
+import { isEbayConfigured, refreshEbayToken, ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
 import { ensureEbayBusinessPolicyIds } from "@/lib/marketplaces/adapters/ebay/policies"
 import { resolveEbayLeafCategoryId } from "@/lib/marketplaces/adapters/ebay/taxonomy"
 import type { MarketplaceAdapter, PublishResult } from "@/lib/marketplaces/adapters/types"

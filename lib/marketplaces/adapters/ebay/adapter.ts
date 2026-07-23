@@ -6,6 +6,7 @@ import {
   mapListingToEbayInventory,
   mapListingToEbayOffer,
 } from "@/lib/marketplaces/adapters/ebay/client"
+import { ensureEbayMerchantLocationKey } from "@/lib/marketplaces/adapters/ebay/location"
 import { resolveEbayImageUrls } from "@/lib/marketplaces/adapters/ebay/media"
 import { isEbayConfigured, refreshEbayToken } from "@/lib/marketplaces/adapters/ebay/oauth"
 import type { MarketplaceAdapter, PublishResult } from "@/lib/marketplaces/adapters/types"
@@ -48,7 +49,6 @@ export const ebayAdapter: MarketplaceAdapter = {
     "EBAY_FULFILLMENT_POLICY_ID",
     "EBAY_PAYMENT_POLICY_ID",
     "EBAY_RETURN_POLICY_ID",
-    "EBAY_MERCHANT_LOCATION_KEY",
     "CONNECTIONS_SECRET",
   ],
   async publish(listing: Listing, connection: StoredMarketplaceConnection): Promise<PublishResult> {
@@ -61,6 +61,8 @@ export const ebayAdapter: MarketplaceAdapter = {
     }
 
     const auth = await withFreshToken(connection)
+    const { merchantLocationKey, connection: withLocation } =
+      await ensureEbayMerchantLocationKey(auth.accessToken, auth)
     const sourceUrls = listing.images.map((img) => img.url).filter(Boolean)
     if (sourceUrls.length === 0) {
       throw new MarketplaceError(
@@ -69,17 +71,21 @@ export const ebayAdapter: MarketplaceAdapter = {
         400
       )
     }
-    const imageUrls = await resolveEbayImageUrls(auth.accessToken, sourceUrls)
+    const imageUrls = await resolveEbayImageUrls(withLocation.accessToken, sourceUrls)
     const { sku, inventoryItem } = mapListingToEbayInventory(listing)
     attachEbayImageUrls(inventoryItem, imageUrls)
 
-    await ebayFetch(`/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, auth.accessToken, {
-      method: "PUT",
-      body: JSON.stringify(inventoryItem),
-    })
+    await ebayFetch(
+      `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+      withLocation.accessToken,
+      {
+        method: "PUT",
+        body: JSON.stringify(inventoryItem),
+      }
+    )
 
-    const offer = mapListingToEbayOffer(listing, sku)
-    const created = (await ebayFetch(`/sell/inventory/v1/offer`, auth.accessToken, {
+    const offer = mapListingToEbayOffer(listing, sku, merchantLocationKey)
+    const created = (await ebayFetch(`/sell/inventory/v1/offer`, withLocation.accessToken, {
       method: "POST",
       body: JSON.stringify(offer),
     })) as { offerId?: string }
@@ -90,7 +96,7 @@ export const ebayAdapter: MarketplaceAdapter = {
 
     const published = (await ebayFetch(
       `/sell/inventory/v1/offer/${created.offerId}/publish`,
-      auth.accessToken,
+      withLocation.accessToken,
       { method: "POST", body: "{}" }
     )) as { listingId?: string }
 

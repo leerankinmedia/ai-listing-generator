@@ -205,17 +205,20 @@ export const ebayAdapter: MarketplaceAdapter = {
     )) as { listingId?: string }
 
     const listingId = published.listingId
-    const marketplaceId = process.env.EBAY_MARKETPLACE_ID || "EBAY_US"
+    // Item browse URL follows API/auth env (EBAY_ENV), not marketplaceId or browser host.
     const site =
-      marketplaceId === "EBAY_US" ? "https://www.ebay.com" : "https://www.ebay.com"
+      ebayEnv() === "sandbox"
+        ? "https://sandbox.ebay.com"
+        : "https://www.ebay.com"
+    const itemUrl = listingId ? `${site}/itm/${listingId}` : undefined
 
     return {
       ok: true,
-      externalUrl: listingId ? `${site}/itm/${listingId}` : undefined,
+      externalUrl: itemUrl,
       listingRef: {
         marketplaceId: "ebay",
         externalId: listingId || offerId,
-        url: listingId ? `${site}/itm/${listingId}` : undefined,
+        url: itemUrl,
         status: "listed",
         price: listing.price,
         lastSyncedAt: new Date().toISOString(),

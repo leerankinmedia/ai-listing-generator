@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import {
   buildEbayAuthorizeUrl,
+  ebayClientId,
   isEbayConfigured,
 } from "@/lib/marketplaces/adapters/ebay/oauth"
 import {
@@ -94,16 +95,24 @@ export async function GET(request: NextRequest) {
     attachOAuthStateCookie(response, cookieValue)
 
     const location = response.headers.get("Location") || ""
-    console.info("[ebay/oauth] start redirect to eBay OAuth", {
-      host,
-      appOrigin: PRODUCTION_APP_URL,
-      flow: "oauth2_authorization_code",
-      builder: "ebay-oauth-nodejs-client",
-      locationMatchesAuthorize: location === authorizeUrl,
-      locationParamNames: Array.from(
-        new URL(location).searchParams.keys()
+    const loc = new URL(location)
+    const locQuery = location.split("?")[1] || ""
+    const locScope = locQuery.match(/(?:^|&)scope=([^&]*)/)
+    console.info("[ebay/oauth] TEMP Location header consent URL (client_id redacted)", {
+      temporary: true,
+      purpose: "confirm browser redirect matches generated authorize URL",
+      completeAuthorizeUrlRedacted: location.replace(
+        /client_id=[^&]+/,
+        `client_id=${location.includes("client_id=") ? "***" + (ebayClientId().slice(-6) || "") : "(missing)"}`
       ),
-      locationEndpoint: `${new URL(location).origin}${new URL(location).pathname}`,
+      endpoint: `${loc.origin}${loc.pathname}`,
+      redirect_uri: loc.searchParams.get("redirect_uri"),
+      response_type: loc.searchParams.get("response_type"),
+      scope_exact: locScope ? locScope[1] : null,
+      state_present: Boolean(loc.searchParams.get("state")),
+      state_length: loc.searchParams.get("state")?.length ?? 0,
+      param_names: Array.from(loc.searchParams.keys()),
+      locationMatchesAuthorize: location === authorizeUrl,
     })
 
     return response

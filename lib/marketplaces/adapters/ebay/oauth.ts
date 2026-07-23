@@ -206,6 +206,28 @@ export function buildEbayAuthorizeUrl(state: string) {
   const check = inspectAuthorizeUrl(url, state)
   console.info("[ebay/oauth] start authorize check", check)
 
+  // TEMPORARY: full consent URL for eBay support (Client ID redacted only; no secrets).
+  const rawQuery = url.split("?")[1] || ""
+  const rawScopeMatch = rawQuery.match(/(?:^|&)scope=([^&]*)/)
+  const rawScopeExact = rawScopeMatch ? decodeURIComponent(rawScopeMatch[1].replace(/\+/g, "%20")) : ""
+  // Prefer the exact scope substring as it appears in the authorize URL (keep %20).
+  const scopeExactInUrl = rawScopeMatch ? rawScopeMatch[1] : ""
+  console.info("[ebay/oauth] TEMP consent request URL (client_id redacted)", {
+    temporary: true,
+    purpose: "eBay support Sandbox consent URL inspection",
+    completeAuthorizeUrlRedacted: check.authorizeUrlRedacted,
+    endpoint: check.authorizationEndpoint,
+    redirect_uri: check.redirectUri,
+    response_type: check.responseType,
+    scope_exact: scopeExactInUrl,
+    scope_decoded: rawScopeExact,
+    state_present: check.statePresent,
+    state_length: check.stateLength,
+    param_names: check.paramNames,
+    // Do not log client_secret, cookies, or full client_id.
+    client_id: check.clientIdRedacted,
+  })
+
   if (!check.authorizationEndpointOk) {
     throw new Error(
       `Authorize endpoint mismatch. Expected ${ebayEnv() === "sandbox" ? SANDBOX_AUTHORIZE : PRODUCTION_AUTHORIZE}.`

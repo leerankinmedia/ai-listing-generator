@@ -89,14 +89,21 @@ export function mapListingToEbayOffer(
     fulfillmentPolicyId: string
     paymentPolicyId: string
     returnPolicyId: string
-  }
+  },
+  categoryId: string
 ) {
-  const categoryId = process.env.EBAY_DEFAULT_CATEGORY_ID || "15724"
   const marketplaceId = process.env.EBAY_MARKETPLACE_ID || "EBAY_US"
   if (!merchantLocationKey) {
     throw new MarketplaceError(
       "merchantLocationKey is required to publish to eBay.",
       "ebay_location_missing",
+      400
+    )
+  }
+  if (!categoryId?.trim()) {
+    throw new MarketplaceError(
+      "Could not determine an eBay category",
+      "ebay_category_undetermined",
       400
     )
   }
@@ -118,7 +125,7 @@ export function mapListingToEbayOffer(
     format: "FIXED_PRICE" as const,
     listingDuration: "GTC",
     availableQuantity: 1,
-    categoryId,
+    categoryId: categoryId.trim(),
     listingDescription: listing.description,
     listingPolicies: {
       fulfillmentPolicyId: policies.fulfillmentPolicyId,

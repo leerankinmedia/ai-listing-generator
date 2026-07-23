@@ -10,6 +10,7 @@ import { ensureEbayMerchantLocationKey } from "@/lib/marketplaces/adapters/ebay/
 import { resolveEbayImageUrls } from "@/lib/marketplaces/adapters/ebay/media"
 import { isEbayConfigured, refreshEbayToken } from "@/lib/marketplaces/adapters/ebay/oauth"
 import { ensureEbayBusinessPolicyIds } from "@/lib/marketplaces/adapters/ebay/policies"
+import { resolveEbayLeafCategoryId } from "@/lib/marketplaces/adapters/ebay/taxonomy"
 import type { MarketplaceAdapter, PublishResult } from "@/lib/marketplaces/adapters/types"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { saveConnection } from "@/lib/marketplaces/connections/store"
@@ -150,21 +151,34 @@ export const ebayAdapter: MarketplaceAdapter = {
       }
     )
 
-    const offer = mapListingToEbayOffer(listing, sku, merchantLocationKey, policies)
+    // 4) Leaf category from Taxonomy suggestions (never a hardcoded parent ID)
+    const { categoryId } = await resolveEbayLeafCategoryId(
+      withLocation.accessToken,
+      listing.title
+    )
+
+    const offer = mapListingToEbayOffer(
+      listing,
+      sku,
+      merchantLocationKey,
+      policies,
+      categoryId
+    )
     console.info("[ebay/location] TEMP offer request location key", {
       step: "createOffer",
       merchantLocationKey,
       sku,
+      categoryId,
       fulfillmentPolicyId: policies.fulfillmentPolicyId,
       paymentPolicyId: policies.paymentPolicyId,
       returnPolicyId: policies.returnPolicyId,
       sameKeyAsSaved: merchantLocationKey === withLocation.meta?.merchantLocationKey,
     })
 
-    // 4) Create (or update existing) offer with the verified location key
+    // 5) Create (or update existing) offer with the verified location key
     const offerId = await resolveOfferId(withLocation.accessToken, sku, offer)
 
-    // 5) Publish offer
+    // 6) Publish offer
     const published = (await ebayFetch(
       `/sell/inventory/v1/offer/${offerId}/publish`,
       withLocation.accessToken,

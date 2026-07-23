@@ -120,7 +120,10 @@ export async function ebayFetch(
   headers.set("Authorization", `Bearer ${accessToken}`)
   headers.set("Content-Type", "application/json")
   headers.set("Accept", "application/json")
-  headers.set("Content-Language", init?.contentLanguage || "en-US")
+  // eBay Sell APIs require a valid marketplace locale (e.g. en-US for EBAY_US).
+  const locale = init?.contentLanguage || "en-US"
+  headers.set("Content-Language", locale)
+  headers.set("Accept-Language", locale)
 
   const response = await fetch(`${ebayApiBase()}${path}`, {
     ...init,

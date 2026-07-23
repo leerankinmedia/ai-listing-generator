@@ -98,12 +98,15 @@ export async function GET(request: NextRequest) {
     const loc = new URL(location)
     const locQuery = location.split("?")[1] || ""
     const locScope = locQuery.match(/(?:^|&)scope=([^&]*)/)
+    const clientId = ebayClientId()
+    const clientIdRedacted =
+      clientId.length <= 6 ? `***${clientId}` : `***${clientId.slice(-6)}`
     console.info("[ebay/oauth] TEMP Location header consent URL (client_id redacted)", {
       temporary: true,
       purpose: "confirm browser redirect matches generated authorize URL",
       completeAuthorizeUrlRedacted: location.replace(
-        /client_id=[^&]+/,
-        `client_id=${location.includes("client_id=") ? "***" + (ebayClientId().slice(-6) || "") : "(missing)"}`
+        `client_id=${clientId}`,
+        `client_id=${clientIdRedacted}`
       ),
       endpoint: `${loc.origin}${loc.pathname}`,
       redirect_uri: loc.searchParams.get("redirect_uri"),

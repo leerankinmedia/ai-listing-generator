@@ -197,10 +197,13 @@ export function buildEbayAuthorizeUrl(state: string) {
   }
 
   const client = createEbayAuthClient()
+  // Developer Portal / official client use prompt=login so Sandbox always
+  // completes a fresh authorization-code grant and returns ?code=&state=
+  // on the Auth Accepted URL (without it, eBay may bounce with no OAuth params).
   const url = client.generateUserAuthorizationUrl(
     envName,
     [...EBAY_SCOPE_LIST],
-    { state }
+    { state, prompt: "login" }
   )
 
   const check = inspectAuthorizeUrl(url, state)
@@ -221,6 +224,7 @@ export function buildEbayAuthorizeUrl(state: string) {
     response_type: check.responseType,
     scope_exact: scopeExactInUrl,
     scope_decoded: rawScopeExact,
+    prompt: new URL(url).searchParams.get("prompt"),
     state_present: check.statePresent,
     state_length: check.stateLength,
     param_names: check.paramNames,

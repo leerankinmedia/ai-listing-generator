@@ -150,11 +150,46 @@ export const ebayAdapter: MarketplaceAdapter = {
     const imageUrls = await resolveEbayImageUrls(withLocation.accessToken, sourceUrls)
     const { sku, inventoryItem } = mapListingToEbayInventory(listing)
     attachEbayImageUrls(inventoryItem, imageUrls)
-    console.info("[ebay/images] TEMP createOrReplaceInventoryItem imageUrls", {
+
+    // Guard: payload must contain every URL exactly once, index 0 present.
+    const payloadImages = inventoryItem.product.imageUrls
+    if (!payloadImages[0]) {
+      throw new MarketplaceError(
+        "The first listing photo is missing from the eBay publish payload.",
+        "ebay_image_first_missing",
+        400
+      )
+    }
+    if (payloadImages.length !== imageUrls.length) {
+      throw new MarketplaceError(
+        "eBay image payload length mismatch after attach — publish aborted.",
+        "ebay_image_payload_mismatch",
+        500
+      )
+    }
+    if (new Set(payloadImages).size !== payloadImages.length) {
+      throw new MarketplaceError(
+        "eBay image payload contained duplicate URLs — publish aborted.",
+        "ebay_image_payload_duplicate",
+        500
+      )
+    }
+    console.info("[ebay/images] TEMP createOrReplaceInventoryItem product.imageUrls", {
       sku,
-      count: inventoryItem.product.imageUrls.length,
-      orderPreserved: inventoryItem.product.imageUrls.length === imageUrls.length,
-      firstHttps: inventoryItem.product.imageUrls[0]?.startsWith("https://") || false,
+      count: payloadImages.length,
+      uniqueCount: new Set(payloadImages).size,
+      index0EqualsResolved0: payloadImages[0] === imageUrls[0],
+      index1EqualsResolved1:
+        payloadImages.length > 1 ? payloadImages[1] === imageUrls[1] : null,
+      // Redacted path only — no tokens.
+      urls: payloadImages.map((url, index) => {
+        try {
+          const u = new URL(url)
+          return { index, origin: u.origin, path: u.pathname.slice(0, 96) }
+        } catch {
+          return { index, origin: "invalid", path: "" }
+        }
+      }),
     })
 
     // 3) Leaf category from Taxonomy suggestions (never a hardcoded parent ID)

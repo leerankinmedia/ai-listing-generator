@@ -61,7 +61,8 @@ export function attachEbayImageUrls(
       400
     )
   }
-  inventoryItem.product.imageUrls = imageUrls.slice(0, 24)
+  // Exact verified array — no transformations, no dropping index 0.
+  inventoryItem.product.imageUrls = [...imageUrls]
   return inventoryItem
 }
 

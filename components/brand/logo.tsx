@@ -1,6 +1,22 @@
 import Link from "next/link"
 import { cn } from "@/lib/utils"
 
+/**
+ * Force internal logo/nav targets to same-origin relative paths.
+ * Never navigate to absolute env / production hosts (breaks preview sessions).
+ */
+export function toRelativeAppHref(href: string, fallback = "/"): string {
+  const raw = href?.trim() || fallback
+  if (raw.startsWith("/") && !raw.startsWith("//")) return raw
+  try {
+    const url = new URL(raw)
+    const path = `${url.pathname}${url.search}${url.hash}` || fallback
+    return path.startsWith("/") ? path : `/${path}`
+  } catch {
+    return raw.startsWith("/") ? raw : fallback
+  }
+}
+
 export function Logo({
   className,
   href = "/",
@@ -10,9 +26,11 @@ export function Logo({
   href?: string
   markOnly?: boolean
 }) {
+  const relativeHref = toRelativeAppHref(href, "/")
+
   return (
     <Link
-      href={href}
+      href={relativeHref}
       className={cn(
         "inline-flex items-center gap-2.5 text-foreground transition-opacity hover:opacity-90",
         className

@@ -1,6 +1,10 @@
 import type { Listing, ListingImage } from "@/lib/types"
 import { isSupabaseConfigured, createClient } from "@/lib/supabase/client"
 
+type SupabaseLike = {
+  from: (table: string) => any
+}
+
 type ListingRow = {
   id: string
   user_id: string
@@ -71,8 +75,10 @@ function listingToRow(listing: Listing): Omit<ListingRow, "created_at" | "update
   }
 }
 
-async function syncListingPhotos(listing: Listing) {
-  const supabase = createClient()
+async function syncListingPhotosWithClient(
+  supabase: SupabaseLike,
+  listing: Listing
+) {
   const { error: deleteError } = await supabase
     .from("listing_photos")
     .delete()
@@ -102,8 +108,14 @@ async function syncListingPhotos(listing: Listing) {
   if (insertError) throw insertError
 }
 
-async function syncInventoryItem(listing: Listing) {
-  const supabase = createClient()
+async function syncListingPhotos(listing: Listing) {
+  await syncListingPhotosWithClient(createClient(), listing)
+}
+
+async function syncInventoryItemWithClient(
+  supabase: SupabaseLike,
+  listing: Listing
+) {
   const sku =
     listing.id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 50) || listing.id
   const { data: existing, error: selectError } = await supabase
@@ -132,6 +144,11 @@ async function syncInventoryItem(listing: Listing) {
   if (insertError) throw insertError
 }
 
+async function syncInventoryItem(listing: Listing) {
+  await syncInventoryItemWithClient(createClient(), listing)
+}
+
+/** All listings for the authenticated user — every status (draft/ready/listed/…). */
 export async function listSupabaseListings(userId: string): Promise<Listing[] | null> {
   if (!isSupabaseConfigured()) return null
   const supabase = createClient()
@@ -152,17 +169,23 @@ export async function getSupabaseListing(id: string): Promise<Listing | null> {
   return data ? rowToListing(data as ListingRow) : null
 }
 
-export async function upsertSupabaseListing(listing: Listing): Promise<Listing | null> {
-  if (!isSupabaseConfigured()) return null
-  const supabase = createClient()
+async function upsertListingRow(
+  supabase: SupabaseLike,
+  listing: Listing
+): Promise<Listing> {
   const { data, error } = await supabase
     .from("listings")
-    .upsert(listingToRow(listing))
+    .upsert(listingToRow(listing), { onConflict: "id" })
     .select("*")
     .single()
   if (error) throw error
+  return rowToListing(data as ListingRow)
+}
 
-  const saved = rowToListing(data as ListingRow)
+export async function upsertSupabaseListing(listing: Listing): Promise<Listing | null> {
+  if (!isSupabaseConfigured()) return null
+  const supabase = createClient()
+  const saved = await upsertListingRow(supabase, listing)
   try {
     await syncListingPhotos(saved)
   } catch (photoError) {
@@ -170,6 +193,28 @@ export async function upsertSupabaseListing(listing: Listing): Promise<Listing |
   }
   try {
     await syncInventoryItem(saved)
+  } catch (inventoryError) {
+    console.error("[listings] inventory_items sync failed", inventoryError)
+  }
+  return saved
+}
+
+/**
+ * Server-side upsert using the request-authenticated Supabase client.
+ * Used after marketplace publish so listed items always land in the DB.
+ */
+export async function upsertSupabaseListingServer(
+  supabase: SupabaseLike,
+  listing: Listing
+): Promise<Listing> {
+  const saved = await upsertListingRow(supabase, listing)
+  try {
+    await syncListingPhotosWithClient(supabase, saved)
+  } catch (photoError) {
+    console.error("[listings] listing_photos sync failed", photoError)
+  }
+  try {
+    await syncInventoryItemWithClient(supabase, saved)
   } catch (inventoryError) {
     console.error("[listings] inventory_items sync failed", inventoryError)
   }

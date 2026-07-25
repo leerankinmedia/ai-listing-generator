@@ -17,7 +17,10 @@ import {
   type TokenUsage,
 } from "@/lib/ai/pricing"
 import { usageFromResult } from "@/lib/ai/token-usage"
-import { colorIsGrayFamily } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
+import {
+  colorIsBlackFamily,
+  colorIsGrayFamily,
+} from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import type { DetectedFieldKey, FieldConfidence } from "@/lib/types"
 
 type OpenAIClient = ReturnType<typeof createOpenAI>
@@ -71,7 +74,10 @@ Rules:
 - Confidence must reflect visual certainty (logos, tags, fabric grain, wear).
 - Call out flaws honestly: stains, pills, tears, fading, missing buttons, stretched seams, odor indicators if visible, etc.
 - Gender/department should reflect labeled/cut cues, otherwise Unisex or Unknown.
-- Category should map to eBay clothing taxonomy when possible.`
+- Category should map to eBay clothing taxonomy when possible.
+- Color: prefer detailed shade wording when visible (e.g. Dark Gray/Charcoal, Heather Gray).
+  Do not default to Black when the garment looks charcoal, slate, or dark gray — especially in
+  uneven lighting. Reserve Black for clearly jet-black fabric with no gray/charcoal evidence.`
 
 const COPY_SYSTEM = `You are ListWise Copy, an expert eBay clothing listing writer.
 Write conversion-focused, accurate eBay titles and descriptions from verified attributes and photo evidence.
@@ -171,6 +177,79 @@ function pickBest(
   }
 }
 
+function colorDetailScore(value: string): number {
+  const v = value.trim()
+  let score = 0
+  if (v.includes("/")) score += 2
+  if (/\s/.test(v)) score += 1
+  if (colorIsGrayFamily(v) && !colorIsBlackFamily(v)) score += 1
+  return score
+}
+
+/**
+ * Merge color across all uploaded photos.
+ * When black vs gray-family is uncertain, keep the detailed gray wording for
+ * review — never let a later Black vote automatically overwrite it.
+ */
+function pickBestColor(
+  fields: Array<{ value: string; confidence: number; rationale: string }>
+): FieldConfidence {
+  const known = fields.filter(
+    (f) => f.value?.trim() && f.value.trim().toLowerCase() !== "unknown"
+  )
+  if (known.length === 0) return pickBest(fields)
+
+  const grayVotes = known.filter((f) => colorIsGrayFamily(f.value))
+  const blackVotes = known.filter(
+    (f) => colorIsBlackFamily(f.value) && !colorIsGrayFamily(f.value)
+  )
+
+  const rankDetailed = (
+    votes: Array<{ value: string; confidence: number; rationale: string }>
+  ) =>
+    [...votes].sort((a, b) => {
+      const detail = colorDetailScore(b.value) - colorDetailScore(a.value)
+      if (detail !== 0) return detail
+      return b.confidence - a.confidence
+    })
+
+  // Mixed black + gray evidence → preserve detailed gray-family for review.
+  if (grayVotes.length > 0 && blackVotes.length > 0) {
+    const chosen = rankDetailed(grayVotes)[0]
+    const avgGray =
+      grayVotes.reduce((sum, v) => sum + v.confidence, 0) / grayVotes.length
+    return {
+      value: chosen.value,
+      confidence: Number(
+        Math.min(1, Math.max(chosen.confidence, avgGray)).toFixed(3)
+      ),
+      rationale: `Combined ${known.length} photos: preserved gray-family "${chosen.value}" over Black under black/gray uncertainty. ${chosen.rationale}`,
+    }
+  }
+
+  if (grayVotes.length > 0) {
+    const chosen = rankDetailed(grayVotes)[0]
+    const agreements = grayVotes.filter((f) =>
+      colorIsGrayFamily(f.value)
+    ).length
+    return {
+      value: chosen.value,
+      confidence: Number(
+        Math.min(
+          1,
+          chosen.confidence + (agreements > 1 ? 0.05 * (agreements - 1) : 0)
+        ).toFixed(3)
+      ),
+      rationale:
+        agreements > 1
+          ? `Combined ${agreements} gray-family photo detections. ${chosen.rationale}`
+          : chosen.rationale,
+    }
+  }
+
+  return pickBest(known)
+}
+
 function mergeDetections(detections: ImageDetection[]): {
   fields: Record<
     Exclude<DetectedFieldKey, "title" | "description" | "price" | "keywords">,
@@ -197,7 +276,8 @@ function mergeDetections(detections: ImageDetection[]): {
   >
 
   for (const key of keys) {
-    fields[key] = pickBest(detections.map((d) => d[key]))
+    const votes = detections.map((d) => d[key])
+    fields[key] = key === "color" ? pickBestColor(votes) : pickBest(votes)
   }
 
   const perImage = detections.map((d, index) => ({
@@ -260,7 +340,9 @@ Do not put material percentages such as "100% Cotton" in the title — keep thos
 
 Example shape: WWE WrestleMania Legends Men's XL Gray Graphic T-Shirt Wrestling Tee
 
-Verified attributes (with confidence) — leave these attribute values unchanged; only the title uses normalized color:
+Verified attributes (with confidence) — leave these attribute values unchanged.
+The title may use the normalized search color above, but must NOT rewrite specifics/fieldConfidence color
+(e.g. keep Dark Gray/Charcoal in attributes even if the title says Gray).
 ${JSON.stringify(fields, null, 2)}
 Total photos in listing: ${totalImages}. Sample photos attached for visual context.`,
     },

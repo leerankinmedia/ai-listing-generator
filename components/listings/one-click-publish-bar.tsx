@@ -12,6 +12,12 @@ import {
   matchExactEbayAspectValue,
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import { MARKETPLACES } from "@/lib/marketplaces"
+import {
+  applyPublishResultsToListing,
+  publishResultsIncludeSuccess,
+} from "@/lib/listings/publish-persist"
+import { persistListing } from "@/lib/listings/repository"
+import { useAuth } from "@/components/auth/auth-provider"
 import type { Listing, MarketplaceId, OneClickPublishResult } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -165,6 +171,7 @@ export function OneClickPublishBar({
   disabled?: boolean
   onListingChange?: (listing: Listing) => void
 }) {
+  const { user } = useAuth()
   const [publishing, setPublishing] = useState(false)
   const [results, setResults] = useState<OneClickPublishResult[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -336,7 +343,23 @@ export function OneClickPublishBar({
       })
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error || "Publish failed")
-      setResults(payload.results as OneClickPublishResult[])
+      const publishResults = payload.results as OneClickPublishResult[]
+      setResults(publishResults)
+
+      // Keep Listings page in sync: status listed + eBay id/url (no duplicates).
+      if (publishResultsIncludeSuccess(publishResults) && user) {
+        const fromServer =
+          payload.listing && typeof payload.listing === "object"
+            ? (payload.listing as Listing)
+            : applyPublishResultsToListing(listing, publishResults, user.id)
+        onListingChange?.(fromServer)
+        try {
+          const saved = await persistListing(fromServer)
+          if (saved && saved !== fromServer) onListingChange?.(saved)
+        } catch (persistError) {
+          console.error("[publish] client persist after publish failed", persistError)
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Publish failed")
     } finally {

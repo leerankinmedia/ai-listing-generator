@@ -46,7 +46,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen lg:grid lg:grid-cols-[260px_1fr]">
       <aside className="hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:flex lg:flex-col">
         <div className="flex h-16 items-center px-5">
-          <Logo className="[&_span:last-child]:text-sidebar-foreground" />
+          <Logo
+            href="/dashboard"
+            className="[&_span:last-child]:text-sidebar-foreground"
+          />
         </div>
         <div className="px-3 pb-2">
           <Link
@@ -113,7 +116,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-h-screen flex-col">
         <header className="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-border bg-background/85 px-4 backdrop-blur-xl sm:px-6 lg:h-16">
           <div className="flex items-center gap-3 lg:hidden">
-            <Logo />
+            <Logo href="/dashboard" />
           </div>
           <p className="hidden text-sm text-muted-foreground lg:block">
             Sell smarter across every marketplace.

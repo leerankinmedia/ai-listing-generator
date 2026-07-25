@@ -1,75 +1,29 @@
 import "server-only"
-import { deriveSubscriptionAccess } from "@/lib/billing/subscription-access"
-import {
-  getSubscriptionByUserId,
-  upsertSubscriptionForUser,
-} from "@/lib/billing/subscription-store"
+import { getEntitlement, type Entitlement } from "@/lib/billing/entitlement"
 
 export interface SubscriptionAccessResult {
   allowed: boolean
-  reason: "missing_user" | "no_subscription" | "inactive" | "active"
+  reason: "missing_user" | "no_subscription" | "inactive" | "active" | "admin"
   status: string | null
-  subscription: Awaited<ReturnType<typeof getSubscriptionByUserId>>
-  /** Period end safe for UI — null when no real paid Stripe subscription. */
+  subscription: Entitlement["subscription"]
   displayPeriodEnd: string | null
+  entitlement: Entitlement
 }
 
 /**
- * Server-side guard for paid tool actions (generate, publish, connect, …).
- *
- * Access is derived from real trial/paid state:
- * - valid trial (now < trial_end) → allowed (trialing)
- * - active Stripe subscription id + open period → allowed (active)
- * - expired trial / fake active without Stripe → locked (expired)
+ * Paid-tool guard — delegates entirely to getEntitlement().
  */
 export async function checkSubscriptionAccess(
   userId: string | null | undefined
 ): Promise<SubscriptionAccessResult> {
-  if (!userId) {
-    return {
-      allowed: false,
-      reason: "missing_user",
-      status: null,
-      subscription: null,
-      displayPeriodEnd: null,
-    }
-  }
-
-  const subscription = await getSubscriptionByUserId(userId)
-
-  if (!subscription) {
-    return {
-      allowed: false,
-      reason: "no_subscription",
-      status: "none",
-      subscription: null,
-      displayPeriodEnd: null,
-    }
-  }
-
-  const derived = deriveSubscriptionAccess(subscription)
-
-  if (derived.shouldPersistExpired) {
-    try {
-      await upsertSubscriptionForUser(userId, {
-        status: "canceled",
-        // Drop fabricated renewal dates when there is no real Stripe subscription.
-        current_period_end: subscription.stripe_subscription_id
-          ? subscription.current_period_end
-          : null,
-        cancel_at_period_end: false,
-      })
-    } catch (error) {
-      console.error("[billing] failed to persist expired subscription state", error)
-    }
-  }
-
+  const entitlement = await getEntitlement(userId)
   return {
-    allowed: derived.allowed,
-    reason: derived.reason,
-    status: derived.effectiveStatus,
-    subscription,
-    displayPeriodEnd: derived.displayPeriodEnd,
+    allowed: entitlement.allowed,
+    reason: entitlement.reason,
+    status: entitlement.status,
+    subscription: entitlement.subscription,
+    displayPeriodEnd: entitlement.displayPeriodEnd,
+    entitlement,
   }
 }
 
@@ -79,11 +33,13 @@ export async function assertSubscriptionAccess(
   const result = await checkSubscriptionAccess(userId)
   if (!result.allowed) {
     const error = new Error(
-      "Start your 7-day free trial to unlock this feature."
+      result.status === "expired"
+        ? "Your free trial has expired. Subscribe on the Billing page to continue."
+        : "Start your 7-day free trial to unlock this feature."
     )
     ;(error as Error & { status: number; code: string }).status = 402
     ;(error as Error & { status: number; code: string }).code =
-      "subscription_required"
+      result.status === "expired" ? "trial_expired" : "subscription_required"
     throw error
   }
   return result

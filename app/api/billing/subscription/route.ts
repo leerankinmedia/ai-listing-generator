@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
-import { isStripeBillingConfigured, statusGrantsAccess } from "@/lib/billing/config"
+import { isStripeBillingConfigured } from "@/lib/billing/config"
+import { getEntitlement } from "@/lib/billing/entitlement"
 import { getStripe } from "@/lib/billing/stripe"
 import {
   getSubscriptionByUserId,
@@ -56,13 +57,14 @@ export async function POST(request: Request) {
       )
     }
 
-    if (!statusGrantsAccess(row.status)) {
+    const entitlement = await getEntitlement(user.id)
+    if (!entitlement.allowed) {
       return NextResponse.json(
         {
           error:
             "Subscription is not trialing or active. Start a new trial or subscribe to continue.",
           code: "inactive_subscription",
-          status: row.status,
+          status: entitlement.status,
         },
         { status: 409 }
       )

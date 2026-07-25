@@ -79,6 +79,8 @@ export async function POST(request: Request) {
     const now = new Date()
     const inSevenDays = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
 
+    // Simulated rows must NEVER look like verified Stripe membership.
+    // Clear Stripe IDs so getEntitlement() cannot treat them as paid.
     const patch: {
       status: SubscriptionStatus
       cancel_at_period_end: boolean
@@ -91,25 +93,26 @@ export async function POST(request: Request) {
     } = {
       status: body.status,
       cancel_at_period_end: false,
-      stripe_customer_id: existing?.stripe_customer_id ?? null,
-      stripe_subscription_id: existing?.stripe_subscription_id ?? null,
+      stripe_customer_id: null,
+      stripe_subscription_id: null,
     }
 
     if (body.status === "trialing") {
       patch.trial_start = existing?.trial_start || now.toISOString()
       patch.trial_end = inSevenDays.toISOString()
-      patch.current_period_end = inSevenDays.toISOString()
+      patch.current_period_end = null
       patch.has_used_trial = true
     } else if (body.status === "active") {
-      patch.current_period_end = inSevenDays.toISOString()
+      // Local "active" without Stripe is intentionally non-entitling.
+      patch.current_period_end = null
       patch.has_used_trial =
         existing?.has_used_trial || Boolean(existing?.trial_start) || true
     } else if (body.status === "past_due") {
-      patch.current_period_end = existing?.current_period_end || now.toISOString()
+      patch.current_period_end = null
       patch.has_used_trial = existing?.has_used_trial ?? true
     } else {
       // canceled
-      patch.current_period_end = existing?.current_period_end || now.toISOString()
+      patch.current_period_end = null
       patch.has_used_trial = existing?.has_used_trial ?? true
     }
 

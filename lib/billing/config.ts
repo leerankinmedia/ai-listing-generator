@@ -79,15 +79,14 @@ export const ACCESS_STATUSES = new Set(["trialing", "active"] as const)
 export type AccessStatus = "trialing" | "active"
 
 /**
- * Lightweight status-string check. Prefer deriveSubscriptionAccess() when
- * trial_end / Stripe subscription id are available — expired trials and
- * simulated "active" rows without Stripe must not unlock tools.
+ * @deprecated Do not use for authorization. Use getEntitlement() — DB status
+ * strings alone are not sufficient (simulated active / stale rows).
  */
 export function statusGrantsAccess(status: string | null | undefined) {
   return Boolean(status && ACCESS_STATUSES.has(status as AccessStatus))
 }
 
-/** Alias for clarity in UI/status payloads. */
+/** @deprecated Use getEntitlement().allowed instead. */
 export function paidToolsUnlocked(status: string | null | undefined) {
   return statusGrantsAccess(status)
 }

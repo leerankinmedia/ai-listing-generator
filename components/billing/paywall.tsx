@@ -15,6 +15,16 @@ import {
 } from "@/lib/billing/config"
 import { cn } from "@/lib/utils"
 
+export interface EntitlementDebugPayload {
+  rawDatabaseStatus: string | null
+  trialEnd: string | null
+  stripeSubscriptionIdPresent: boolean
+  stripeVerifiedStatus: string | null
+  finalEntitlement: string
+  decidingField: string
+  summary: string
+}
+
 export interface BillingStatusPayload {
   enforcement: boolean
   testControlsEnabled: boolean
@@ -31,6 +41,7 @@ export interface BillingStatusPayload {
   allowed: boolean
   reason: string
   status: string
+  statusLabel?: string
   hasUsedTrial: boolean
   trialEligible: boolean
   trialStart: string | null
@@ -43,6 +54,8 @@ export interface BillingStatusPayload {
   unlocksApp: boolean
   paidToolsUnlocked: boolean
   previewMode: boolean
+  adminOverride?: boolean
+  entitlementDebug?: EntitlementDebugPayload
 }
 
 export function useBillingStatus(enabled = true) {

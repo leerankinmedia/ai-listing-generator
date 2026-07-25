@@ -6,8 +6,8 @@ import {
   isStripeBillingConfigured,
   MONTHLY_LISTING_CREDITS,
   PLAN_NAME,
-  statusGrantsAccess,
 } from "@/lib/billing/config"
+import { getEntitlement } from "@/lib/billing/entitlement"
 import { getStripe } from "@/lib/billing/stripe"
 import {
   getSubscriptionByUserId,
@@ -142,15 +142,17 @@ export async function POST(request: Request) {
     const stripe = getStripe()
     const origin = getBillingAppOrigin()
     const existing = await getSubscriptionByUserId(user.id)
+    const entitlement = await getEntitlement(user.id)
 
-    // Block users who already have a trial or active subscription
-    if (statusGrantsAccess(existing?.status)) {
+    // Only block when Stripe-verified entitlement is already unlocked.
+    // Expired trials with stale DB status=active must still be able to subscribe.
+    if (entitlement.allowed && !entitlement.adminOverride) {
       return NextResponse.json(
         {
           error:
             "You already have an active ListWise Pro trial or subscription.",
           code: "already_subscribed",
-          status: existing?.status,
+          status: entitlement.status,
         },
         { status: 409 }
       )

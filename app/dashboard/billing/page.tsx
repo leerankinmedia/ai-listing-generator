@@ -4,11 +4,13 @@ import { DashboardShell } from "@/components/layout/dashboard-shell"
 import { BillingPanel } from "@/components/billing/billing-panel"
 import { useAuth } from "@/components/auth/auth-provider"
 import { useEffect } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 
 export default function DashboardBillingPage() {
   const { user, loading } = useAuth()
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const trialExpired = searchParams.get("reason") === "trial_expired"
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login")
@@ -33,6 +35,12 @@ export default function DashboardBillingPage() {
             ListWise Pro — membership, trial, and AI listing credits.
           </p>
         </div>
+        {trialExpired && (
+          <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm">
+            Your free trial has expired. Subscribe to ListWise Pro to unlock AI
+            generation, publishing, and marketplace tools.
+          </div>
+        )}
         <BillingPanel />
       </div>
     </DashboardShell>

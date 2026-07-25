@@ -25,14 +25,17 @@ function formatDate(value: string | null) {
   }
 }
 
-function statusLabel(status: string) {
+function statusLabel(status: string, explicit?: string) {
+  if (explicit?.trim()) return explicit
   switch (status) {
     case "trialing":
       return "Trialing"
     case "active":
       return "Active"
     case "expired":
-      return "Expired"
+      return "Trial expired"
+    case "admin":
+      return "Admin override"
     case "past_due":
       return "Past due"
     case "canceled":
@@ -209,8 +212,15 @@ export function BillingPanel() {
           <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
             Status
           </p>
-          <p className="mt-1 text-sm font-semibold">{statusLabel(status.status)}</p>
-          {status.cancelAtPeriodEnd && (
+          <p className="mt-1 text-sm font-semibold">
+            {statusLabel(status.status, status.statusLabel)}
+          </p>
+          {status.status === "expired" && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Paid features are locked until you subscribe.
+            </p>
+          )}
+          {status.cancelAtPeriodEnd && status.status === "active" && (
             <p className="mt-1 text-xs text-muted-foreground">
               Cancels on {formatDate(accessContinuesUntil)}
             </p>
@@ -260,17 +270,74 @@ export function BillingPanel() {
             Renews / period end
           </p>
           <p className="mt-1 text-sm font-semibold">
-            {status.status === "active" && status.stripeSubscriptionId
+            {status.status === "active" &&
+            status.paidToolsUnlocked &&
+            status.currentPeriodEnd
               ? formatDate(status.currentPeriodEnd)
               : "—"}
           </p>
-          {!(status.status === "active" && status.stripeSubscriptionId) && (
+          {!(
+            status.status === "active" &&
+            status.paidToolsUnlocked &&
+            status.currentPeriodEnd
+          ) && (
             <p className="mt-1 text-xs text-muted-foreground">
-              Shown only for a real paid Stripe subscription.
+              Shown only for a Stripe-verified paid subscription.
             </p>
           )}
         </div>
       </div>
+
+      {status.entitlementDebug && (
+        <div className="rounded-xl border border-dashed border-border bg-secondary/40 px-4 py-4 space-y-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            TEMP entitlement debug
+          </p>
+          <dl className="grid gap-1.5 text-xs sm:grid-cols-2">
+            <div>
+              <dt className="text-muted-foreground">Raw database status</dt>
+              <dd className="font-mono font-medium">
+                {status.entitlementDebug.rawDatabaseStatus ?? "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Trial end</dt>
+              <dd className="font-mono font-medium">
+                {status.entitlementDebug.trialEnd
+                  ? formatDate(status.entitlementDebug.trialEnd)
+                  : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Stripe subscription ID present</dt>
+              <dd className="font-mono font-medium">
+                {status.entitlementDebug.stripeSubscriptionIdPresent ? "yes" : "no"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Stripe-verified status</dt>
+              <dd className="font-mono font-medium">
+                {status.entitlementDebug.stripeVerifiedStatus ?? "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Final entitlement</dt>
+              <dd className="font-mono font-medium">
+                {status.entitlementDebug.finalEntitlement}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Deciding field</dt>
+              <dd className="font-mono font-medium">
+                {status.entitlementDebug.decidingField}
+              </dd>
+            </div>
+          </dl>
+          <p className="text-xs text-muted-foreground">
+            {status.entitlementDebug.summary}
+          </p>
+        </div>
+      )}
 
       <div className="rounded-xl border border-border bg-card/70 px-4 py-4">
         <p className="text-[11px] uppercase tracking-wider text-muted-foreground">

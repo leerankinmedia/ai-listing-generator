@@ -17,6 +17,7 @@ import {
   type TokenUsage,
 } from "@/lib/ai/pricing"
 import { usageFromResult } from "@/lib/ai/token-usage"
+import { colorIsGrayFamily } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import type { DetectedFieldKey, FieldConfidence } from "@/lib/types"
 
 type OpenAIClient = ReturnType<typeof createOpenAI>
@@ -74,14 +75,28 @@ Rules:
 
 const COPY_SYSTEM = `You are ListWise Copy, an expert eBay clothing listing writer.
 Write conversion-focused, accurate eBay titles and descriptions from verified attributes and photo evidence.
-eBay title rules:
+
+Apparel eBay title rules (strict priority order — omit unknown parts, do not reorder):
+1. Brand / franchise
+2. Collection, event, character, team, or graphic keywords
+3. Gender / department (e.g. Men's, Women's)
+4. Size
+5. Exact normalized search color (e.g. Gray — not shade compounds like Dark Gray/Charcoal)
+6. Item type / style (e.g. Graphic T-Shirt)
+7. One strong search keyword (e.g. Wrestling Tee)
 - Under 80 characters
-- Lead with brand when known, then item type, then size/color/style keywords buyers search
 - No keyword stuffing or ALL CAPS
+- Do NOT put material percentages or commodity fabric callouts in the title
+  (e.g. never "100% Cotton", "Cotton Blend", "Polyester") unless the material itself
+  is a rare major selling feature (e.g. cashmere, leather, silk, wool coat).
+  Put everyday materials like 100% Cotton in the description and item specifics only.
+Example title shape:
+WWE WrestleMania Legends Men's XL Gray Graphic T-Shirt Wrestling Tee
+
 Description rules:
 - Clear paragraphs + bullet details
 - Include condition and flaws honestly
-- Mention materials, fit/style, and department when known
+- Mention materials (including 100% Cotton when known), fit/style, and department
 - Plain text only (no HTML)`
 
 const COMPS_SYSTEM = `You are ListWise Pricing, a secondary-market comps analyst for clothing on eBay sold listings.
@@ -194,17 +209,58 @@ function mergeDetections(detections: ImageDetection[]): {
   return { fields, perImage }
 }
 
+/** Search color for titles only — does not change detected attributes. */
+function titleSearchColor(detectedColor: string | undefined): string | undefined {
+  const raw = detectedColor?.trim()
+  if (!raw || raw.toLowerCase() === "unknown") return undefined
+  if (colorIsGrayFamily(raw)) return "Gray"
+  // Prefer the primary token before slash compounds (Navy/Blue → Navy).
+  const primary = raw.split(/[/,|]/)[0]?.trim()
+  return primary || raw
+}
+
+/**
+ * Strip commodity material percentages from apparel titles.
+ * Keeps materials in description/specifics; does not alter detected attributes.
+ */
+function sanitizeApparelTitle(title: string): string {
+  const next = title
+    // "100% Cotton", "60% Polyester" — one fiber token only (do not eat "Graphic")
+    .replace(/\b\d{1,3}\s*%\s*[A-Za-z][A-Za-z]*\b/gi, " ")
+    // "Cotton 100%"
+    .replace(
+      /\b(?:cotton|polyester|poly|rayon|spandex|elastane|nylon|acrylic|viscose)\s+\d{1,3}\s*%\b/gi,
+      " "
+    )
+    .replace(/\b(?:cotton|polyester)\s+blend\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80)
+  return next || title.slice(0, 80)
+}
+
 async function generateCopy(
   openai: OpenAIClient,
   fields: Record<string, FieldConfidence>,
   sampleImages: VisionImage[],
   totalImages: number
 ): Promise<{ copy: ListingCopy; usage: TokenUsage }> {
+  const searchColor = titleSearchColor(fields.color?.value)
   const content: ContentPart[] = [
     {
       type: "text",
       text: `Create an eBay SEO title, eBay-ready description, keywords, and eBay category suggestion for this clothing item.
-Verified attributes (with confidence):
+
+Title must follow this apparel priority (omit unknowns; keep under 80 chars):
+Brand/franchise → collection/event/character/team/graphic → gender/department → size → normalized color → item type/style → strong search keyword.
+
+Title color to use (normalized for search only): ${searchColor || "omit if unknown"}
+Do not use shade compounds like "Dark Gray/Charcoal" in the title when a normalized color is provided.
+Do not put material percentages such as "100% Cotton" in the title — keep those in description and item specifics only.
+
+Example shape: WWE WrestleMania Legends Men's XL Gray Graphic T-Shirt Wrestling Tee
+
+Verified attributes (with confidence) — leave these attribute values unchanged; only the title uses normalized color:
 ${JSON.stringify(fields, null, 2)}
 Total photos in listing: ${totalImages}. Sample photos attached for visual context.`,
     },
@@ -223,7 +279,9 @@ Total photos in listing: ${totalImages}. Sample photos attached for visual conte
     system: COPY_SYSTEM,
     messages: [{ role: "user", content }],
   })
-  return { copy: result.object, usage: usageFromResult(result) }
+  const copy = result.object
+  copy.title.value = sanitizeApparelTitle(copy.title.value)
+  return { copy, usage: usageFromResult(result) }
 }
 
 /**

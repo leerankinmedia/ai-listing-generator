@@ -70,7 +70,7 @@ export const listingCopySchema = z.object({
     value: z
       .string()
       .describe(
-        "eBay SEO title under 80 characters: Brand + Item + Key attrs (size/color/style). No ALL CAPS spam."
+        "eBay apparel SEO title under 80 chars in this order: Brand/franchise, collection/event/character/team/graphic, gender, size, normalized color, item type/style, strong search keyword. No material percentages (e.g. 100% Cotton). No ALL CAPS spam."
       ),
     confidence: z.number().min(0).max(1),
     rationale: z.string(),
@@ -79,7 +79,7 @@ export const listingCopySchema = z.object({
     value: z
       .string()
       .describe(
-        "eBay-ready HTML-free description with short paragraphs and bullet details for features, measurements if known, condition, and flaws"
+        "eBay-ready HTML-free description with short paragraphs and bullet details for features, materials (including 100% Cotton when known), measurements if known, condition, and flaws"
       ),
     confidence: z.number().min(0).max(1),
     rationale: z.string(),

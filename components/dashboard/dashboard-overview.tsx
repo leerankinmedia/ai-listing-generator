@@ -67,6 +67,11 @@ export function DashboardOverview() {
     user?.fullName?.split(" ")[0] || user?.email?.split("@")[0] || "Seller"
   const toolsUnlocked = billing?.paidToolsUnlocked === true
   const previewMode = Boolean(billing?.previewMode || (billing && !toolsUnlocked))
+  const trialExpired =
+    billing?.status === "expired" || billing?.trialEligible === false
+  const unlockCta = trialExpired
+    ? "Subscribe"
+    : `Start ${BILLING_TRIAL_DAYS}-day trial`
 
   useEffect(() => {
     if (!user) return
@@ -146,7 +151,9 @@ export function DashboardOverview() {
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {previewMode
-              ? "Explore your workspace — start a free trial when you’re ready to generate listings."
+              ? trialExpired
+                ? "Your trial has ended — browse Overview and listings in read-only mode, or subscribe to unlock tools."
+                : "Explore your workspace — start a free trial when you’re ready to generate listings."
               : "Production AI listing engine is live"}
             {isDemo ? " · running in demo auth mode" : ""}.
           </p>
@@ -158,20 +165,18 @@ export function DashboardOverview() {
             "self-start sm:self-auto"
           )}
         >
-          {previewMode
-            ? `Start ${BILLING_TRIAL_DAYS}-day trial`
-            : "New listing"}
+          {previewMode ? unlockCta : "New listing"}
           <ArrowUpRight className="h-4 w-4" />
         </Link>
       </div>
 
       {previewMode && (
         <div className="animate-rise rounded-xl border border-accent/25 bg-accent/10 px-4 py-3 text-sm">
-          Start your {BILLING_TRIAL_DAYS}-day free trial to unlock this feature —
-          AI Generator, listings actions, and marketplace tools. Overview,
-          Billing, and Account stay available.{" "}
+          {trialExpired
+            ? "Your free trial has expired. Overview and existing listings stay available to view. AI generation, editing, publishing, and marketplace changes stay locked until you subscribe. "
+            : `Start your ${BILLING_TRIAL_DAYS}-day free trial to unlock AI Generator, listings actions, and marketplace tools. Overview, Billing, and Account stay available. `}
           <Link href="/checkout" className="font-semibold underline">
-            Start {BILLING_TRIAL_DAYS}-day trial
+            {unlockCta}
           </Link>
         </div>
       )}
@@ -239,9 +244,7 @@ export function DashboardOverview() {
               href={previewMode ? "/checkout" : "/dashboard/listings/new"}
               className={cn(buttonVariants({ variant: "accent" }), "mt-5 inline-flex")}
             >
-              {previewMode
-                ? `Start ${BILLING_TRIAL_DAYS}-day trial`
-                : "Open AI generator"}
+              {previewMode ? unlockCta : "Open AI generator"}
             </Link>
           </div>
         ) : (
@@ -333,10 +336,16 @@ export function DashboardOverview() {
         {previewMode ? (
           <div className="grid gap-4 lg:grid-cols-2">
             <div id="inventory" className="scroll-mt-24">
-              <FeatureLockPreview feature="inventory" />
+              <FeatureLockPreview
+                feature="inventory"
+                trialEligible={!trialExpired}
+              />
             </div>
             <div id="automation" className="scroll-mt-24">
-              <FeatureLockPreview feature="automation" />
+              <FeatureLockPreview
+                feature="automation"
+                trialEligible={!trialExpired}
+              />
             </div>
           </div>
         ) : (

@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useEffect, useState } from "react"
 import { Plus, Package } from "lucide-react"
 import { useAuth } from "@/components/auth/auth-provider"
+import { usePaidToolsAccess } from "@/components/billing/paid-feature-gate"
 import { buttonVariants } from "@/components/ui/button"
 import { fetchListings } from "@/lib/listings/repository"
 import type { Listing } from "@/lib/types"
@@ -11,8 +12,14 @@ import { cn } from "@/lib/utils"
 
 export function ListingsGrid() {
   const { user } = useAuth()
+  const { unlocked, status, loading: accessLoading } = usePaidToolsAccess()
   const [listings, setListings] = useState<Listing[]>([])
   const [loading, setLoading] = useState(true)
+  const subscribeCta =
+    status?.trialEligible === false || status?.status === "expired"
+      ? "Subscribe"
+      : "Start free trial"
+  const createHref = unlocked ? "/dashboard/listings/new" : "/checkout"
 
   useEffect(() => {
     if (!user) return
@@ -30,7 +37,7 @@ export function ListingsGrid() {
     }
   }, [user])
 
-  if (loading) {
+  if (loading || accessLoading) {
     return (
       <p className="text-sm text-muted-foreground animate-fade-in">
         Loading listings…
@@ -40,6 +47,22 @@ export function ListingsGrid() {
 
   return (
     <div className="space-y-6">
+      {!unlocked && (
+        <div className="flex flex-col gap-3 rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm">
+            {status?.status === "expired"
+              ? "Your trial has expired. You can view existing listings in read-only mode."
+              : "Subscribe to create new AI listings and edit or publish."}
+          </p>
+          <Link
+            href="/checkout"
+            className={cn(buttonVariants({ variant: "accent", size: "sm" }), "shrink-0")}
+          >
+            {subscribeCta}
+          </Link>
+        </div>
+      )}
+
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="font-display text-3xl font-semibold tracking-tight">
@@ -47,14 +70,15 @@ export function ListingsGrid() {
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {listings.length} saved listing{listings.length === 1 ? "" : "s"}
+            {!unlocked ? " · read-only" : ""}
           </p>
         </div>
         <Link
-          href="/dashboard/listings/new"
+          href={createHref}
           className={cn(buttonVariants({ variant: "accent" }))}
         >
           <Plus className="h-4 w-4" />
-          New AI listing
+          {unlocked ? "New AI listing" : subscribeCta}
         </Link>
       </div>
 
@@ -63,14 +87,16 @@ export function ListingsGrid() {
           <Package className="mx-auto h-8 w-8 text-muted-foreground" />
           <p className="mt-3 font-medium">No listings yet</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Upload photos and generate your first AI listing.
+            {unlocked
+              ? "Upload photos and generate your first AI listing."
+              : "Subscribe to generate your first AI listing."}
           </p>
           <Link
-            href="/dashboard/listings/new"
+            href={createHref}
             className={cn(buttonVariants({ variant: "accent" }), "mt-5 inline-flex")}
           >
             <Plus className="h-4 w-4" />
-            Create listing
+            {unlocked ? "Create listing" : subscribeCta}
           </Link>
         </div>
       ) : (

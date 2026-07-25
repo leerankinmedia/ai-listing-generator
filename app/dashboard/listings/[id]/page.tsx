@@ -4,7 +4,6 @@ import { useEffect } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { DashboardShell } from "@/components/layout/dashboard-shell"
 import { ListingDetail } from "@/components/listings/listing-detail"
-import { PaidFeatureGate } from "@/components/billing/paid-feature-gate"
 import { useAuth } from "@/components/auth/auth-provider"
 
 export default function ListingDetailPage() {
@@ -26,9 +25,7 @@ export default function ListingDetailPage() {
 
   return (
     <DashboardShell>
-      <PaidFeatureGate feature="listings">
-        <ListingDetail listingId={params.id} />
-      </PaidFeatureGate>
+      <ListingDetail listingId={params.id} />
     </DashboardShell>
   )
 }

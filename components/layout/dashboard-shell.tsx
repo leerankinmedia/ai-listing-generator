@@ -17,6 +17,7 @@ import {
 import { Logo } from "@/components/brand/logo"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { useAuth } from "@/components/auth/auth-provider"
+import { usePaidToolsAccess } from "@/components/billing/paid-feature-gate"
 import { buttonVariants } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -36,6 +37,14 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   const { user, signOut, isDemo } = useAuth()
+  const { unlocked, status } = usePaidToolsAccess()
+  const createHref = unlocked ? "/dashboard/listings/new" : "/checkout"
+  const createLabel =
+    unlocked
+      ? "New listing"
+      : status?.trialEligible === false || status?.status === "expired"
+        ? "Subscribe"
+        : "Start free trial"
 
   async function handleSignOut() {
     await signOut()
@@ -53,14 +62,14 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         </div>
         <div className="px-3 pb-2">
           <Link
-            href="/dashboard/listings/new"
+            href={createHref}
             className={cn(
               buttonVariants({ variant: "accent", size: "sm" }),
               "w-full"
             )}
           >
             <Plus className="h-4 w-4" />
-            New listing
+            {createLabel}
           </Link>
         </div>
         <nav className="flex-1 space-y-1 px-3 py-2">
@@ -123,14 +132,14 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           </p>
           <div className="flex items-center gap-2">
             <Link
-              href="/dashboard/listings/new"
+              href={createHref}
               className={cn(
                 buttonVariants({ variant: "accent", size: "sm" }),
                 "hidden sm:inline-flex lg:hidden"
               )}
             >
               <Plus className="h-4 w-4" />
-              New
+              {unlocked ? "New" : createLabel}
             </Link>
             <ThemeToggle />
             <button

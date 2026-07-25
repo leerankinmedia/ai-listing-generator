@@ -88,7 +88,10 @@ export function FeatureLockPreview({
   const Icon = copy.icon
   const ctaLabel = trialEligible
     ? `Start ${BILLING_TRIAL_DAYS}-day trial`
-    : "Get started"
+    : "Subscribe"
+  const lockMessage = trialEligible
+    ? `Start your ${BILLING_TRIAL_DAYS}-day free trial to unlock this feature.`
+    : "Your free trial has expired. Subscribe to unlock this feature."
 
   return (
     <div
@@ -101,7 +104,7 @@ export function FeatureLockPreview({
         <Icon className="h-5 w-5" aria-hidden />
       </div>
       <p className="text-xs font-semibold uppercase tracking-wider text-accent">
-        {PLAN_NAME} preview
+        {PLAN_NAME}
       </p>
       <h1 className="mt-2 font-display text-2xl font-semibold tracking-tight sm:text-3xl">
         {copy.title}
@@ -112,9 +115,7 @@ export function FeatureLockPreview({
 
       <div className="mt-6 flex items-start gap-2 rounded-xl border border-border bg-secondary/40 px-4 py-3 text-left">
         <Lock className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
-        <p className="text-sm text-foreground">
-          Start your {BILLING_TRIAL_DAYS}-day free trial to unlock this feature.
-        </p>
+        <p className="text-sm text-foreground">{lockMessage}</p>
       </div>
 
       <div className="mt-6 flex w-full flex-col gap-2 sm:flex-row sm:justify-center">
@@ -137,7 +138,7 @@ export function FeatureLockPreview({
 
       <p className="mt-5 text-xs text-muted-foreground">
         Saved listings, photos, and account data stay preserved while tools are
-        locked.
+        locked. Overview and existing listings remain available to view.
       </p>
     </div>
   )

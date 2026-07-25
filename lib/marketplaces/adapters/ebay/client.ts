@@ -1,4 +1,8 @@
 import type { Listing } from "@/lib/types"
+import {
+  colorIsBlackFamily,
+  colorIsGrayFamily,
+} from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import { ebayApiBase } from "@/lib/marketplaces/adapters/ebay/oauth"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 
@@ -15,6 +19,8 @@ export function mapListingToEbayInventory(listing: Listing) {
   const aspects: Record<string, string[]> = {}
   if (listing.specifics.brand) aspects.Brand = [listing.specifics.brand]
   if (listing.specifics.size) aspects.Size = [listing.specifics.size]
+  // AI color wording (e.g. Dark Gray/Charcoal) is a starting point; publish
+  // path normalizes Color onto the exact Taxonomy option (Gray) before PUT.
   if (listing.specifics.color) aspects.Color = [listing.specifics.color]
   if (listing.specifics.material) aspects.Material = [listing.specifics.material]
   if (listing.specifics.style) aspects.Style = [listing.specifics.style]
@@ -22,11 +28,25 @@ export function mapListingToEbayInventory(listing: Listing) {
   if (listing.specifics.gender) {
     aspects.Department = [listing.specifics.gender]
   }
-  // Also carry any seller-edited extras (e.g. Size Type) into aspects.
+  // Seller/marketplace extras (Size Type, normalized Color, etc.).
+  // Color/Colour from extras overwrite AI wording so a preselected Gray wins
+  // over Dark Gray/Charcoal before aspect finalize — but never let a stale
+  // Black extra override a gray-family detection.
+  const detectedColor =
+    listing.fieldConfidence?.color?.value || listing.specifics.color
   for (const [key, value] of Object.entries(listing.specifics.extras || {})) {
     const trimmed = value?.trim()
     if (!key.trim() || !trimmed) continue
-    if (!aspects[key]) aspects[key] = [trimmed]
+    const keyLower = key.toLowerCase()
+    const isColor = keyLower === "color" || keyLower === "colour"
+    if (
+      isColor &&
+      colorIsGrayFamily(detectedColor) &&
+      colorIsBlackFamily(trimmed)
+    ) {
+      continue
+    }
+    if (!aspects[key] || isColor) aspects[key] = [trimmed]
   }
 
   return {

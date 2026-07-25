@@ -91,21 +91,15 @@ function applyExactAspectsToListing(
       changed = true
     }
 
-    if (target !== "extras") {
+    // Color: keep AI-detected wording in specifics.color (e.g. Dark Gray/Charcoal).
+    // Only the eBay aspect dropdown value lives in extras.Color (= Gray).
+    if (target !== "extras" && !isColorAspect) {
       const current = (specifics[target] as string | undefined)?.trim()
-      const isColorField = target === "color"
-      const detectedColor =
-        listing.fieldConfidence?.color?.value || listing.specifics.color
-      const staleBlackForGray =
-        isColorField &&
-        colorIsGrayFamily(detectedColor) &&
-        colorIsBlackFamily(current)
       if (
         current &&
         options &&
         options.length > 0 &&
-        isExactOption(current, options) &&
-        !staleBlackForGray
+        isExactOption(current, options)
       ) {
         // Preserve manual exact selection on the known field.
       } else if (current !== value) {
@@ -299,13 +293,16 @@ export function OneClickPublishBar({
 
   function writeAspectValue(name: string, value: string) {
     if (!onListingChange) return
-    // Manual selection always wins — store exact eBay option under extras + mapped field.
+    // Manual selection always wins — store exact eBay option under extras.
+    // Color keeps AI-detected specifics.color untouched (Dark Gray/Charcoal).
     const target = mapAspectToListingField(name)
+    const aspectKey = name.trim().toLowerCase()
+    const isColorAspect = aspectKey === "color" || aspectKey === "colour"
     const extras = {
       ...(listing.specifics.extras || {}),
       [name]: value,
     }
-    if (target === "extras") {
+    if (target === "extras" || isColorAspect) {
       onListingChange({
         ...listing,
         specifics: { ...listing.specifics, extras },

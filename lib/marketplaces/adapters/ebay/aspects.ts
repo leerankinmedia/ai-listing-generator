@@ -4,7 +4,7 @@ import {
   colorIsGrayFamily,
   isHighConfidenceField,
   matchExactEbayAspectValue,
-  rewriteEbayTitleColor,
+  resolveEbayGrayAspectValue,
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import { ebayFetch } from "@/lib/marketplaces/adapters/ebay/client"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
@@ -373,18 +373,16 @@ export function applyRequiredEbayAspects(
 }
 
 /**
- * Final Color + title correction immediately before inventory write.
- * Forces Dark Gray / Charcoal / Grey → eBay Gray (never Black) when any
- * gray-family signal remains, and rewrites color words in the title.
+ * Final Color aspect correction immediately before inventory write.
+ * Forces Dark Gray / Charcoal / Grey → exact eBay Gray (never Black).
+ * Does not modify listing title, description, or AI-detected color wording.
  */
-export function finalizeEbayColorAndTitle(
+export function finalizeEbayColorAspect(
   listing: Listing,
   taxonomyAspects: EbayAspect[],
-  existingAspects: Record<string, string[]>,
-  title: string
+  existingAspects: Record<string, string[]>
 ): {
   aspects: Record<string, string[]>
-  title: string
   color?: string
 } {
   const aspects: Record<string, string[]> = { ...existingAspects }
@@ -397,17 +395,25 @@ export function finalizeEbayColorAndTitle(
   const allowed = colorAspect ? allowedValues(colorAspect) : []
 
   const extras = listing.specifics.extras || {}
+  const grayFamily = listingHasGrayFamilyColor(listing, aspects)
   const signals = [
     listing.fieldConfidence?.color?.value,
     listing.specifics.color,
-    extras.Color,
-    extras.Colour,
-    aspects.Color?.[0],
-    aspects.Colour?.[0],
-    // Seed explicit gray-family wording so stale Black cannot win.
-    listingHasGrayFamilyColor(listing, aspects) ? "Dark Gray" : undefined,
-    listingHasGrayFamilyColor(listing, aspects) ? "Charcoal" : undefined,
-    listingHasGrayFamilyColor(listing, aspects) ? "Grey" : undefined,
+    // Ignore stale Black extras when detection is gray-family.
+    grayFamily && colorIsBlackFamily(extras.Color) ? undefined : extras.Color,
+    grayFamily && colorIsBlackFamily(extras.Colour)
+      ? undefined
+      : extras.Colour,
+    grayFamily && colorIsBlackFamily(aspects.Color?.[0])
+      ? undefined
+      : aspects.Color?.[0],
+    grayFamily && colorIsBlackFamily(aspects.Colour?.[0])
+      ? undefined
+      : aspects.Colour?.[0],
+    grayFamily ? "Dark Gray" : undefined,
+    grayFamily ? "Charcoal" : undefined,
+    grayFamily ? "Grey" : undefined,
+    grayFamily ? "Gray" : undefined,
   ]
 
   let finalColor = matchExactEbayAspectValue(aspectName, signals, allowed, {
@@ -415,39 +421,31 @@ export function finalizeEbayColorAndTitle(
     highConfidence: true,
   })
 
-  if (
-    listingHasGrayFamilyColor(listing, aspects) &&
-    (!finalColor || colorIsBlackFamily(finalColor))
-  ) {
-    const grayOpt = allowed.find((a) => {
-      const k = a.trim().toLowerCase()
-      return k === "gray" || k === "grey"
-    })
+  if (grayFamily) {
+    const grayOpt = resolveEbayGrayAspectValue(allowed)
     if (grayOpt) finalColor = grayOpt
     else if (!finalColor || colorIsBlackFamily(finalColor)) finalColor = "Gray"
   }
 
   if (finalColor) {
-    aspects[aspectName] = [finalColor]
-    // Inventory mapper always uses "Color"; keep both keys consistent.
+    // Inventory API expects product.aspects.Color as an exact allowed value.
     aspects.Color = [finalColor]
+    aspects[aspectName] = [finalColor]
     if (aspectName.toLowerCase() === "colour") {
       aspects.Colour = [finalColor]
     }
   }
 
-  const nextTitle = finalColor
-    ? rewriteEbayTitleColor(title, finalColor)
-    : title.slice(0, 80)
-
-  console.info("[ebay/color] TEMP finalize Color + title", {
-    detected: listing.fieldConfidence?.color?.value || listing.specifics.color || null,
+  console.info("[ebay/color] TEMP finalize Color aspect", {
+    detected:
+      listing.fieldConfidence?.color?.value ||
+      listing.specifics.color ||
+      null,
     selected: finalColor || null,
-    titleBefore: title.slice(0, 80),
-    titleAfter: nextTitle,
+    payloadColor: aspects.Color?.[0] || null,
   })
 
-  return { aspects, title: nextTitle, color: finalColor }
+  return { aspects, color: finalColor }
 }
 
 export function missingAspectsError(

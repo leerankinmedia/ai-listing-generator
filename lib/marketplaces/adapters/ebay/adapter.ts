@@ -9,7 +9,7 @@ import {
 import {
   applyRequiredEbayAspects,
   fetchEbayItemAspectsForCategory,
-  finalizeEbayColorAndTitle,
+  finalizeEbayColorAspect,
   missingAspectsError,
 } from "@/lib/marketplaces/adapters/ebay/aspects"
 import { ensureEbayMerchantLocationKey } from "@/lib/marketplaces/adapters/ebay/location"
@@ -212,16 +212,15 @@ export const ebayAdapter: MarketplaceAdapter = {
     if (missingRequired.length > 0) {
       throw missingAspectsError(missingRequired, resolvedFields)
     }
-    // Force gray-family → Gray on Color aspect and rewrite title color words
-    // (e.g. AI title "Black" → "Gray") before inventory write.
-    const finalized = finalizeEbayColorAndTitle(
-      listing,
-      taxonomyAspects,
-      aspects,
-      inventoryItem.product.title
-    )
+    // Force gray-family → exact eBay Color "Gray" on the inventory aspect only.
+    // AI-detected color / title / description wording are left unchanged.
+    const finalized = finalizeEbayColorAspect(listing, taxonomyAspects, aspects)
     inventoryItem.product.aspects = finalized.aspects
-    inventoryItem.product.title = finalized.title
+    console.info("[ebay/color] TEMP inventory payload Color", {
+      sku,
+      color: inventoryItem.product.aspects.Color || null,
+      titleUnchanged: inventoryItem.product.title.slice(0, 80),
+    })
 
     // 5) Create/replace inventory item (with required aspects filled)
     await ebayFetch(

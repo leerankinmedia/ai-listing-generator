@@ -1,12 +1,12 @@
 "use client"
 
+import { Suspense, useEffect } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { DashboardShell } from "@/components/layout/dashboard-shell"
 import { BillingPanel } from "@/components/billing/billing-panel"
 import { useAuth } from "@/components/auth/auth-provider"
-import { useEffect } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
 
-export default function DashboardBillingPage() {
+function DashboardBillingContent() {
   const { user, loading } = useAuth()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -44,5 +44,19 @@ export default function DashboardBillingPage() {
         <BillingPanel />
       </div>
     </DashboardShell>
+  )
+}
+
+export default function DashboardBillingPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+          Loading billing…
+        </div>
+      }
+    >
+      <DashboardBillingContent />
+    </Suspense>
   )
 }

@@ -111,6 +111,7 @@ export async function getConnection(
   if (!isConnectionsCryptoConfigured()) return null
 
   const user = await getServerAuthUser()
+  // Authenticated users: Supabase is the only source of truth (no cookie ghost).
   if (user && isSupabaseConfigured()) {
     const supabase = await createServerClient()
     const { data, error } = await supabase
@@ -122,12 +123,11 @@ export async function getConnection(
       .eq("marketplace_id", marketplaceId)
       .maybeSingle()
     if (error) throw error
-    if (data) {
-      try {
-        return deserializeConnection((data as ConnectionRow).encrypted_payload)
-      } catch {
-        return null
-      }
+    if (!data) return null
+    try {
+      return deserializeConnection((data as ConnectionRow).encrypted_payload)
+    } catch {
+      return null
     }
   }
 
@@ -150,6 +150,8 @@ export async function deleteConnection(marketplaceId: MarketplaceId): Promise<vo
 
 export async function listConnections(): Promise<StoredMarketplaceConnection[]> {
   const user = await getServerAuthUser()
+  // Authenticated + Supabase: always return DB rows (even when empty).
+  // Do not fall back to cookies — that caused stale Not connected / ghost states.
   if (user && isSupabaseConfigured() && isConnectionsCryptoConfigured()) {
     const supabase = await createServerClient()
     const { data, error } = await supabase
@@ -167,7 +169,7 @@ export async function listConnections(): Promise<StoredMarketplaceConnection[]> 
         // skip corrupt rows
       }
     }
-    if (results.length > 0) return results
+    return results
   }
 
   const results: StoredMarketplaceConnection[] = []

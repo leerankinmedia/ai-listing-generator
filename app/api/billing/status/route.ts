@@ -2,14 +2,13 @@ import { NextResponse } from "next/server"
 import {
   getMembershipPriceLabel,
   isStripeBillingConfigured,
-  statusGrantsAccess,
-  paidToolsUnlocked,
   BILLING_TRIAL_DAYS,
   MONTHLY_LISTING_CREDITS,
   PLAN_NAME,
   PLAN_FEATURES,
 } from "@/lib/billing/config"
 import { checkSubscriptionAccess } from "@/lib/billing/access"
+import { deriveSubscriptionAccess } from "@/lib/billing/subscription-access"
 import {
   creditPeriodStartFromSubscription,
   getListingCreditsSummary,
@@ -29,21 +28,22 @@ export async function GET() {
 
   const subscription = await getSubscriptionByUserId(user.id)
   const access = await checkSubscriptionAccess(user.id)
+  const derived = deriveSubscriptionAccess(subscription)
   const periodStart = creditPeriodStartFromSubscription(subscription)
   const credits = await getListingCreditsSummary({
     userId: user.id,
     periodStartIso: periodStart,
   })
 
-  const subStatus = subscription?.status ?? "none"
-  const periodEnd = subscription?.current_period_end ?? null
-  const trialEnd = subscription?.trial_end ?? null
+  const effectiveStatus = access.status ?? derived.effectiveStatus
+  const toolsUnlocked = access.allowed
   const cancelAtPeriodEnd = Boolean(subscription?.cancel_at_period_end)
-  const toolsUnlocked = paidToolsUnlocked(subStatus)
+  const trialEnd = subscription?.trial_end ?? null
+  const displayPeriodEnd = access.displayPeriodEnd
   const cancelsOn = cancelAtPeriodEnd
-    ? subStatus === "trialing"
-      ? trialEnd || periodEnd
-      : periodEnd
+    ? effectiveStatus === "trialing"
+      ? trialEnd || displayPeriodEnd
+      : displayPeriodEnd
     : null
 
   return NextResponse.json(
@@ -62,7 +62,7 @@ export async function GET() {
       features: PLAN_FEATURES,
       allowed: access.allowed,
       reason: access.reason,
-      status: subStatus,
+      status: effectiveStatus,
       hasUsedTrial: Boolean(
         subscription?.has_used_trial || subscription?.trial_start
       ),
@@ -71,12 +71,13 @@ export async function GET() {
       ),
       trialStart: subscription?.trial_start ?? null,
       trialEnd,
-      currentPeriodEnd: periodEnd,
+      // Never show a fake renewal date when there is no real paid Stripe sub.
+      currentPeriodEnd: displayPeriodEnd,
       cancelAtPeriodEnd,
       cancelsOn,
       stripeCustomerId: subscription?.stripe_customer_id ?? null,
       stripeSubscriptionId: subscription?.stripe_subscription_id ?? null,
-      unlocksApp: statusGrantsAccess(subStatus),
+      unlocksApp: toolsUnlocked,
       paidToolsUnlocked: toolsUnlocked,
       previewMode: !toolsUnlocked,
     },

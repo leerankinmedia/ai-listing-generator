@@ -79,9 +79,9 @@ export const ACCESS_STATUSES = new Set(["trialing", "active"] as const)
 export type AccessStatus = "trialing" | "active"
 
 /**
- * Paid access rule (always on):
- * trialing | active → allowed
- * every other status, including none / missing → denied
+ * Lightweight status-string check. Prefer deriveSubscriptionAccess() when
+ * trial_end / Stripe subscription id are available — expired trials and
+ * simulated "active" rows without Stripe must not unlock tools.
  */
 export function statusGrantsAccess(status: string | null | undefined) {
   return Boolean(status && ACCESS_STATUSES.has(status as AccessStatus))

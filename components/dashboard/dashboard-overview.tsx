@@ -13,9 +13,14 @@ import { useAuth } from "@/components/auth/auth-provider"
 import { useBillingStatus } from "@/components/billing/paywall"
 import { FeatureLockPreview } from "@/components/billing/feature-lock-preview"
 import { MARKETPLACES } from "@/lib/marketplaces"
+import {
+  countActiveListings,
+  countConnectedShops,
+  formatConnectedShopsLabel,
+} from "@/lib/dashboard/stats"
 import { fetchListings } from "@/lib/listings/repository"
 import { buttonVariants } from "@/components/ui/button"
-import type { Listing } from "@/lib/types"
+import type { Listing, MarketplaceId } from "@/lib/types"
 import {
   BILLING_TRIAL_DAYS,
   MONTHLY_LISTING_CREDITS,
@@ -47,10 +52,17 @@ const roadmap = [
   },
 ]
 
+type PublicConnection = {
+  marketplaceId: MarketplaceId
+  connected: boolean
+  accountLabel?: string | null
+}
+
 export function DashboardOverview() {
   const { user, isDemo } = useAuth()
   const { status: billing } = useBillingStatus(Boolean(user))
   const [listings, setListings] = useState<Listing[]>([])
+  const [connectedIds, setConnectedIds] = useState<MarketplaceId[]>([])
   const firstName =
     user?.fullName?.split(" ")[0] || user?.email?.split("@")[0] || "Seller"
   const toolsUnlocked = billing?.paidToolsUnlocked === true
@@ -62,39 +74,65 @@ export function DashboardOverview() {
     void fetchListings(user.id).then((rows) => {
       if (mounted) setListings(rows)
     })
+    void fetch("/api/marketplaces/connections", { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) return [] as PublicConnection[]
+        const json = (await res.json()) as { connections?: PublicConnection[] }
+        return json.connections || []
+      })
+      .then((connections) => {
+        if (!mounted) return
+        setConnectedIds(
+          connections
+            .filter((c) => c.connected)
+            .map((c) => c.marketplaceId)
+        )
+      })
+      .catch(() => {
+        if (mounted) setConnectedIds([])
+      })
     return () => {
       mounted = false
     }
   }, [user])
 
-  const activeCount = listings.filter(
-    (l) => l.status === "ready" || l.status === "listed" || l.status === "draft"
-  ).length
+  const activeCount = countActiveListings(listings)
+  const connectedCount = countConnectedShops(connectedIds)
+  const connectedSet = new Set(connectedIds)
 
   const stats = [
     {
       label: "Active listings",
       value: String(activeCount),
-      hint: listings.length ? "From your workspace" : "Create your first AI listing",
+      hint: activeCount
+        ? "Listed on a marketplace"
+        : "Publish a listing to see it here",
       icon: Package,
+      href: "/dashboard/listings",
     },
     {
       label: "Connected shops",
-      value: "0 / 9",
-      hint: "Marketplace adapters ready",
+      value: formatConnectedShopsLabel(connectedCount),
+      hint:
+        connectedCount > 0
+          ? "From your marketplace connections"
+          : "Connect eBay to start publishing",
       icon: Store,
+      href: "/dashboard/connections",
     },
     {
       label: "Pending offers",
       value: "0",
       hint: "Automation coming soon",
       icon: Zap,
+      href: null as string | null,
     },
     {
       label: "Revenue (30d)",
       value: "$0",
-      hint: "Analytics scaffolding live",
+      hint: "Analytics coming soon",
       icon: TrendingUp,
+      href: null as string | null,
     },
   ]
 
@@ -141,11 +179,8 @@ export function DashboardOverview() {
       <div className="animate-rise-delay-1 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map((stat) => {
           const Icon = stat.icon
-          return (
-            <div
-              key={stat.label}
-              className="rounded-xl border border-border bg-card/80 p-4 backdrop-blur-sm"
-            >
+          const body = (
+            <>
               <div className="flex items-center justify-between">
                 <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   {stat.label}
@@ -154,6 +189,25 @@ export function DashboardOverview() {
               </div>
               <p className="mt-3 font-display text-3xl font-semibold">{stat.value}</p>
               <p className="mt-1 text-xs text-muted-foreground">{stat.hint}</p>
+            </>
+          )
+          if (stat.href) {
+            return (
+              <Link
+                key={stat.label}
+                href={stat.href}
+                className="rounded-xl border border-border bg-card/80 p-4 backdrop-blur-sm transition-colors hover:border-accent/40"
+              >
+                {body}
+              </Link>
+            )
+          }
+          return (
+            <div
+              key={stat.label}
+              className="rounded-xl border border-border bg-card/80 p-4 backdrop-blur-sm"
+            >
+              {body}
             </div>
           )
         })}
@@ -227,36 +281,45 @@ export function DashboardOverview() {
           <div>
             <h2 className="font-display text-xl font-semibold">Marketplaces</h2>
             <p className="text-sm text-muted-foreground">
-              Listings are publish-ready — OAuth adapters plug in next.
+              Connection status from your account — manage OAuth on Connections.
             </p>
           </div>
+          <Link
+            href="/dashboard/connections"
+            className="text-sm font-medium text-muted-foreground hover:text-accent"
+          >
+            Manage connections
+          </Link>
         </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {MARKETPLACES.map((marketplace) => (
-            <div
-              key={marketplace.id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card/80 px-4 py-3.5"
-            >
-              <div className="flex min-w-0 items-center gap-3">
-                <span
-                  className="h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: marketplace.color }}
-                />
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">{marketplace.name}</p>
-                  <p className="text-xs text-muted-foreground">Not connected</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                disabled
-                className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground"
-                title="Coming in a future phase"
+          {MARKETPLACES.map((marketplace) => {
+            const connected = connectedSet.has(marketplace.id)
+            return (
+              <Link
+                key={marketplace.id}
+                href="/dashboard/connections"
+                className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card/80 px-4 py-3.5 transition-colors hover:border-accent/40"
               >
-                Connect
-              </button>
-            </div>
-          ))}
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: marketplace.color }}
+                  />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">
+                      {marketplace.name}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {connected ? "Connected" : "Not connected"}
+                    </p>
+                  </div>
+                </div>
+                <span className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground">
+                  {connected ? "Manage" : "Connect"}
+                </span>
+              </Link>
+            )
+          })}
         </div>
       </section>
 

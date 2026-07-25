@@ -5,6 +5,7 @@ import {
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import { ebayApiBase } from "@/lib/marketplaces/adapters/ebay/oauth"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
+import { ebayConditionDescription } from "@/lib/listings/condition-details"
 
 export type EbayFetchInit = RequestInit & {
   contentLanguage?: string
@@ -58,7 +59,11 @@ export function mapListingToEbayInventory(listing: Listing) {
         },
       },
       condition: mapCondition(listing.specifics.condition),
-      conditionDescription: listing.specifics.flaws || undefined,
+      // Never invent wear — neutral statement when no verified flaws.
+      conditionDescription: ebayConditionDescription(
+        listing.specifics.flaws,
+        listing.fieldConfidence?.flaws?.confidence
+      ),
       product: {
         title: listing.title.slice(0, 80),
         description: listing.description,

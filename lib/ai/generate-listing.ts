@@ -21,6 +21,10 @@ import {
   colorIsBlackFamily,
   colorIsGrayFamily,
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
+import {
+  appendConditionNotesSection,
+  sanitizeDetectedFlaws,
+} from "@/lib/listings/condition-details"
 import type { DetectedFieldKey, FieldConfidence } from "@/lib/types"
 
 type OpenAIClient = ReturnType<typeof createOpenAI>
@@ -72,7 +76,10 @@ Rules:
 - Never invent brands, sizes, or labels you cannot see or reasonably infer.
 - Use "Unknown" when evidence is insufficient; keep confidence low.
 - Confidence must reflect visual certainty (logos, tags, fabric grain, wear).
-- Call out flaws honestly: stains, pills, tears, fading, missing buttons, stretched seams, odor indicators if visible, etc.
+- Flaws: ONLY report defects with strong, unambiguous visual evidence (clear stains, holes, tears,
+  missing buttons, obvious repairs). If unsure, return "None visible".
+  NEVER invent or assume wrinkles, fading, stains, holes, wear, odor, or damage from lighting,
+  folds, or normal pre-owned appearance.
 - Gender/department should reflect labeled/cut cues, otherwise Unisex or Unknown.
 - Category should map to eBay clothing taxonomy when possible.
 - Color: prefer detailed shade wording when visible (e.g. Dark Gray/Charcoal, Heather Gray).
@@ -101,7 +108,10 @@ WWE WrestleMania Legends Men's XL Gray Graphic T-Shirt Wrestling Tee
 
 Description rules:
 - Clear paragraphs + bullet details
-- Include condition and flaws honestly
+- Use a positive neutral condition line for normal pre-owned items with no verified flaws
+- ONLY mention flaws that appear in the verified attributes.flaws field with strong evidence
+- Never invent wrinkles, fading, stains, holes, wear, or damage
+- If verified flaws exist, put them under a final section titled "Condition notes"
 - Mention materials (including 100% Cotton when known), fit/style, and department
 - Plain text only (no HTML)`
 
@@ -122,7 +132,8 @@ async function detectBatch(
     {
       type: "text",
       text: `Batch ${batchIndex + 1}: analyze EACH of these ${batch.length} photos individually (photos ${startIndex + 1}–${startIndex + batch.length} of ${totalImages}).
-Return one analysis object per photo in the same order. Cover brand, category, size, color, material, style, pattern, gender, condition, and flaws for every image.`,
+Return one analysis object per photo in the same order. Cover brand, category, size, color, material, style, pattern, gender, condition, and flaws for every image.
+For flaws: use "None visible" unless a defect is clearly and strongly evidenced in that photo. Do not invent wrinkles or fading.`,
     },
   ]
   for (const image of batch) {
@@ -280,10 +291,24 @@ function mergeDetections(detections: ImageDetection[]): {
     fields[key] = key === "color" ? pickBestColor(votes) : pickBest(votes)
   }
 
+  // Never keep low-confidence / speculative wear as the listing flaw value.
+  const sanitizedFlaws = sanitizeDetectedFlaws(
+    fields.flaws.value,
+    fields.flaws.confidence
+  )
+  fields.flaws = {
+    ...fields.flaws,
+    value: sanitizedFlaws,
+    rationale:
+      sanitizedFlaws === "None visible"
+        ? "No strongly verified visual flaws across photos."
+        : fields.flaws.rationale,
+  }
+
   const perImage = detections.map((d, index) => ({
     index,
     summary: d.imageSummary,
-    flaws: d.flaws.value,
+    flaws: sanitizeDetectedFlaws(d.flaws.value, d.flaws.confidence),
   }))
 
   return { fields, perImage }
@@ -363,6 +388,11 @@ Total photos in listing: ${totalImages}. Sample photos attached for visual conte
   })
   const copy = result.object
   copy.title.value = sanitizeApparelTitle(copy.title.value)
+  copy.description.value = appendConditionNotesSection(
+    copy.description.value,
+    fields.flaws?.value,
+    fields.flaws?.confidence
+  )
   return { copy, usage: usageFromResult(result) }
 }
 

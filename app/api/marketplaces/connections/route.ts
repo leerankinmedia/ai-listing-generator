@@ -10,7 +10,13 @@ import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/cr
 import { getServerAuthUser } from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
 
+/**
+ * Read marketplace connections for the authenticated user from Supabase.
+ * Display is not gated on trial/subscription — expired accounts still see
+ * Connected status. Connect/disconnect/publish remain access-gated.
+ */
 export async function GET() {
   if (!isConnectionsCryptoConfigured()) {
     return NextResponse.json(
@@ -24,33 +30,34 @@ export async function GET() {
   }
 
   const user = await getServerAuthUser()
-  const access = await checkSubscriptionAccess(user?.id)
-  if (!access.allowed) {
-    return NextResponse.json(
-      {
-        error:
-          "Start your 7-day free trial to unlock this feature.",
-        code: "subscription_required",
-        connections: [],
-      },
-      { status: 402 }
-    )
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized.", connections: [] }, { status: 401 })
   }
 
   const connections = await listConnections()
-  return NextResponse.json({
-    connections: connections.map(toPublicConnection),
-  })
+  return NextResponse.json(
+    {
+      connections: connections.map(toPublicConnection),
+    },
+    {
+      headers: {
+        "Cache-Control": "no-store, max-age=0",
+      },
+    }
+  )
 }
 
 export async function DELETE(request: Request) {
   const user = await getServerAuthUser()
-  const access = await checkSubscriptionAccess(user?.id)
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized." }, { status: 401 })
+  }
+
+  const access = await checkSubscriptionAccess(user.id)
   if (!access.allowed) {
     return NextResponse.json(
       {
-        error:
-          "Start your 7-day free trial to unlock this feature.",
+        error: "Start your 7-day free trial to unlock this feature.",
         code: "subscription_required",
       },
       { status: 402 }

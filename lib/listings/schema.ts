@@ -51,7 +51,7 @@ export const imageDetectionSchema = z.object({
     rationale: z.string(),
   }),
   flaws: confidentStringSchema.describe(
-    "Visible flaws, wear, stains, repairs — or None visible"
+    "Only strongly evidenced visible defects (stains, holes, tears, missing parts). Use None visible when unsure. Never invent wrinkles, fading, or wear."
   ),
   imageSummary: z
     .string()
@@ -79,7 +79,7 @@ export const listingCopySchema = z.object({
     value: z
       .string()
       .describe(
-        "eBay-ready HTML-free description with short paragraphs and bullet details for features, materials (including 100% Cotton when known), measurements if known, condition, and flaws"
+        "eBay-ready HTML-free description with short paragraphs and bullet details for features, materials (including 100% Cotton when known), measurements if known, and condition. Mention flaws only when verified; put them under a final Condition notes section. Never invent wrinkles, fading, stains, or damage."
       ),
     confidence: z.number().min(0).max(1),
     rationale: z.string(),

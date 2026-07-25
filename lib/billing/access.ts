@@ -1,22 +1,26 @@
 import "server-only"
-import { statusGrantsAccess } from "@/lib/billing/config"
-import { getSubscriptionByUserId } from "@/lib/billing/subscription-store"
+import { deriveSubscriptionAccess } from "@/lib/billing/subscription-access"
+import {
+  getSubscriptionByUserId,
+  upsertSubscriptionForUser,
+} from "@/lib/billing/subscription-store"
 
 export interface SubscriptionAccessResult {
   allowed: boolean
   reason: "missing_user" | "no_subscription" | "inactive" | "active"
   status: string | null
   subscription: Awaited<ReturnType<typeof getSubscriptionByUserId>>
+  /** Period end safe for UI — null when no real paid Stripe subscription. */
+  displayPeriodEnd: string | null
 }
 
 /**
  * Server-side guard for paid tool actions (generate, publish, connect, …).
  *
- * Always enforced — independent of BILLING_ENFORCEMENT / BILLING_PREVIEW_LOCKS:
- * - trialing or active → allowed
- * - every other status, including no subscription row → denied
- *
- * BILLING_ENFORCEMENT only affects optional account-wide redirects elsewhere.
+ * Access is derived from real trial/paid state:
+ * - valid trial (now < trial_end) → allowed (trialing)
+ * - active Stripe subscription id + open period → allowed (active)
+ * - expired trial / fake active without Stripe → locked (expired)
  */
 export async function checkSubscriptionAccess(
   userId: string | null | undefined
@@ -27,6 +31,7 @@ export async function checkSubscriptionAccess(
       reason: "missing_user",
       status: null,
       subscription: null,
+      displayPeriodEnd: null,
     }
   }
 
@@ -38,23 +43,33 @@ export async function checkSubscriptionAccess(
       reason: "no_subscription",
       status: "none",
       subscription: null,
+      displayPeriodEnd: null,
     }
   }
 
-  if (statusGrantsAccess(subscription.status)) {
-    return {
-      allowed: true,
-      reason: "active",
-      status: subscription.status,
-      subscription,
+  const derived = deriveSubscriptionAccess(subscription)
+
+  if (derived.shouldPersistExpired) {
+    try {
+      await upsertSubscriptionForUser(userId, {
+        status: "canceled",
+        // Drop fabricated renewal dates when there is no real Stripe subscription.
+        current_period_end: subscription.stripe_subscription_id
+          ? subscription.current_period_end
+          : null,
+        cancel_at_period_end: false,
+      })
+    } catch (error) {
+      console.error("[billing] failed to persist expired subscription state", error)
     }
   }
 
   return {
-    allowed: false,
-    reason: "inactive",
-    status: subscription.status,
+    allowed: derived.allowed,
+    reason: derived.reason,
+    status: derived.effectiveStatus,
     subscription,
+    displayPeriodEnd: derived.displayPeriodEnd,
   }
 }
 

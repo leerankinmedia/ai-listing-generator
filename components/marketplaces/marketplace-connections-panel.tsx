@@ -161,9 +161,10 @@ export function MarketplaceConnectionsPanel() {
           Marketplace Connections
         </h1>
         <p className="max-w-2xl text-sm text-muted-foreground sm:text-base">
-          Connect seller accounts securely. Tokens are encrypted at rest in
-          httpOnly cookies. Publish only works for connected marketplaces with
-          real API credentials — never simulated success.
+          Connect seller accounts securely. Credentials are stored in your
+          ListWise account (Supabase) as the source of truth. Publish only works
+          for connected marketplaces with real API credentials — never simulated
+          success.
         </p>
       </header>
 

@@ -31,6 +31,8 @@ function statusLabel(status: string) {
       return "Trialing"
     case "active":
       return "Active"
+    case "expired":
+      return "Expired"
     case "past_due":
       return "Past due"
     case "canceled":
@@ -258,8 +260,15 @@ export function BillingPanel() {
             Renews / period end
           </p>
           <p className="mt-1 text-sm font-semibold">
-            {formatDate(status.currentPeriodEnd)}
+            {status.status === "active" && status.stripeSubscriptionId
+              ? formatDate(status.currentPeriodEnd)
+              : "—"}
           </p>
+          {!(status.status === "active" && status.stripeSubscriptionId) && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Shown only for a real paid Stripe subscription.
+            </p>
+          )}
         </div>
       </div>
 

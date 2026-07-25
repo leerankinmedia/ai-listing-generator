@@ -147,6 +147,14 @@ function expandCandidates(
     if (stripped) addCanonical(SIZE_LOOKUP.get(stripped))
   } else if (name === "color" || name === "colour") {
     addCanonical(COLOR_LOOKUP.get(collapsed))
+    // Compound detections like "Dark Gray/Charcoal" → match each part.
+    const words = collapsed.split(" ").filter(Boolean)
+    for (const word of words) {
+      addCanonical(COLOR_LOOKUP.get(word))
+    }
+    for (let i = 0; i < words.length - 1; i++) {
+      addCanonical(COLOR_LOOKUP.get(`${words[i]} ${words[i + 1]}`))
+    }
   } else if (name === "department" || name === "gender") {
     addCanonical(DEPARTMENT_LOOKUP.get(collapsed))
   } else if (name === "size type") {
@@ -202,6 +210,20 @@ function matchExactEbayColorValue(
       return k === "gray" || k === "grey"
     })
 
+  // Any gray-family signal wins over a stale exact "Black" earlier in the list.
+  // Dark Gray / Charcoal / Grey → eBay Gray (never Black).
+  const grayRaw = candidates.find((c) => c?.trim() && isGrayFamily(c))
+  if (grayRaw?.trim()) {
+    const grayOpt = findGrayAllowed()
+    if (grayOpt) {
+      return {
+        value: grayOpt,
+        detected: grayRaw.trim(),
+        path: "gray_family_priority",
+      }
+    }
+  }
+
   for (const candidate of candidates) {
     const raw = candidate?.trim()
     if (!raw) continue
@@ -209,6 +231,9 @@ function matchExactEbayColorValue(
     // 1) Direct case-insensitive match
     const direct = allowedByKey.get(collapse(raw))
     if (direct) {
+      // Stale Black must not win when a later/sibling candidate is gray-family
+      // (already handled above). Still block black for gray raw values.
+      if (isGrayFamily(raw) && isBlackFamily(direct)) continue
       return { value: direct, detected: raw, path: "exact" }
     }
 
@@ -384,4 +409,63 @@ export function colorIsGrayFamily(value: string | undefined): boolean {
 export function colorIsBlackFamily(value: string | undefined): boolean {
   if (!value?.trim()) return false
   return isBlackFamily(value)
+}
+
+/** Longest-first color phrases replaced in eBay titles before publish. */
+const TITLE_COLOR_PHRASES = [
+  "charcoal gray",
+  "charcoal grey",
+  "heather gray",
+  "heather grey",
+  "slate gray",
+  "slate grey",
+  "dark gray",
+  "dark grey",
+  "light gray",
+  "light grey",
+  "jet black",
+  "gunmetal",
+  "charcoal",
+  "heather",
+  "slate",
+  "gray",
+  "grey",
+  "black",
+  "onyx",
+  "noir",
+]
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/**
+ * Replace any existing color wording in the listing title with the final
+ * normalized eBay Color (e.g. Black / Dark Gray / Charcoal → Gray).
+ */
+export function rewriteEbayTitleColor(title: string, finalColor: string): string {
+  const color = finalColor.trim()
+  if (!title.trim() || !color) return title.slice(0, 80)
+
+  let next = title
+  for (const phrase of TITLE_COLOR_PHRASES) {
+    const phraseRe = new RegExp(
+      `\\b${phrase
+        .split(/\s+/)
+        .map(escapeRegExp)
+        .join("\\s+")}\\b`,
+      "gi"
+    )
+    next = next.replace(phraseRe, color)
+  }
+
+  // Keep a single final color token (first occurrence) after replacements.
+  let seenColor = false
+  next = next.replace(new RegExp(`\\b${escapeRegExp(color)}\\b`, "gi"), () => {
+    if (seenColor) return ""
+    seenColor = true
+    return color
+  })
+
+  return next.replace(/\s+/g, " ").trim().slice(0, 80)
 }

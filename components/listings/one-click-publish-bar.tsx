@@ -6,7 +6,11 @@ import { Loader2, Rocket } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { matchExactEbayAspectValue } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
+import {
+  colorIsBlackFamily,
+  colorIsGrayFamily,
+  matchExactEbayAspectValue,
+} from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import type { Listing, MarketplaceId, OneClickPublishResult } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -68,7 +72,19 @@ function applyExactAspectsToListing(
     // Always keep exact eBay value in extras under the Taxonomy aspect name
     // (this is what publish reads first for Size Type / Type / Theme / etc.).
     const existingExtra = extras[field.name]?.trim()
-    if (existingExtra && isExactOption(existingExtra, options || [existingExtra])) {
+    const aspectKey = field.name.trim().toLowerCase()
+    const isColorAspect = aspectKey === "color" || aspectKey === "colour"
+    const detectedColor =
+      listing.fieldConfidence?.color?.value || listing.specifics.color
+    const staleBlackExtra =
+      isColorAspect &&
+      colorIsGrayFamily(detectedColor) &&
+      colorIsBlackFamily(existingExtra)
+    if (
+      existingExtra &&
+      isExactOption(existingExtra, options || [existingExtra]) &&
+      !staleBlackExtra
+    ) {
       // Preserve manual exact selection.
     } else if (existingExtra !== value) {
       extras = { ...extras, [field.name]: value }
@@ -77,7 +93,20 @@ function applyExactAspectsToListing(
 
     if (target !== "extras") {
       const current = (specifics[target] as string | undefined)?.trim()
-      if (current && options && options.length > 0 && isExactOption(current, options)) {
+      const isColorField = target === "color"
+      const detectedColor =
+        listing.fieldConfidence?.color?.value || listing.specifics.color
+      const staleBlackForGray =
+        isColorField &&
+        colorIsGrayFamily(detectedColor) &&
+        colorIsBlackFamily(current)
+      if (
+        current &&
+        options &&
+        options.length > 0 &&
+        isExactOption(current, options) &&
+        !staleBlackForGray
+      ) {
         // Preserve manual exact selection on the known field.
       } else if (current !== value) {
         specifics = { ...specifics, [target]: value }
@@ -98,24 +127,38 @@ function resolveSelectValue(
   fieldName: string,
   rawValue: string,
   options: string[],
-  suggestedValue?: string
+  suggestedValue?: string,
+  detectedValue?: string
 ): string {
   if (options.length === 0) return rawValue
-  if (rawValue && isExactOption(rawValue, options)) {
+  const nameKey = fieldName.trim().toLowerCase()
+  const isColor = nameKey === "color" || nameKey === "colour"
+  // Gray-family detections must map via synonym logic (→ Gray), never keep a
+  // stale exact "Black" that happens to be on the allowed list.
+  const preferNormalize =
+    isColor &&
+    (colorIsGrayFamily(detectedValue) || colorIsGrayFamily(rawValue))
+
+  if (rawValue && isExactOption(rawValue, options) && !preferNormalize) {
     return (
       options.find((o) => o.toLowerCase() === rawValue.toLowerCase()) || rawValue
     )
   }
-  if (suggestedValue && isExactOption(suggestedValue, options)) {
+  if (suggestedValue && isExactOption(suggestedValue, options) && !preferNormalize) {
     return (
       options.find((o) => o.toLowerCase() === suggestedValue.toLowerCase()) ||
       suggestedValue
     )
   }
-  const matched = matchExactEbayAspectValue(fieldName, [rawValue, suggestedValue], options, {
-    selectionOnly: true,
-    highConfidence: true,
-  })
+  const matched = matchExactEbayAspectValue(
+    fieldName,
+    [detectedValue, rawValue, suggestedValue],
+    options,
+    {
+      selectionOnly: true,
+      highConfidence: true,
+    }
+  )
   return matched || ""
 }
 
@@ -181,7 +224,15 @@ export function OneClickPublishBar({
         target === "extras"
           ? listing.specifics.extras?.[f.name] || ""
           : ((listing.specifics[target] as string | undefined) ?? "")
-      const exact = resolveSelectValue(f.name, raw, options, f.suggestedValue)
+      const detected =
+        target === "color" ? listing.fieldConfidence?.color?.value : undefined
+      const exact = resolveSelectValue(
+        f.name,
+        raw,
+        options,
+        f.suggestedValue,
+        detected
+      )
       return exact ? [{ name: f.name, value: exact }] : []
     })
 
@@ -414,13 +465,19 @@ export function OneClickPublishBar({
             {requiredFields.map((field) => {
               const options = field.allowedValues || []
               const raw = readAspectValue(field.name)
+              const nameKey = field.name.trim().toLowerCase()
+              const detected =
+                nameKey === "color" || nameKey === "colour"
+                  ? listing.fieldConfidence?.color?.value
+                  : undefined
               const value =
                 options.length > 0
                   ? resolveSelectValue(
                       field.name,
                       raw,
                       options,
-                      field.suggestedValue
+                      field.suggestedValue,
+                      detected
                     )
                   : raw
               return (

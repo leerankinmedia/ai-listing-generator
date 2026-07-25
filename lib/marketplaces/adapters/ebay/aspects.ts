@@ -4,6 +4,7 @@ import {
   colorIsGrayFamily,
   isHighConfidenceField,
   matchExactEbayAspectValue,
+  rewriteEbayTitleColor,
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import { ebayFetch } from "@/lib/marketplaces/adapters/ebay/client"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
@@ -123,7 +124,13 @@ function listingCandidatesForAspect(
     case "colour":
       // Prefer detected listing color before extras so a stale auto-mapped
       // extras value (e.g. Black) cannot override Dark Gray → Gray.
-      return [listing.specifics.color, fromExtras]
+      // fieldConfidence keeps the original Vision color when specifics were
+      // overwritten by a prior bad aspect sync (e.g. Black).
+      return [
+        listing.fieldConfidence?.color?.value,
+        listing.specifics.color,
+        fromExtras,
+      ]
     case "material":
       return [fromExtras, listing.specifics.material]
     case "style":
@@ -152,6 +159,23 @@ function listingCandidatesForAspect(
     default:
       return [fromExtras, listing.specifics.extras?.[aspectName]]
   }
+}
+
+/** True when Vision/detected color or form state still indicates gray-family. */
+function listingHasGrayFamilyColor(
+  listing: Listing,
+  aspects?: Record<string, string[]>
+): boolean {
+  const extras = listing.specifics.extras || {}
+  const signals = [
+    listing.fieldConfidence?.color?.value,
+    listing.specifics.color,
+    extras.Color,
+    extras.Colour,
+    aspects?.Color?.[0],
+    aspects?.Colour?.[0],
+  ]
+  return signals.some((v) => colorIsGrayFamily(v))
 }
 
 /**
@@ -207,15 +231,15 @@ export function applyRequiredEbayAspects(
     )
 
     // Preserve exact manual / already-valid selections — never overwrite them.
-    // Exception: Color — do not keep a stale Black when detected color is gray-family.
+    // Exception: Color — do not keep a stale Black when any gray-family signal
+    // remains (detected attributes, specifics, or fieldConfidence).
     const current = aspects[name]?.[0]?.trim()
     const isColorAspect =
       name.toLowerCase() === "color" || name.toLowerCase() === "colour"
-    const detectedColor = listing.specifics.color
+    const grayDetected =
+      isColorAspect && listingHasGrayFamilyColor(listing, aspects)
     const staleBlackForGray =
-      isColorAspect &&
-      colorIsGrayFamily(detectedColor) &&
-      colorIsBlackFamily(current)
+      isColorAspect && grayDetected && colorIsBlackFamily(current)
 
     if (current && isExactAllowed(current, allowed) && !staleBlackForGray) {
       const exact =
@@ -231,11 +255,7 @@ export function applyRequiredEbayAspects(
     const extrasExact = (() => {
       const raw = listing.specifics.extras?.[name]?.trim()
       if (!raw) return undefined
-      if (
-        isColorAspect &&
-        colorIsGrayFamily(detectedColor) &&
-        colorIsBlackFamily(raw)
-      ) {
+      if (isColorAspect && grayDetected && colorIsBlackFamily(raw)) {
         return undefined
       }
       if (isExactAllowed(raw, allowed)) {
@@ -350,6 +370,84 @@ export function applyRequiredEbayAspects(
   })
 
   return { aspects, missingRequired, filledRequired, resolvedFields }
+}
+
+/**
+ * Final Color + title correction immediately before inventory write.
+ * Forces Dark Gray / Charcoal / Grey → eBay Gray (never Black) when any
+ * gray-family signal remains, and rewrites color words in the title.
+ */
+export function finalizeEbayColorAndTitle(
+  listing: Listing,
+  taxonomyAspects: EbayAspect[],
+  existingAspects: Record<string, string[]>,
+  title: string
+): {
+  aspects: Record<string, string[]>
+  title: string
+  color?: string
+} {
+  const aspects: Record<string, string[]> = { ...existingAspects }
+  const colorAspect =
+    taxonomyAspects.find((a) => {
+      const n = a.localizedAspectName?.trim().toLowerCase()
+      return n === "color" || n === "colour"
+    }) || null
+  const aspectName = colorAspect?.localizedAspectName?.trim() || "Color"
+  const allowed = colorAspect ? allowedValues(colorAspect) : []
+
+  const extras = listing.specifics.extras || {}
+  const signals = [
+    listing.fieldConfidence?.color?.value,
+    listing.specifics.color,
+    extras.Color,
+    extras.Colour,
+    aspects.Color?.[0],
+    aspects.Colour?.[0],
+    // Seed explicit gray-family wording so stale Black cannot win.
+    listingHasGrayFamilyColor(listing, aspects) ? "Dark Gray" : undefined,
+    listingHasGrayFamilyColor(listing, aspects) ? "Charcoal" : undefined,
+    listingHasGrayFamilyColor(listing, aspects) ? "Grey" : undefined,
+  ]
+
+  let finalColor = matchExactEbayAspectValue(aspectName, signals, allowed, {
+    selectionOnly: allowed.length > 0,
+    highConfidence: true,
+  })
+
+  if (
+    listingHasGrayFamilyColor(listing, aspects) &&
+    (!finalColor || colorIsBlackFamily(finalColor))
+  ) {
+    const grayOpt = allowed.find((a) => {
+      const k = a.trim().toLowerCase()
+      return k === "gray" || k === "grey"
+    })
+    if (grayOpt) finalColor = grayOpt
+    else if (!finalColor || colorIsBlackFamily(finalColor)) finalColor = "Gray"
+  }
+
+  if (finalColor) {
+    aspects[aspectName] = [finalColor]
+    // Inventory mapper always uses "Color"; keep both keys consistent.
+    aspects.Color = [finalColor]
+    if (aspectName.toLowerCase() === "colour") {
+      aspects.Colour = [finalColor]
+    }
+  }
+
+  const nextTitle = finalColor
+    ? rewriteEbayTitleColor(title, finalColor)
+    : title.slice(0, 80)
+
+  console.info("[ebay/color] TEMP finalize Color + title", {
+    detected: listing.fieldConfidence?.color?.value || listing.specifics.color || null,
+    selected: finalColor || null,
+    titleBefore: title.slice(0, 80),
+    titleAfter: nextTitle,
+  })
+
+  return { aspects, title: nextTitle, color: finalColor }
 }
 
 export function missingAspectsError(

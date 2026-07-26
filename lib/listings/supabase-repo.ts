@@ -152,13 +152,21 @@ async function syncInventoryItem(listing: Listing) {
 export async function listSupabaseListings(userId: string): Promise<Listing[] | null> {
   if (!isSupabaseConfigured()) return null
   const supabase = createClient()
+  return listSupabaseListingsServer(supabase, userId)
+}
+
+/** Server/API listing read with an injected Supabase client (cookie or service role). */
+export async function listSupabaseListingsServer(
+  supabase: SupabaseLike,
+  userId: string
+): Promise<Listing[]> {
   const { data, error } = await supabase
     .from("listings")
     .select("*")
     .eq("user_id", userId)
     .order("updated_at", { ascending: false })
   if (error) throw error
-  return (data as ListingRow[]).map(rowToListing)
+  return ((data as ListingRow[]) || []).map(rowToListing)
 }
 
 export async function getSupabaseListing(id: string): Promise<Listing | null> {

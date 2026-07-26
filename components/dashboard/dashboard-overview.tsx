@@ -12,6 +12,7 @@ import {
 import { useAuth } from "@/components/auth/auth-provider"
 import { useBillingStatus } from "@/components/billing/paywall"
 import { FeatureLockPreview } from "@/components/billing/feature-lock-preview"
+import { ListingChallengeCard } from "@/components/dashboard/listing-challenge-card"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import {
   countActiveListings,
@@ -180,6 +181,8 @@ export function DashboardOverview() {
           </Link>
         </div>
       )}
+
+      <ListingChallengeCard />
 
       <div className="animate-rise-delay-1 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map((stat) => {

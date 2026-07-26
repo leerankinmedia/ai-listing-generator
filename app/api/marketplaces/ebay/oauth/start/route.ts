@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "eBay is not configured. Set EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, and EBAY_RU_NAME.",
+            "eBay is not configured. Set EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, and EBAY_REDIRECT_URI.",
         },
         { status: 503 }
       )

@@ -2,11 +2,20 @@
  * eBay OAuth 2.0 authorization code grant (NOT Auth'n'Auth).
  * Authorize URLs are built with the official ebay-oauth-nodejs-client so the
  * query string matches eBay's authorization-code format exactly.
+ *
+ * Environment selection (Production by default):
+ *   EBAY_ENVIRONMENT=production → https://auth.ebay.com / https://api.ebay.com
+ *   EBAY_ENVIRONMENT=sandbox    → sandbox hosts (optional fallback)
+ * Legacy alias: EBAY_ENV
+ *
+ * Credentials:
+ *   EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_REDIRECT_URI (RuName)
+ * Legacy alias for RuName: EBAY_RU_NAME
  */
 import EbayAuthToken from "ebay-oauth-nodejs-client"
 import { PRODUCTION_APP_URL } from "@/lib/app-url"
 
-/** Sandbox OAuth RuName that must match EBAY_RU_NAME and the Developer Portal keyset. */
+/** Sandbox OAuth RuName that must match the Sandbox RuName/keyset when EBAY_ENVIRONMENT=sandbox. */
 export const EXPECTED_SANDBOX_RUNAME = "Lee_Rankin-LeeRanki-ListWi-rpqhu"
 
 const SANDBOX_AUTHORIZE =
@@ -17,12 +26,13 @@ export function isEbayConfigured() {
   return Boolean(
     process.env["EBAY_CLIENT_ID"] &&
       process.env["EBAY_CLIENT_SECRET"] &&
-      process.env["EBAY_RU_NAME"]
+      (process.env["EBAY_REDIRECT_URI"] || process.env["EBAY_RU_NAME"])
   )
 }
 
+/** Prefer EBAY_ENVIRONMENT; fall back to legacy EBAY_ENV. Default: production. */
 export function ebayEnv(): "sandbox" | "production" {
-  const raw = process.env["EBAY_ENV"]
+  const raw = process.env["EBAY_ENVIRONMENT"] ?? process.env["EBAY_ENV"]
   const normalized =
     typeof raw === "string" ? raw.trim().toLowerCase() : ""
   if (
@@ -67,19 +77,27 @@ export function ebayClientSecret(): string {
   return cleanEnv(process.env["EBAY_CLIENT_SECRET"])
 }
 
-export function ebayRuName(): string {
-  const ruName = cleanEnv(process.env["EBAY_RU_NAME"])
+/** Prefer EBAY_REDIRECT_URI; fall back to legacy EBAY_RU_NAME. */
+export function ebayRedirectUri(): string {
+  const ruName =
+    cleanEnv(process.env["EBAY_REDIRECT_URI"]) ||
+    cleanEnv(process.env["EBAY_RU_NAME"])
   if (!ruName) {
     throw new Error(
-      "EBAY_RU_NAME is required. Use the OAuth-enabled RuName from the eBay Developer Portal."
+      "EBAY_REDIRECT_URI is required. Use the OAuth-enabled RuName from the eBay Developer Portal."
     )
   }
   if (/^https?:\/\//i.test(ruName) || ruName.includes("/")) {
     throw new Error(
-      "EBAY_RU_NAME must be the eBay RuName string, not a Vercel/callback URL."
+      "EBAY_REDIRECT_URI must be the eBay RuName string, not a Vercel/callback URL."
     )
   }
   return ruName
+}
+
+/** @deprecated Prefer ebayRedirectUri() — kept for existing call sites. */
+export function ebayRuName(): string {
+  return ebayRedirectUri()
 }
 
 /** Official eBay sell scopes used for user consent + refresh. */
@@ -97,7 +115,7 @@ function createEbayAuthClient() {
   return new EbayAuthToken({
     clientId: ebayClientId(),
     clientSecret: ebayClientSecret(),
-    redirectUri: ebayRuName(),
+    redirectUri: ebayRedirectUri(),
     env,
   })
 }
@@ -130,7 +148,7 @@ function redactClientId(clientId: string) {
 
 function inspectAuthorizeUrl(url: string, state: string): EbayAuthorizeStartCheck {
   const parsed = new URL(url)
-  const redirectUri = ebayRuName()
+  const redirectUri = ebayRedirectUri()
   const clientId = ebayClientId()
   const env = ebayEnv()
   const expectedEndpoint =
@@ -180,7 +198,7 @@ function inspectAuthorizeUrl(url: string, state: string): EbayAuthorizeStartChec
 export function buildEbayAuthorizeUrl(state: string) {
   if (!isEbayConfigured()) {
     throw new Error(
-      "eBay is not configured. Set EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, and EBAY_RU_NAME."
+      "eBay is not configured. Set EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, and EBAY_REDIRECT_URI."
     )
   }
   if (!state) {
@@ -188,11 +206,11 @@ export function buildEbayAuthorizeUrl(state: string) {
   }
 
   const envName = ebayEnv() === "sandbox" ? "SANDBOX" : "PRODUCTION"
-  const redirectUri = ebayRuName()
+  const redirectUri = ebayRedirectUri()
 
   if (ebayEnv() === "sandbox" && redirectUri !== EXPECTED_SANDBOX_RUNAME) {
     throw new Error(
-      `EBAY_RU_NAME must be exactly ${EXPECTED_SANDBOX_RUNAME} for Sandbox OAuth (matches the Sandbox RuName/keyset).`
+      `EBAY_REDIRECT_URI/EBAY_RU_NAME must be exactly ${EXPECTED_SANDBOX_RUNAME} for Sandbox OAuth (matches the Sandbox RuName/keyset).`
     )
   }
 
@@ -267,7 +285,7 @@ export async function exchangeEbayCode(code: string) {
     throw new Error("eBay app credentials are not configured.")
   }
   const apiBase = ebayApiBase()
-  const redirectUri = ebayRuName()
+  const redirectUri = ebayRedirectUri()
   console.info("[ebay/oauth] token exchange", {
     flow: "oauth2_authorization_code",
     env: ebayEnv(),

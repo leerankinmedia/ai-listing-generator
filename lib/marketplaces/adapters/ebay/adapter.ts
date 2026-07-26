@@ -112,7 +112,8 @@ export const ebayAdapter: MarketplaceAdapter = {
   setupRequirements: () => [
     "EBAY_CLIENT_ID",
     "EBAY_CLIENT_SECRET",
-    "EBAY_RU_NAME",
+    "EBAY_REDIRECT_URI",
+    "EBAY_ENVIRONMENT",
     "CONNECTIONS_SECRET",
   ],
   async publish(listing: Listing, connection: StoredMarketplaceConnection): Promise<PublishResult> {
@@ -262,7 +263,7 @@ export const ebayAdapter: MarketplaceAdapter = {
     )) as { listingId?: string }
 
     const listingId = published.listingId
-    // Item browse URL follows API/auth env (EBAY_ENV), not marketplaceId or browser host.
+    // Item browse URL follows API/auth env (EBAY_ENVIRONMENT), not marketplaceId or browser host.
     const site =
       ebayEnv() === "sandbox"
         ? "https://sandbox.ebay.com"

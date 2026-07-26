@@ -4,7 +4,9 @@ import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import {
   CreditCard,
+  Eye,
   LayoutDashboard,
+  LineChart,
   LogOut,
   Package,
   Plus,
@@ -22,10 +24,12 @@ import { cn } from "@/lib/utils"
 const navItems = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
   { href: "/dashboard/challenge", label: "Challenge", icon: Target },
+  { href: "/dashboard/insights", label: "Insights", icon: LineChart },
   { href: "/dashboard/listings", label: "Listings", icon: Package },
   { href: "/dashboard/listings/new", label: "AI Generator", icon: Plus },
   { href: "/dashboard/connections", label: "Connections", icon: Store },
   { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
+  { href: "/dashboard/bolo", label: "BOLO", icon: Eye },
   { href: "/dashboard#settings", label: "Account", icon: Settings },
 ]
 
@@ -153,7 +157,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             navItems[0],
             navItems[1],
             navItems[2],
-            navItems[4],
+            navItems[3],
             navItems[5],
           ].map((item) => {
             const Icon = item.icon

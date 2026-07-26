@@ -1,11 +1,10 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import {
   ArrowUpRight,
   Package,
-  ShoppingBag,
   Store,
   TrendingUp,
   Zap,
@@ -13,6 +12,7 @@ import {
 import { useAuth } from "@/components/auth/auth-provider"
 import { useBillingStatus } from "@/components/billing/paywall"
 import { ChallengeSummary } from "@/components/dashboard/challenge-summary"
+import { OverviewInsights } from "@/components/dashboard/overview-insights"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import {
   countActiveListings,
@@ -20,7 +20,6 @@ import {
   formatConnectedShopsLabel,
   formatEntitlementStatusLabel,
 } from "@/lib/dashboard/stats"
-import { formatSoldDate, getLatestEbaySales } from "@/lib/dashboard/sales"
 import { fetchListings } from "@/lib/listings/repository"
 import { buttonVariants } from "@/components/ui/button"
 import type { Listing, MarketplaceId } from "@/lib/types"
@@ -87,7 +86,6 @@ export function DashboardOverview() {
     }
   }, [user])
 
-  const latestSales = useMemo(() => getLatestEbaySales(listings, 3), [listings])
   const activeCount = countActiveListings(listings)
   const connectedCount = countConnectedShops(connectedIds)
   const connectedNames = MARKETPLACES.filter((m) =>
@@ -138,7 +136,7 @@ export function DashboardOverview() {
               ? trialExpired
                 ? "Your trial has ended — browse Overview and listings in read-only mode, or subscribe to unlock tools."
                 : "Explore your workspace — start a free trial when you’re ready to generate listings."
-              : "Today’s challenge, performance, and latest sales."}
+              : "Today’s challenge, performance, and sales insights."}
             {isDemo ? " · running in demo auth mode" : ""}
           </p>
         </div>
@@ -208,60 +206,7 @@ export function DashboardOverview() {
         })}
       </div>
 
-      <section id="sales" className="animate-rise-delay-2 scroll-mt-24 space-y-3">
-        <div>
-          <h2 className="font-display text-xl font-semibold">Latest eBay sales</h2>
-          <p className="text-sm text-muted-foreground">
-            Up to 3 recent sold items from your account.
-          </p>
-        </div>
-        {latestSales.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border bg-card/40 px-5 py-10 text-center">
-            <ShoppingBag className="mx-auto h-8 w-8 text-muted-foreground" />
-            <p className="mt-3 font-medium">No eBay sales yet</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              When items sell on eBay, they’ll show up here with price and date.
-            </p>
-          </div>
-        ) : (
-          <ul className="space-y-2">
-            {latestSales.map((sale) => (
-              <li key={sale.id}>
-                <Link
-                  href={`/dashboard/listings/${sale.listingId}`}
-                  className="flex items-center gap-3 rounded-xl border border-border bg-card/80 p-2.5 transition-colors hover:border-accent/40 sm:p-3"
-                >
-                  <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-secondary sm:h-16 sm:w-16">
-                    {sale.photoUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={sale.photoUrl}
-                        alt=""
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center">
-                        <Package className="h-5 w-5 text-muted-foreground" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="line-clamp-1 text-sm font-semibold">
-                      {sale.title}
-                    </p>
-                    <p className="mt-0.5 text-sm font-medium">
-                      ${sale.soldPrice.toFixed(2)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {formatSoldDate(sale.soldAt)} · {sale.marketplaceName}
-                    </p>
-                  </div>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      <OverviewInsights />
 
       <section
         id="marketplaces"

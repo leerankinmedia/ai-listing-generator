@@ -80,7 +80,7 @@ export function ListingChallengeCard() {
     return (
       <section
         id="challenge"
-        className="scroll-mt-24 rounded-xl border border-border bg-card/80 p-4 backdrop-blur-sm sm:p-5"
+        className="scroll-mt-24 rounded-xl border border-border bg-card/80 p-3.5 backdrop-blur-sm sm:p-5"
       >
         <p className="text-sm text-muted-foreground">Loading challenge…</p>
       </section>
@@ -120,14 +120,14 @@ export function ListingChallengeCard() {
   return (
     <section
       id="challenge"
-      className="animate-rise scroll-mt-24 rounded-xl border border-border bg-card/80 p-4 backdrop-blur-sm sm:p-5"
+      className="animate-rise scroll-mt-24 rounded-xl border border-border bg-card/80 p-3.5 backdrop-blur-sm sm:p-5"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-wider text-accent">
             10-Day Listing Challenge
           </p>
-          <h2 className="mt-1 font-display text-xl font-semibold tracking-tight sm:text-2xl">
+          <h2 className="mt-1 font-display text-lg font-semibold tracking-tight sm:text-2xl">
             {inactive
               ? "Build listing momentum"
               : completed

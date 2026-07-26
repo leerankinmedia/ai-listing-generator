@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   ArrowUpRight,
   Package,
@@ -11,13 +11,13 @@ import {
 } from "lucide-react"
 import { useAuth } from "@/components/auth/auth-provider"
 import { useBillingStatus } from "@/components/billing/paywall"
-import { FeatureLockPreview } from "@/components/billing/feature-lock-preview"
 import { ListingChallengeCard } from "@/components/dashboard/listing-challenge-card"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import {
   countActiveListings,
   countConnectedShops,
   formatConnectedShopsLabel,
+  formatEntitlementStatusLabel,
 } from "@/lib/dashboard/stats"
 import { fetchListings } from "@/lib/listings/repository"
 import { buttonVariants } from "@/components/ui/button"
@@ -26,32 +26,8 @@ import {
   BILLING_TRIAL_DAYS,
   MONTHLY_LISTING_CREDITS,
   PLAN_NAME,
-  getMembershipPriceLabel,
 } from "@/lib/billing/config"
 import { cn } from "@/lib/utils"
-
-const roadmap = [
-  {
-    id: "marketplaces",
-    title: "Marketplace syncing",
-    body: "Connect eBay, Poshmark, Mercari, Depop, Grailed, Facebook Marketplace, Etsy, Vinted, and Whatnot.",
-  },
-  {
-    id: "inventory",
-    title: "Inventory management",
-    body: "Central SKU tracking with quantity sync across every connected channel.",
-  },
-  {
-    id: "automation",
-    title: "Offer & delist automation",
-    body: "Auto-accept floors, counter rules, and instant delisting when an item sells.",
-  },
-  {
-    id: "analytics",
-    title: "Seller analytics",
-    body: "Velocity, sell-through, and channel performance in one view.",
-  },
-]
 
 type PublicConnection = {
   marketplaceId: MarketplaceId
@@ -64,8 +40,11 @@ export function DashboardOverview() {
   const { status: billing } = useBillingStatus(Boolean(user))
   const [listings, setListings] = useState<Listing[]>([])
   const [connectedIds, setConnectedIds] = useState<MarketplaceId[]>([])
-  const firstName =
-    user?.fullName?.split(" ")[0] || user?.email?.split("@")[0] || "Seller"
+  const displayName =
+    user?.fullName?.trim() ||
+    user?.email?.split("@")[0] ||
+    "Seller"
+  const firstName = displayName.split(" ")[0] || "Seller"
   const toolsUnlocked = billing?.paidToolsUnlocked === true
   const previewMode = Boolean(billing?.previewMode || (billing && !toolsUnlocked))
   const trialExpired =
@@ -73,6 +52,10 @@ export function DashboardOverview() {
   const unlockCta = trialExpired
     ? "Subscribe"
     : `Start ${BILLING_TRIAL_DAYS}-day trial`
+  const entitlementLabel = formatEntitlementStatusLabel(billing)
+  const planLine = toolsUnlocked
+    ? `${PLAN_NAME} · ${entitlementLabel}`
+    : entitlementLabel
 
   useEffect(() => {
     if (!user) return
@@ -102,6 +85,16 @@ export function DashboardOverview() {
     }
   }, [user])
 
+  const newestListings = useMemo(() => {
+    return [...listings]
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt || b.createdAt).getTime() -
+          new Date(a.updatedAt || a.createdAt).getTime()
+      )
+      .slice(0, 3)
+  }, [listings])
+
   const activeCount = countActiveListings(listings)
   const connectedCount = countConnectedShops(connectedIds)
   const connectedSet = new Set(connectedIds)
@@ -110,44 +103,39 @@ export function DashboardOverview() {
     {
       label: "Active listings",
       value: String(activeCount),
-      hint: activeCount
-        ? "Listed on a marketplace"
-        : "Publish a listing to see it here",
+      hint: activeCount ? "Status: listed" : "None listed yet",
       icon: Package,
       href: "/dashboard/listings",
     },
     {
       label: "Connected shops",
       value: formatConnectedShopsLabel(connectedCount),
-      hint:
-        connectedCount > 0
-          ? "From your marketplace connections"
-          : "Connect eBay to start publishing",
+      hint: connectedCount > 0 ? "Your connections" : "Connect a shop",
       icon: Store,
       href: "/dashboard/connections",
     },
     {
       label: "Pending offers",
       value: "0",
-      hint: "Automation coming soon",
+      hint: "Coming soon",
       icon: Zap,
       href: null as string | null,
     },
     {
       label: "Revenue (30d)",
       value: "$0",
-      hint: "Analytics coming soon",
+      hint: "Coming soon",
       icon: TrendingUp,
       href: null as string | null,
     },
   ]
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
-      <div className="animate-rise flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="mx-auto max-w-6xl space-y-5 sm:space-y-8">
+      <div className="animate-rise flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
         <div>
           <p className="text-sm text-muted-foreground">Welcome back</p>
-          <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+          <h1 className="font-display text-2xl font-semibold tracking-tight sm:text-4xl">
             {firstName}&apos;s workspace
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -184,19 +172,23 @@ export function DashboardOverview() {
 
       <ListingChallengeCard />
 
-      <div className="animate-rise-delay-1 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="animate-rise-delay-1 grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
         {stats.map((stat) => {
           const Icon = stat.icon
           const body = (
             <>
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground sm:text-xs">
                   {stat.label}
                 </p>
-                <Icon className="h-4 w-4 text-accent" />
+                <Icon className="h-3.5 w-3.5 shrink-0 text-accent sm:h-4 sm:w-4" />
               </div>
-              <p className="mt-3 font-display text-3xl font-semibold">{stat.value}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{stat.hint}</p>
+              <p className="mt-2 font-display text-2xl font-semibold sm:mt-3 sm:text-3xl">
+                {stat.value}
+              </p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground sm:mt-1 sm:text-xs">
+                {stat.hint}
+              </p>
             </>
           )
           if (stat.href) {
@@ -204,7 +196,7 @@ export function DashboardOverview() {
               <Link
                 key={stat.label}
                 href={stat.href}
-                className="rounded-xl border border-border bg-card/80 p-4 backdrop-blur-sm transition-colors hover:border-accent/40"
+                className="rounded-xl border border-border bg-card/80 p-3 backdrop-blur-sm transition-colors hover:border-accent/40 sm:p-4"
               >
                 {body}
               </Link>
@@ -213,7 +205,7 @@ export function DashboardOverview() {
           return (
             <div
               key={stat.label}
-              className="rounded-xl border border-border bg-card/80 p-4 backdrop-blur-sm"
+              className="rounded-xl border border-border bg-card/80 p-3 backdrop-blur-sm sm:p-4"
             >
               {body}
             </div>
@@ -221,23 +213,15 @@ export function DashboardOverview() {
         })}
       </div>
 
-      <section id="listings" className="animate-rise-delay-2 scroll-mt-24 space-y-4">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h2 className="font-display text-xl font-semibold">Recent listings</h2>
-            <p className="text-sm text-muted-foreground">
-              Vision analyzes every photo with confidence scores and sold comps.
-            </p>
-          </div>
-          <Link
-            href="/dashboard/listings"
-            className="text-sm font-medium text-muted-foreground hover:text-accent"
-          >
-            View all
-          </Link>
+      <section id="listings" className="animate-rise-delay-2 scroll-mt-24 space-y-3 sm:space-y-4">
+        <div>
+          <h2 className="font-display text-xl font-semibold">Recent listings</h2>
+          <p className="text-sm text-muted-foreground">
+            Your 3 newest saved listings.
+          </p>
         </div>
         {listings.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border bg-card/40 px-6 py-14 text-center">
+          <div className="rounded-xl border border-dashed border-border bg-card/40 px-5 py-10 text-center sm:px-6 sm:py-14">
             <Package className="mx-auto h-8 w-8 text-muted-foreground" />
             <p className="mt-3 font-medium">No listings yet</p>
             <p className="mt-1 text-sm text-muted-foreground">
@@ -251,60 +235,71 @@ export function DashboardOverview() {
             </Link>
           </div>
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {listings.slice(0, 6).map((listing) => (
-              <Link
-                key={listing.id}
-                href={`/dashboard/listings/${listing.id}`}
-                className="overflow-hidden rounded-xl border border-border bg-card/80 transition-colors hover:border-accent/40"
-              >
-                <div className="aspect-[16/10] bg-secondary">
-                  {listing.images[0] && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={listing.images[0].url}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  )}
-                </div>
-                <div className="space-y-1 p-3.5">
-                  <p className="line-clamp-1 text-sm font-semibold">
-                    {listing.title || "Untitled"}
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    ${listing.price.toFixed(2)} · {listing.status}
-                  </p>
-                </div>
-              </Link>
-            ))}
-          </div>
+          <>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {newestListings.map((listing) => (
+                <Link
+                  key={listing.id}
+                  href={`/dashboard/listings/${listing.id}`}
+                  className="overflow-hidden rounded-xl border border-border bg-card/80 transition-colors hover:border-accent/40"
+                >
+                  <div className="aspect-[16/10] bg-secondary">
+                    {listing.images[0] && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={listing.images[0].url}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    )}
+                  </div>
+                  <div className="space-y-1 p-3 sm:p-3.5">
+                    <p className="line-clamp-1 text-sm font-semibold">
+                      {listing.title || "Untitled"}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      ${listing.price.toFixed(2)} · {listing.status}
+                    </p>
+                  </div>
+                </Link>
+              ))}
+            </div>
+            <Link
+              href="/dashboard/listings"
+              className={cn(
+                buttonVariants({ variant: "outline" }),
+                "w-full sm:w-auto"
+              )}
+            >
+              View all listings
+            </Link>
+          </>
         )}
       </section>
 
-      <section id="marketplaces" className="scroll-mt-24">
-        <div className="mb-4 flex items-end justify-between gap-4">
+      <section id="marketplaces" className="scroll-mt-24 space-y-3 sm:space-y-4">
+        <div className="flex items-end justify-between gap-4">
           <div>
             <h2 className="font-display text-xl font-semibold">Marketplaces</h2>
             <p className="text-sm text-muted-foreground">
-              Connection status from your account — manage OAuth on Connections.
+              Connection status from your account.
             </p>
           </div>
           <Link
             href="/dashboard/connections"
             className="text-sm font-medium text-muted-foreground hover:text-accent"
           >
-            Manage connections
+            Manage
           </Link>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-2 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3">
           {MARKETPLACES.map((marketplace) => {
             const connected = connectedSet.has(marketplace.id)
             return (
               <Link
                 key={marketplace.id}
                 href="/dashboard/connections"
-                className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card/80 px-4 py-3.5 transition-colors hover:border-accent/40"
+                className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card/80 px-3.5 py-3 transition-colors hover:border-accent/40 sm:px-4 sm:py-3.5"
               >
                 <div className="flex min-w-0 items-center gap-3">
                   <span
@@ -329,87 +324,36 @@ export function DashboardOverview() {
         </div>
       </section>
 
-      <section id="automation" className="scroll-mt-24 space-y-4">
-        <div>
-          <h2 className="font-display text-xl font-semibold">Coming next</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Crosslisting, automation, and analytics phases.
-          </p>
-        </div>
-        {previewMode ? (
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div id="inventory" className="scroll-mt-24">
-              <FeatureLockPreview
-                feature="inventory"
-                trialEligible={!trialExpired}
-              />
-            </div>
-            <div id="automation" className="scroll-mt-24">
-              <FeatureLockPreview
-                feature="automation"
-                trialEligible={!trialExpired}
-              />
-            </div>
-          </div>
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2">
-            {roadmap.map((item) => (
-              <div
-                key={item.id}
-                id={item.id}
-                className="rounded-xl border border-border bg-card/80 p-4"
-              >
-                <p className="text-sm font-semibold">{item.title}</p>
-                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                  {item.body}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
       <section
         id="settings"
-        className="scroll-mt-24 rounded-xl border border-border bg-card/80 p-5"
+        className="scroll-mt-24 rounded-xl border border-border bg-card/80 p-4 sm:p-5"
       >
-        <h2 className="font-display text-xl font-semibold">Account</h2>
-        <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-          <div>
-            <dt className="text-muted-foreground">Email</dt>
-            <dd className="mt-0.5 font-medium">{user?.email ?? "—"}</dd>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Account
+            </p>
+            <p className="mt-1 truncate font-display text-lg font-semibold">
+              {displayName}
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {planLine}
+              {" · "}
+              {billing?.listingCreditsUsed ?? 0}/
+              {billing?.listingCreditsAllowance ?? MONTHLY_LISTING_CREDITS}{" "}
+              credits used
+            </p>
           </div>
-          <div>
-            <dt className="text-muted-foreground">Name</dt>
-            <dd className="mt-0.5 font-medium">{user?.fullName ?? "—"}</dd>
-          </div>
-          <div>
-            <dt className="text-muted-foreground">Plan</dt>
-            <dd className="mt-0.5 font-medium">
-              {billing?.planName || PLAN_NAME} ·{" "}
-              {billing?.priceLabel || getMembershipPriceLabel()}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-muted-foreground">AI listing credits</dt>
-            <dd className="mt-0.5 font-medium">
-              {billing?.listingCreditsUsed ?? 0} /{" "}
-              {billing?.listingCreditsAllowance ?? MONTHLY_LISTING_CREDITS} used
-              this cycle
-            </dd>
-          </div>
-          <div>
-            <dt className="text-muted-foreground">Auth mode</dt>
-            <dd className="mt-0.5 font-medium">{isDemo ? "Demo" : "Supabase"}</dd>
-          </div>
-        </dl>
-        <p className="mt-4 text-xs text-muted-foreground">
-          1 completed AI-generated listing = 1 credit. Credit limits are not
-          enforced yet.{" "}
-          <Link href="/dashboard/billing" className="underline hover:text-foreground">
+          <Link
+            href="/dashboard/billing"
+            className={cn(
+              buttonVariants({ variant: "outline", size: "sm" }),
+              "self-start sm:self-auto"
+            )}
+          >
             Manage billing
           </Link>
-        </p>
+        </div>
       </section>
     </div>
   )

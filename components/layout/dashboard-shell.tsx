@@ -3,8 +3,6 @@
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import {
-  BarChart3,
-  Boxes,
   CreditCard,
   LayoutDashboard,
   LogOut,
@@ -12,7 +10,6 @@ import {
   Plus,
   Settings,
   Store,
-  Zap,
 } from "lucide-react"
 import { Logo } from "@/components/brand/logo"
 import { ThemeToggle } from "@/components/theme-toggle"
@@ -27,10 +24,7 @@ const navItems = [
   { href: "/dashboard/listings/new", label: "AI Generator", icon: Plus },
   { href: "/dashboard/connections", label: "Connections", icon: Store },
   { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
-  { href: "/dashboard#inventory", label: "Inventory", icon: Boxes },
-  { href: "/dashboard#automation", label: "Automation", icon: Zap },
-  { href: "/dashboard#analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/dashboard#settings", label: "Settings", icon: Settings },
+  { href: "/dashboard#settings", label: "Account", icon: Settings },
 ]
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
@@ -123,14 +117,14 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       <div className="flex min-h-screen flex-col">
-        <header className="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-border bg-background/85 px-4 backdrop-blur-xl sm:px-6 lg:h-16">
+        <header className="sticky top-0 z-40 flex h-12 items-center justify-between border-b border-border bg-background/85 px-4 backdrop-blur-xl sm:px-6 lg:h-16">
           <div className="flex items-center gap-3 lg:hidden">
             <Logo href="/dashboard" />
           </div>
           <p className="hidden text-sm text-muted-foreground lg:block">
             Sell smarter across every marketplace.
           </p>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2">
             <Link
               href={createHref}
               className={cn(
@@ -145,14 +139,14 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             <button
               type="button"
               onClick={() => void handleSignOut()}
-              className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-foreground lg:hidden"
+              className="rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-foreground lg:hidden"
             >
               Sign out
             </button>
           </div>
         </header>
 
-        <nav className="flex gap-1 overflow-x-auto border-b border-border px-3 py-2 lg:hidden">
+        <nav className="flex gap-1 overflow-x-auto border-b border-border px-3 py-1.5 lg:hidden">
           {[
             navItems[0],
             navItems[1],
@@ -165,7 +159,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               <Link
                 key={item.href}
                 href={item.href}
-                className="flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
+                className="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
               >
                 <Icon className="h-3.5 w-3.5" />
                 {item.label}
@@ -174,7 +168,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
-        <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">{children}</main>
+        <main className="flex-1 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">{children}</main>
       </div>
     </div>
   )

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { exchangeEbayCode } from "@/lib/marketplaces/adapters/ebay/oauth"
+import { ebayFetch } from "@/lib/marketplaces/adapters/ebay/client"
 import { PRODUCTION_APP_URL } from "@/lib/app-url"
 import { checkSubscriptionAccess } from "@/lib/billing/access"
 import {
@@ -138,13 +139,40 @@ export async function GET(request: NextRequest) {
 
     const tokens = await exchangeEbayCode(code)
     const now = new Date().toISOString()
+    let accountLabel = "eBay seller"
+    const meta: Record<string, string> = {}
+    try {
+      const identity = (await ebayFetch(
+        `/commerce/identity/v1/user/`,
+        tokens.accessToken,
+        { step: "getIdentityUser" }
+      )) as {
+        userId?: string
+        username?: string
+        accountType?: string
+      }
+      if (identity?.username) {
+        accountLabel = identity.username
+        meta.ebayUsername = identity.username
+      }
+      if (identity?.userId) {
+        meta.ebayUserId = identity.userId
+      }
+    } catch {
+      // Identity scope may be unavailable — connection still saved.
+      console.info("[ebay/oauth] identity lookup skipped", {
+        reason: "identity_unavailable",
+      })
+    }
+
     await saveConnection({
       marketplaceId: "ebay",
       authMethod: "oauth",
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       expiresAt: new Date(Date.now() + tokens.expiresIn * 1000).toISOString(),
-      accountLabel: "eBay seller",
+      accountLabel,
+      meta: Object.keys(meta).length ? meta : undefined,
       connectedAt: now,
       updatedAt: now,
     })

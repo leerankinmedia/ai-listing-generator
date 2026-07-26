@@ -79,6 +79,12 @@ export async function saveConnection(
     updatedAt: new Date().toISOString(),
   }
   const encryptedPayload = serializeConnection(updated)
+  const externalUserId = updated.meta?.ebayUserId?.trim() || null
+  const externalUsername =
+    updated.meta?.ebayUsername?.trim() ||
+    (updated.accountLabel && updated.accountLabel !== "eBay seller"
+      ? updated.accountLabel.trim()
+      : null)
 
   const user = await getServerAuthUser()
   if (user && isSupabaseConfigured()) {
@@ -93,6 +99,8 @@ export async function saveConnection(
         expires_at: updated.expiresAt ?? null,
         connected_at: updated.connectedAt,
         updated_at: updated.updatedAt,
+        external_user_id: externalUserId,
+        external_username: externalUsername,
       },
       { onConflict: "user_id,marketplace_id" }
     )

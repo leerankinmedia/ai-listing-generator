@@ -5,13 +5,14 @@ import { useEffect, useMemo, useState } from "react"
 import {
   ArrowUpRight,
   Package,
+  ShoppingBag,
   Store,
   TrendingUp,
   Zap,
 } from "lucide-react"
 import { useAuth } from "@/components/auth/auth-provider"
 import { useBillingStatus } from "@/components/billing/paywall"
-import { ListingChallengeCard } from "@/components/dashboard/listing-challenge-card"
+import { ChallengeSummary } from "@/components/dashboard/challenge-summary"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import {
   countActiveListings,
@@ -19,6 +20,7 @@ import {
   formatConnectedShopsLabel,
   formatEntitlementStatusLabel,
 } from "@/lib/dashboard/stats"
+import { formatSoldDate, getLatestEbaySales } from "@/lib/dashboard/sales"
 import { fetchListings } from "@/lib/listings/repository"
 import { buttonVariants } from "@/components/ui/button"
 import type { Listing, MarketplaceId } from "@/lib/types"
@@ -85,19 +87,12 @@ export function DashboardOverview() {
     }
   }, [user])
 
-  const newestListings = useMemo(() => {
-    return [...listings]
-      .sort(
-        (a, b) =>
-          new Date(b.updatedAt || b.createdAt).getTime() -
-          new Date(a.updatedAt || a.createdAt).getTime()
-      )
-      .slice(0, 3)
-  }, [listings])
-
+  const latestSales = useMemo(() => getLatestEbaySales(listings, 3), [listings])
   const activeCount = countActiveListings(listings)
   const connectedCount = countConnectedShops(connectedIds)
-  const connectedSet = new Set(connectedIds)
+  const connectedNames = MARKETPLACES.filter((m) =>
+    connectedIds.some((id) => String(id).toLowerCase() === m.id)
+  ).map((m) => m.name)
 
   const stats = [
     {
@@ -143,8 +138,8 @@ export function DashboardOverview() {
               ? trialExpired
                 ? "Your trial has ended — browse Overview and listings in read-only mode, or subscribe to unlock tools."
                 : "Explore your workspace — start a free trial when you’re ready to generate listings."
-              : "Production AI listing engine is live"}
-            {isDemo ? " · running in demo auth mode" : ""}.
+              : "Today’s challenge, performance, and latest sales."}
+            {isDemo ? " · running in demo auth mode" : ""}
           </p>
         </div>
         <Link
@@ -170,7 +165,7 @@ export function DashboardOverview() {
         </div>
       )}
 
-      <ListingChallengeCard />
+      <ChallengeSummary />
 
       <div className="animate-rise-delay-1 grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
         {stats.map((stat) => {
@@ -213,114 +208,88 @@ export function DashboardOverview() {
         })}
       </div>
 
-      <section id="listings" className="animate-rise-delay-2 scroll-mt-24 space-y-3 sm:space-y-4">
+      <section id="sales" className="animate-rise-delay-2 scroll-mt-24 space-y-3">
         <div>
-          <h2 className="font-display text-xl font-semibold">Recent listings</h2>
+          <h2 className="font-display text-xl font-semibold">Latest eBay sales</h2>
           <p className="text-sm text-muted-foreground">
-            Your 3 newest saved listings.
+            Up to 3 recent sold items from your account.
           </p>
         </div>
-        {listings.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border bg-card/40 px-5 py-10 text-center sm:px-6 sm:py-14">
-            <Package className="mx-auto h-8 w-8 text-muted-foreground" />
-            <p className="mt-3 font-medium">No listings yet</p>
+        {latestSales.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border bg-card/40 px-5 py-10 text-center">
+            <ShoppingBag className="mx-auto h-8 w-8 text-muted-foreground" />
+            <p className="mt-3 font-medium">No eBay sales yet</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Upload photos and generate SEO-ready copy in seconds.
+              When items sell on eBay, they’ll show up here with price and date.
             </p>
-            <Link
-              href={previewMode ? "/checkout" : "/dashboard/listings/new"}
-              className={cn(buttonVariants({ variant: "accent" }), "mt-5 inline-flex")}
-            >
-              {previewMode ? unlockCta : "Open AI generator"}
-            </Link>
           </div>
         ) : (
-          <>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {newestListings.map((listing) => (
+          <ul className="space-y-2">
+            {latestSales.map((sale) => (
+              <li key={sale.id}>
                 <Link
-                  key={listing.id}
-                  href={`/dashboard/listings/${listing.id}`}
-                  className="overflow-hidden rounded-xl border border-border bg-card/80 transition-colors hover:border-accent/40"
+                  href={`/dashboard/listings/${sale.listingId}`}
+                  className="flex items-center gap-3 rounded-xl border border-border bg-card/80 p-2.5 transition-colors hover:border-accent/40 sm:p-3"
                 >
-                  <div className="aspect-[16/10] bg-secondary">
-                    {listing.images[0] && (
+                  <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-secondary sm:h-16 sm:w-16">
+                    {sale.photoUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
-                        src={listing.images[0].url}
+                        src={sale.photoUrl}
                         alt=""
                         className="h-full w-full object-cover"
                       />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center">
+                        <Package className="h-5 w-5 text-muted-foreground" />
+                      </div>
                     )}
                   </div>
-                  <div className="space-y-1 p-3 sm:p-3.5">
+                  <div className="min-w-0 flex-1">
                     <p className="line-clamp-1 text-sm font-semibold">
-                      {listing.title || "Untitled"}
+                      {sale.title}
                     </p>
-                    <p className="text-sm text-muted-foreground">
-                      ${listing.price.toFixed(2)} · {listing.status}
+                    <p className="mt-0.5 text-sm font-medium">
+                      ${sale.soldPrice.toFixed(2)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatSoldDate(sale.soldAt)} · {sale.marketplaceName}
                     </p>
                   </div>
                 </Link>
-              ))}
-            </div>
-            <Link
-              href="/dashboard/listings"
-              className={cn(
-                buttonVariants({ variant: "outline" }),
-                "w-full sm:w-auto"
-              )}
-            >
-              View all listings
-            </Link>
-          </>
+              </li>
+            ))}
+          </ul>
         )}
       </section>
 
-      <section id="marketplaces" className="scroll-mt-24 space-y-3 sm:space-y-4">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h2 className="font-display text-xl font-semibold">Marketplaces</h2>
-            <p className="text-sm text-muted-foreground">
-              Connection status from your account.
+      <section
+        id="marketplaces"
+        className="scroll-mt-24 rounded-xl border border-border bg-card/80 p-4"
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Connected shops
+            </p>
+            <p className="mt-1 text-sm font-semibold">
+              {connectedNames.length > 0
+                ? connectedNames.join(", ")
+                : "No marketplaces connected"}
+            </p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {formatConnectedShopsLabel(connectedCount)} connected
             </p>
           </div>
           <Link
             href="/dashboard/connections"
-            className="text-sm font-medium text-muted-foreground hover:text-accent"
+            className={cn(
+              buttonVariants({ variant: "outline", size: "sm" }),
+              "self-start sm:self-auto"
+            )}
           >
-            Manage
+            Manage connections
           </Link>
-        </div>
-        <div className="grid gap-2 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3">
-          {MARKETPLACES.map((marketplace) => {
-            const connected = connectedSet.has(marketplace.id)
-            return (
-              <Link
-                key={marketplace.id}
-                href="/dashboard/connections"
-                className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card/80 px-3.5 py-3 transition-colors hover:border-accent/40 sm:px-4 sm:py-3.5"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <span
-                    className="h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: marketplace.color }}
-                  />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold">
-                      {marketplace.name}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {connected ? "Connected" : "Not connected"}
-                    </p>
-                  </div>
-                </div>
-                <span className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground">
-                  {connected ? "Manage" : "Connect"}
-                </span>
-              </Link>
-            )
-          })}
         </div>
       </section>
 

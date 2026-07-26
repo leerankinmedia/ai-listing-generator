@@ -10,6 +10,7 @@ import {
   Plus,
   Settings,
   Store,
+  Target,
 } from "lucide-react"
 import { Logo } from "@/components/brand/logo"
 import { ThemeToggle } from "@/components/theme-toggle"
@@ -20,6 +21,7 @@ import { cn } from "@/lib/utils"
 
 const navItems = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
+  { href: "/dashboard/challenge", label: "Challenge", icon: Target },
   { href: "/dashboard/listings", label: "Listings", icon: Package },
   { href: "/dashboard/listings/new", label: "AI Generator", icon: Plus },
   { href: "/dashboard/connections", label: "Connections", icon: Store },
@@ -151,8 +153,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             navItems[0],
             navItems[1],
             navItems[2],
-            navItems[3],
             navItems[4],
+            navItems[5],
           ].map((item) => {
             const Icon = item.icon
             return (

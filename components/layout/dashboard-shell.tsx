@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import {
+  Boxes,
   CreditCard,
   Eye,
   LayoutDashboard,
@@ -30,6 +31,7 @@ const navItems = [
   { href: "/dashboard/challenge", label: "Challenge", icon: Target },
   { href: "/dashboard/insights", label: "Insights", icon: LineChart },
   { href: "/dashboard/listings", label: "Listings", icon: Package },
+  { href: "/dashboard/inventory", label: "Inventory", icon: Boxes },
   { href: "/dashboard/listings/new", label: "AI Generator", icon: Plus },
   { href: "/dashboard/connections", label: "Connections", icon: Store },
   { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
@@ -37,14 +39,15 @@ const navItems = [
   { href: "/dashboard#settings", label: "Account", icon: Settings },
 ]
 
-/** Primary top tabs — Overview | Challenge | Insights | Listings | Connections | Billing */
+/** Primary top tabs — Overview | Challenge | Insights | Listings | Inventory | Connections | Billing */
 const topNavItems = [
   navItems[0],
   navItems[1],
   navItems[2],
   navItems[3],
-  navItems[5],
+  navItems[4],
   navItems[6],
+  navItems[7],
 ]
 
 function navItemActive(

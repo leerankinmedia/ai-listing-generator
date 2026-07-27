@@ -112,12 +112,30 @@ async function syncListingPhotos(listing: Listing) {
   await syncListingPhotosWithClient(createClient(), listing)
 }
 
+function inventorySkuAndQuantity(listing: Listing): {
+  sku: string
+  quantity: number
+} {
+  const extras = listing.specifics?.extras || {}
+  const fromExtras =
+    extras.sku?.trim() ||
+    extras.ebaySku?.trim() ||
+    extras.SKU?.trim() ||
+    ""
+  const sku =
+    fromExtras.slice(0, 50) ||
+    listing.id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 50) ||
+    listing.id
+  const qtyRaw = Number(extras.quantity ?? extras.ebayQuantity ?? 1)
+  const quantity = Number.isFinite(qtyRaw) ? Math.max(0, Math.floor(qtyRaw)) : 1
+  return { sku, quantity }
+}
+
 async function syncInventoryItemWithClient(
   supabase: SupabaseLike,
   listing: Listing
 ) {
-  const sku =
-    listing.id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 50) || listing.id
+  const { sku, quantity } = inventorySkuAndQuantity(listing)
   const { data: existing, error: selectError } = await supabase
     .from("inventory_items")
     .select("id")
@@ -129,7 +147,7 @@ async function syncInventoryItemWithClient(
   if (existing?.id) {
     const { error: updateError } = await supabase
       .from("inventory_items")
-      .update({ sku, quantity: 1, updated_at: new Date().toISOString() })
+      .update({ sku, quantity, updated_at: new Date().toISOString() })
       .eq("id", existing.id)
     if (updateError) throw updateError
     return
@@ -139,7 +157,7 @@ async function syncInventoryItemWithClient(
     user_id: listing.userId,
     listing_id: listing.id,
     sku,
-    quantity: 1,
+    quantity,
   })
   if (insertError) throw insertError
 }

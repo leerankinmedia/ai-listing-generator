@@ -5,6 +5,7 @@ import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import {
   CheckCircle2,
+  Download,
   Link2,
   Link2Off,
   Loader2,
@@ -273,19 +274,32 @@ export function MarketplaceConnectionsPanel() {
                         Adapter slot reserved
                       </span>
                     ) : connected ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => void disconnect(adapter.id)}
-                      >
-                        {busy ? (
-                          <Loader2 className="animate-spin" />
-                        ) : (
-                          <Unplug />
+                      <>
+                        {adapter.id === "ebay" && (
+                          <Link
+                            href="/dashboard/inventory?import=1"
+                            className={cn(
+                              buttonVariants({ variant: "accent", size: "sm" })
+                            )}
+                          >
+                            <Download />
+                            Import Listings
+                          </Link>
                         )}
-                        Disconnect
-                      </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => void disconnect(adapter.id)}
+                        >
+                          {busy ? (
+                            <Loader2 className="animate-spin" />
+                          ) : (
+                            <Unplug />
+                          )}
+                          Disconnect
+                        </Button>
+                      </>
                     ) : adapter.authMethod === "oauth" ? (
                       <a
                         href={`/api/marketplaces/${adapter.id}/oauth/start`}
@@ -362,11 +376,18 @@ export function MarketplaceConnectionsPanel() {
       )}
 
       <p className="text-sm text-muted-foreground">
-        After connecting, open a listing and use{" "}
+        After connecting eBay, use{" "}
+        <Link
+          href="/dashboard/inventory"
+          className="underline underline-offset-2"
+        >
+          Import Listings
+        </Link>{" "}
+        to pull active inventory, or open a listing and{" "}
         <Link href="/dashboard/listings" className="underline underline-offset-2">
           Publish
         </Link>{" "}
-        to push to one or more marketplaces.
+        to push to marketplaces.
       </p>
     </div>
   )

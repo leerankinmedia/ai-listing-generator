@@ -1,6 +1,13 @@
 /**
  * Permanent ListWise Owner account.
  * Enforced only via server-side entitlement / credit guards — never trust the client.
+ *
+ * Identification order (see also lib/billing/owner-resolve.ts):
+ * 1) Optional LISTWISE_OWNER_USER_IDS (env UUID allow-list) — never required
+ * 2) Session / Auth Admin / profiles email match against LISTWISE_OWNER_EMAIL
+ * 3) Current user id equals the Auth/profiles row for LISTWISE_OWNER_EMAIL
+ *
+ * Owner is NOT tied to a UUID created before the Founder account existed.
  */
 
 export const LISTWISE_OWNER_EMAIL = "leerankinmedia@gmail.com"
@@ -14,8 +21,13 @@ export const FOUNDER_OWNER_LABEL = "Founder • Owner"
 /** Billing page membership copy for the Owner account. */
 export const LIFETIME_FOUNDER_ACCESS = "Lifetime Founder Access"
 
+/** Strip invisible format chars that break exact email equality. */
+function stripInvisibleEmailChars(value: string): string {
+  return value.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, "")
+}
+
 export function normalizeBillingEmail(email: string): string {
-  return email.normalize("NFKC").trim().toLowerCase()
+  return stripInvisibleEmailChars(email.normalize("NFKC")).trim().toLowerCase()
 }
 
 /**
@@ -43,8 +55,7 @@ export function canonicalizeOwnerEmail(email: string): string {
 
 /**
  * Owner email whitelist: hardcoded Founder address plus optional
- * LISTWISE_OWNER_EMAILS (comma-separated) for additional login emails
- * on the same Founder (e.g. alternate Google account used on mobile).
+ * LISTWISE_OWNER_EMAILS (comma-separated) for additional login emails.
  */
 export function getOwnerEmailWhitelist(): string[] {
   const emails = [LISTWISE_OWNER_EMAIL]
@@ -64,12 +75,13 @@ export function isListWiseOwnerEmail(
 ): boolean {
   if (!email || typeof email !== "string") return false
   const candidate = canonicalizeOwnerEmail(email)
+  if (!candidate.includes("@")) return false
   return getOwnerEmailWhitelist().some(
     (ownerEmail) => canonicalizeOwnerEmail(ownerEmail) === candidate
   )
 }
 
-/** Optional Owner user ids (comma-separated). Primary Owner match remains the email. */
+/** Optional Owner user ids (comma-separated). Email remains the primary key. */
 export function getOwnerUserIds(): Set<string> {
   const raw = process.env.LISTWISE_OWNER_USER_IDS || ""
   return new Set(
@@ -101,7 +113,7 @@ export function collectAuthUserEmails(user: AuthEmailSource | null | undefined):
   const found: string[] = []
   const push = (value: unknown) => {
     if (typeof value !== "string") return
-    const trimmed = value.normalize("NFKC").trim()
+    const trimmed = stripInvisibleEmailChars(value.normalize("NFKC")).trim()
     if (!trimmed || !trimmed.includes("@")) return
     const normalized = normalizeBillingEmail(trimmed)
     if (!found.includes(normalized)) found.push(normalized)
@@ -164,7 +176,7 @@ export function explainOwnerEmailMatch(
     sessionEmails,
     matched: false,
     matchedEmail: null,
-    mismatchReason: `Session email(s) [${session}] are not in Owner whitelist [${whitelist}] (compared with Gmail-canonical form).`,
+    mismatchReason: `Session email(s) [${session}] are not in Owner whitelist [${whitelist}] (compared with Gmail-canonical form). Owner is email-based (${LISTWISE_OWNER_EMAIL}), not a pre-created UUID.`,
   }
 }
 

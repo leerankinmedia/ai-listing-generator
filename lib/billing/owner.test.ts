@@ -31,6 +31,10 @@ describe("ListWise Owner email", () => {
     assert.equal(isListWiseOwnerEmail("lee.rankinmedia@gmail.com"), true)
     assert.equal(isListWiseOwnerEmail("leerankinmedia+listwise@gmail.com"), true)
     assert.equal(isListWiseOwnerEmail("leerankinmedia@googlemail.com"), true)
+    assert.equal(
+      isListWiseOwnerEmail("\uFEFFleerankinmedia@gmail.com\u200B"),
+      true
+    )
   })
 
   it("honors LISTWISE_OWNER_EMAILS allow-list aliases", () => {

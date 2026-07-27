@@ -30,6 +30,7 @@ type ImportPageResponse = {
   scanned?: number
   activeOnPage?: number
   totalOffers?: number | null
+  activeListingsFound?: number
   progressPercent?: number | null
   created?: number
   updated?: number
@@ -43,6 +44,14 @@ type ImportPageResponse = {
   message?: string
   error?: string
   code?: string
+  source?: string
+  sample?: Array<{ ebayListingId: string; title: string }>
+  apiCalls?: Array<{
+    api?: string
+    step?: string
+    resultCount?: number
+    total?: number | null
+  }>
 }
 
 export function InventoryPage() {
@@ -118,6 +127,9 @@ export function InventoryPage() {
     let failed = 0
     let skipped = 0
     let scanned = 0
+    let activeListingsFound = 0
+    let source = ""
+    let sample: Array<{ ebayListingId: string; title: string }> = []
     const failureMessages: string[] = []
 
     try {
@@ -138,6 +150,16 @@ export function InventoryPage() {
         failed += data.failed || 0
         skipped += data.skipped || 0
         scanned += data.scanned || 0
+        if (typeof data.activeListingsFound === "number") {
+          activeListingsFound = Math.max(
+            activeListingsFound,
+            data.activeListingsFound
+          )
+        }
+        if (data.source) source = data.source
+        if (data.sample?.length && sample.length === 0) {
+          sample = data.sample.slice(0, 5)
+        }
         if (data.failures?.length) {
           for (const failure of data.failures.slice(0, 5)) {
             failureMessages.push(
@@ -159,7 +181,7 @@ export function InventoryPage() {
         setProgressLabel(
           data.done
             ? data.message || "Import complete."
-            : `Scanning eBay offers… ${scanned} scanned · ${created + updated} saved · ${skipped} skipped`
+            : `Scanning via ${data.source || "eBay"}… found ${activeListingsFound || scanned} · saved ${created + updated}`
         )
 
         done = Boolean(data.done)
@@ -169,10 +191,15 @@ export function InventoryPage() {
         }
       }
 
+      const sampleText = sample.length
+        ? ` First 5: ${sample
+            .map((s) => `${s.ebayListingId} “${s.title.slice(0, 40)}”`)
+            .join("; ")}.`
+        : ""
       setNotice(
-        `Imported from eBay: ${created} new, ${updated} updated, ${skipped} skipped${
-          failed ? `, ${failed} failed` : ""
-        }.`
+        `Imported from eBay (${source || "unknown"}): activeFound=${activeListingsFound}, imported=${created + updated} (${created} new, ${updated} updated), skipped=${skipped}${
+          failed ? `, failed=${failed}` : ""
+        }.${sampleText}`
       )
       if (failureMessages.length) {
         setError(failureMessages.join(" · "))

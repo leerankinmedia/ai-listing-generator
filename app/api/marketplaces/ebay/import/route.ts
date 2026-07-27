@@ -137,12 +137,30 @@ export async function POST(request: Request) {
     const skipped = page.skipped?.length ?? 0
     const errorCount = failures.length + (page.errors?.length ?? 0)
     const totalOffers = page.totalOffers
+    const activeListingsFound = page.activeListingsFound ?? processed
     const progressPercent =
       totalOffers && totalOffers > 0
         ? Math.min(100, Math.round((page.nextOffset / totalOffers) * 100))
         : page.done
           ? 100
           : null
+
+    const sample = page.sample ?? page.imported.slice(0, 5).map((row) => ({
+      ebayListingId: row.ebayListingId,
+      title: row.title,
+    }))
+
+    console.info("[ebay/import] page summary", {
+      source: page.source,
+      apiCalls: page.apiCalls,
+      activeListingsFound,
+      imported: processed,
+      created,
+      updated,
+      skipped,
+      failed: failures.length,
+      sample,
+    })
 
     return NextResponse.json({
       ok: failures.length === 0,
@@ -153,6 +171,7 @@ export async function POST(request: Request) {
       scanned: page.scanned,
       activeOnPage: page.activeOnPage,
       totalOffers,
+      activeListingsFound,
       progressPercent,
       created,
       updated,
@@ -164,9 +183,13 @@ export async function POST(request: Request) {
       failures,
       skippedItems: page.skipped ?? [],
       warnings: page.warnings,
+      source: page.source,
+      api: page.source,
+      apiCalls: page.apiCalls,
+      sample,
       message: page.done
-        ? `Import complete. ${created} new, ${updated} updated, ${skipped} skipped, ${failures.length} failed.`
-        : `Imported page at offset ${page.offset}: ${processed} saved, ${skipped} skipped, ${failures.length} failed.`,
+        ? `Import complete via ${page.source}. Active found ${activeListingsFound}. ${created} new, ${updated} updated, ${skipped} skipped, ${failures.length} failed.`
+        : `Page via ${page.source}: activeFound=${activeListingsFound}, imported=${processed}, skipped=${skipped}.`,
     })
   } catch (error) {
     console.error("[ebay/import] failed", error)

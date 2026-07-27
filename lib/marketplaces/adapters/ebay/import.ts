@@ -1,7 +1,6 @@
 import "server-only"
 import { ebayFetch, ebayFetchResult } from "@/lib/marketplaces/adapters/ebay/client"
 import { ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
-import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import {
   EBAY_IMPORT_PAGE_SIZE,
   buildImportGetOffersPath,
@@ -14,6 +13,7 @@ import {
   type EbayInventoryItemRaw,
   type EbayOfferRaw,
 } from "@/lib/marketplaces/adapters/ebay/import-map"
+import { fetchTradingActiveListPage } from "@/lib/marketplaces/adapters/ebay/trading"
 
 export {
   EBAY_IMPORT_PAGE_SIZE,
@@ -47,13 +47,22 @@ type EbayInventoryItemPage = {
   size?: number
 }
 
+export type EbayImportApiCallLog = {
+  api: "SellInventory" | "Trading"
+  step: string
+  pathOrCall: string
+  httpStatus?: number
+  resultCount: number
+  total?: number | null
+  note?: string
+}
+
 function marketplaceId() {
   return process.env.EBAY_MARKETPLACE_ID?.trim() || "EBAY_US"
 }
 
-function isInvalidSkuError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return /25707|invalid sku/i.test(message)
+function logImportApiCall(log: EbayImportApiCallLog) {
+  console.info("[ebay/import] API call", log)
 }
 
 export async function fetchEbayOfferPage(
@@ -68,7 +77,7 @@ export async function fetchEbayOfferPage(
 }
 
 /**
- * Fallback when unfiltered getOffers fails: page inventory items (no sku filter).
+ * Fallback when unfiltered getOffers fails or returns empty: page inventory items.
  * Never calls getOffers?sku=.
  */
 export async function fetchEbayInventoryItemPage(
@@ -112,38 +121,11 @@ export async function fetchEbayInventoryItem(
     console.warn("[ebay/import] inventory item fetch skipped", {
       sku: sku.trim(),
       message,
-      reason: isInvalidSkuError(error) ? "invalid_sku" : "inventory_item_error",
+      reason: /25707|invalid sku/i.test(message)
+        ? "invalid_sku"
+        : "inventory_item_error",
     })
     return null
-  }
-}
-
-/**
- * Intentionally NOT used by import. Kept as a guarded helper so any future
- * call site cannot pass an invalid seller SKU into getOffers?sku=.
- */
-export async function fetchEbayOffersBySkuSafe(
-  accessToken: string,
-  sku: string
-): Promise<EbayOfferRaw[]> {
-  if (!isEbayInventoryApiSku(sku)) {
-    console.warn("[ebay/import] refused getOffers?sku= for invalid SKU", {
-      sku: sku?.slice?.(0, 60),
-    })
-    return []
-  }
-  try {
-    const path = `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku.trim())}`
-    const data = (await ebayFetch(path, accessToken, {
-      step: "importGetOffersBySkuSafe",
-    })) as EbayOfferPage
-    return data.offers || []
-  } catch (error) {
-    console.warn("[ebay/import] getOffers?sku= skipped", {
-      sku: sku.trim(),
-      message: error instanceof Error ? error.message : "unknown",
-    })
-    return []
   }
 }
 
@@ -188,7 +170,6 @@ function offerToImported(
 
   return {
     offerId,
-    // Preserve original seller SKU (may be invalid). ListWise key is derived in map.
     sku: sellerSku || listWiseImportKey(ebayListingId, offerId),
     ebayListingId,
     title,
@@ -225,7 +206,6 @@ export async function hydrateImportedOffers(
       }
 
       const sellerSku = (offer.sku || "").trim()
-      // Enrichment only — never getOffers?sku=.
       const item = isEbayInventoryApiSku(sellerSku)
         ? await fetchEbayInventoryItem(accessToken, sellerSku)
         : null
@@ -253,7 +233,7 @@ export async function hydrateImportedOffers(
 }
 
 /**
- * When getOffers list is unavailable, import from inventory item pages.
+ * When getOffers list is empty/unavailable, import from inventory item pages.
  * Does not call getOffers?sku= for any seller SKU.
  */
 export async function hydrateImportedInventoryItems(
@@ -291,7 +271,6 @@ export async function hydrateImportedInventoryItems(
       imported.push({
         offerId: internalKey,
         sku: sellerSku || internalKey,
-        // Stable synthetic listing id — original seller SKU preserved in sku field.
         ebayListingId: internalKey,
         title,
         description: item.product?.description?.trim() || "",
@@ -329,14 +308,21 @@ export type EbayImportPageResult = {
   scanned: number
   activeOnPage: number
   totalOffers: number | null
+  /** Active listings found by the winning API for this page/total. */
+  activeListingsFound: number
   imported: EbayImportedOffer[]
   skipped: HydrateImportedOffersResult["skipped"]
   warnings: string[]
   errors: string[]
-  source: "offers" | "inventory_items_fallback"
+  source:
+    | "sell_inventory_offers"
+    | "sell_inventory_items"
+    | "trading_active_list"
+  apiCalls: EbayImportApiCallLog[]
+  sample: Array<{ ebayListingId: string; title: string }>
 }
 
-/** Fetch one page and hydrate. Never aborts the page on a single bad SKU. */
+/** Fetch one page and hydrate. Falls back Inventory → Trading when empty. */
 export async function importEbayOffersPage(
   accessToken: string,
   offset: number,
@@ -344,86 +330,256 @@ export async function importEbayOffersPage(
 ): Promise<EbayImportPageResult> {
   const pageSize = Math.min(50, Math.max(1, Math.floor(limit)))
   const safeOffset = Math.max(0, Math.floor(offset))
+  const apiCalls: EbayImportApiCallLog[] = []
+  const warnings: string[] = []
 
-  // 1) Preferred: list offers with NO sku= filter.
+  // ——— 1) Sell Inventory API: GET /sell/inventory/v1/offer (no sku=) ———
   try {
     const path = buildImportGetOffersPath(safeOffset, pageSize, marketplaceId())
-    // Soft fetch so we can fall back on 25707 instead of failing the route.
     const result = await ebayFetchResult(path, accessToken, {
       step: "importGetOffers",
     })
     const page = result.data as EbayOfferPage
-    const offers = page.offers || []
-    const active = offers.filter(isActivePublishedOffer)
-    const { imported, skipped, errors } = await hydrateImportedOffers(
-      accessToken,
-      offers
+    let offers = page.offers || []
+    let totalOffers = typeof page.total === "number" ? page.total : null
+
+    apiCalls.push({
+      api: "SellInventory",
+      step: "importGetOffers",
+      pathOrCall: path.split("?")[0],
+      httpStatus: result.status,
+      resultCount: offers.length,
+      total: totalOffers,
+      note: "Sell Inventory getOffers (marketplace_ids filter)",
+    })
+    logImportApiCall(apiCalls[apiCalls.length - 1])
+
+    // Retry once without marketplace_ids when filtered list is empty.
+    if (offers.length === 0 && safeOffset === 0) {
+      const broadPath =
+        `/sell/inventory/v1/offer` +
+        `?limit=${encodeURIComponent(String(pageSize))}` +
+        `&offset=0`
+      try {
+        const broad = await ebayFetchResult(broadPath, accessToken, {
+          step: "importGetOffersBroad",
+        })
+        const broadPage = broad.data as EbayOfferPage
+        const broadOffers = broadPage.offers || []
+        apiCalls.push({
+          api: "SellInventory",
+          step: "importGetOffersBroad",
+          pathOrCall: "/sell/inventory/v1/offer",
+          httpStatus: broad.status,
+          resultCount: broadOffers.length,
+          total:
+            typeof broadPage.total === "number" ? broadPage.total : null,
+          note: "Sell Inventory getOffers (no marketplace_ids)",
+        })
+        logImportApiCall(apiCalls[apiCalls.length - 1])
+        if (broadOffers.length > 0) {
+          offers = broadOffers
+          totalOffers =
+            typeof broadPage.total === "number" ? broadPage.total : null
+          warnings.push(
+            "getOffers with marketplace_ids returned 0; used unfiltered getOffers."
+          )
+        }
+      } catch (broadErr) {
+        apiCalls.push({
+          api: "SellInventory",
+          step: "importGetOffersBroad",
+          pathOrCall: "/sell/inventory/v1/offer",
+          resultCount: 0,
+          note: `broad getOffers failed: ${
+            broadErr instanceof Error ? broadErr.message : "unknown"
+          }`,
+        })
+        logImportApiCall(apiCalls[apiCalls.length - 1])
+      }
+    }
+
+    if (offers.length > 0) {
+      const active = offers.filter(isActivePublishedOffer)
+      const hydrated = await hydrateImportedOffers(accessToken, offers)
+      const nextOffset = safeOffset + offers.length
+      const done =
+        totalOffers !== null
+          ? nextOffset >= totalOffers
+          : offers.length < pageSize
+
+      return {
+        offset: safeOffset,
+        nextOffset,
+        done,
+        pageSize,
+        scanned: offers.length,
+        activeOnPage: active.length,
+        totalOffers,
+        activeListingsFound: totalOffers ?? active.length,
+        imported: hydrated.imported,
+        skipped: hydrated.skipped,
+        warnings: [...warnings, ...hydrated.errors],
+        errors: hydrated.errors,
+        source: "sell_inventory_offers",
+        apiCalls,
+        sample: hydrated.imported.slice(0, 5).map((row) => ({
+          ebayListingId: row.ebayListingId,
+          title: row.title,
+        })),
+      }
+    }
+
+    warnings.push(
+      "Sell Inventory getOffers returned 0 offers — listings may be Trading/Seller Hub only."
     )
-    const nextOffset = safeOffset + offers.length
-    const totalOffers = typeof page.total === "number" ? page.total : null
+  } catch (error) {
+    apiCalls.push({
+      api: "SellInventory",
+      step: "importGetOffers",
+      pathOrCall: "/sell/inventory/v1/offer",
+      resultCount: 0,
+      note: error instanceof Error ? error.message : "getOffers failed",
+    })
+    logImportApiCall(apiCalls[apiCalls.length - 1])
+    warnings.push(
+      `getOffers error: ${error instanceof Error ? error.message : "unknown"}`
+    )
+  }
+
+  // ——— 2) Sell Inventory API: GET /sell/inventory/v1/inventory_item ———
+  try {
+    const inv = await fetchEbayInventoryItemPage(
+      accessToken,
+      safeOffset,
+      pageSize
+    )
+    const items = inv.inventoryItems || []
+    const invTotal = typeof inv.total === "number" ? inv.total : null
+    apiCalls.push({
+      api: "SellInventory",
+      step: "importGetInventoryItems",
+      pathOrCall: "/sell/inventory/v1/inventory_item",
+      resultCount: items.length,
+      total: invTotal,
+      note: "Sell Inventory getInventoryItems",
+    })
+    logImportApiCall(apiCalls[apiCalls.length - 1])
+
+    if (items.length > 0) {
+      const hydrated = await hydrateImportedInventoryItems(items)
+      const nextOffset = safeOffset + items.length
+      const done =
+        invTotal !== null ? nextOffset >= invTotal : items.length < pageSize
+      return {
+        offset: safeOffset,
+        nextOffset,
+        done,
+        pageSize,
+        scanned: items.length,
+        activeOnPage: hydrated.imported.length,
+        totalOffers: invTotal,
+        activeListingsFound: invTotal ?? hydrated.imported.length,
+        imported: hydrated.imported,
+        skipped: hydrated.skipped,
+        warnings: [
+          ...warnings,
+          "Imported from Sell Inventory inventory_item list (getOffers was empty).",
+          ...hydrated.errors,
+        ],
+        errors: hydrated.errors,
+        source: "sell_inventory_items",
+        apiCalls,
+        sample: hydrated.imported.slice(0, 5).map((row) => ({
+          ebayListingId: row.ebayListingId,
+          title: row.title,
+        })),
+      }
+    }
+
+    warnings.push("Sell Inventory inventory_item list returned 0 items.")
+  } catch (invErr) {
+    apiCalls.push({
+      api: "SellInventory",
+      step: "importGetInventoryItems",
+      pathOrCall: "/sell/inventory/v1/inventory_item",
+      resultCount: 0,
+      note: invErr instanceof Error ? invErr.message : "inventory_item failed",
+    })
+    logImportApiCall(apiCalls[apiCalls.length - 1])
+    warnings.push(
+      `inventory_item list error: ${
+        invErr instanceof Error ? invErr.message : "unknown"
+      }`
+    )
+  }
+
+  // ——— 3) Trading API: GetMyeBaySelling ActiveList (classic seller listings) ———
+  // Not Browse API. Inventory empty ≠ no active listings (Seller Hub / Trading).
+  const pageNumber = Math.floor(safeOffset / pageSize) + 1
+  try {
+    const { page: tradingPage, log: tradingLog } =
+      await fetchTradingActiveListPage(accessToken, pageNumber, pageSize)
+
+    apiCalls.push({
+      api: "Trading",
+      step: "importGetMyeBaySellingActiveList",
+      pathOrCall: "GetMyeBaySelling/ActiveList",
+      httpStatus: tradingLog.httpStatus,
+      resultCount: tradingPage.rawItemCount,
+      total: tradingPage.totalEntries,
+      note: `Trading ActiveList ack=${tradingLog.ack}`,
+    })
+    logImportApiCall(apiCalls[apiCalls.length - 1])
+
+    const imported = tradingPage.items
+    const nextOffset = safeOffset + imported.length
     const done =
-      offers.length === 0 ||
-      (totalOffers !== null
-        ? nextOffset >= totalOffers
-        : offers.length < pageSize)
+      imported.length === 0 ||
+      nextOffset >= tradingPage.totalEntries ||
+      imported.length < pageSize
 
     return {
       offset: safeOffset,
       nextOffset,
       done,
       pageSize,
-      scanned: offers.length,
-      activeOnPage: active.length,
-      totalOffers,
+      scanned: tradingPage.rawItemCount,
+      activeOnPage: imported.length,
+      totalOffers: tradingPage.totalEntries,
+      activeListingsFound: tradingPage.totalEntries,
       imported,
-      skipped,
-      warnings: errors,
-      errors,
-      source: "offers",
+      skipped: [],
+      warnings: [
+        ...warnings,
+        "Sell Inventory returned 0; imported via Trading API GetMyeBaySelling ActiveList.",
+      ],
+      errors: [],
+      source: "trading_active_list",
+      apiCalls,
+      sample: imported.slice(0, 5).map((row) => ({
+        ebayListingId: row.ebayListingId,
+        title: row.title,
+      })),
     }
-  } catch (error) {
-    if (!(error instanceof MarketplaceError) || !isInvalidSkuError(error)) {
-      throw error
-    }
-    console.warn(
-      "[ebay/import] importGetOffers failed with invalid-SKU error; falling back to inventory_item list (no sku= filter)",
-      { message: error.message }
+  } catch (tradingErr) {
+    const message =
+      tradingErr instanceof Error ? tradingErr.message : "Trading API failed"
+    apiCalls.push({
+      api: "Trading",
+      step: "importGetMyeBaySellingActiveList",
+      pathOrCall: "GetMyeBaySelling/ActiveList",
+      resultCount: 0,
+      note: message,
+    })
+    logImportApiCall(apiCalls[apiCalls.length - 1])
+    console.error("[ebay/import] Trading fallback failed after Inventory=0", {
+      apiCalls,
+      message,
+    })
+    throw new Error(
+      `Sell Inventory returned 0 offers/items and Trading ActiveList failed: ${message}`
     )
-  }
-
-  // 2) Fallback: inventory item list — still never uses getOffers?sku=.
-  const inv = await fetchEbayInventoryItemPage(
-    accessToken,
-    safeOffset,
-    pageSize
-  )
-  const items = inv.inventoryItems || []
-  const { imported, skipped, errors } = await hydrateImportedInventoryItems(
-    items
-  )
-  const nextOffset = safeOffset + items.length
-  const totalOffers = typeof inv.total === "number" ? inv.total : null
-  const done =
-    items.length === 0 ||
-    (totalOffers !== null ? nextOffset >= totalOffers : items.length < pageSize)
-
-  errors.unshift(
-    "getOffers list returned 25707; imported this page from inventory items without getOffers?sku=."
-  )
-
-  return {
-    offset: safeOffset,
-    nextOffset,
-    done,
-    pageSize,
-    scanned: items.length,
-    activeOnPage: imported.length,
-    totalOffers,
-    imported,
-    skipped,
-    warnings: errors,
-    errors,
-    source: "inventory_items_fallback",
   }
 }
 

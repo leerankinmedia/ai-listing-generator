@@ -65,6 +65,10 @@ function noStoreJson(
   })
 }
 
+function isDebugRequest(request: NextRequest): boolean {
+  return request.nextUrl.searchParams.get("debug") === "1"
+}
+
 /**
  * Last-resort Owner email resolution for this route only.
  * Unions session + Auth Admin + profiles emails before any trial deny.
@@ -111,15 +115,19 @@ async function collectOwnerEmailsForUser(user: {
 /**
  * eBay Connect with OAuth — /api/marketplaces/ebay/oauth/start
  *
+ * Temporary: ?debug=1 returns JSON diagnostics instead of redirect/deny.
  * trial_expired is emitted only from GET below when Owner resolution fails and
  * getEntitlement().status === "expired".
  */
 export async function GET(request: NextRequest) {
+  const debug = isDebugRequest(request)
+
   try {
     const host = requestHost(request)
 
     // Bounce off temporary deployment hosts so the state cookie is set on the
     // canonical production host (must match RuName Auth Accepted URL).
+    // Preserve search (including ?debug=1).
     if (
       !isLocalAppHost(host) &&
       !isCanonicalProductionHost(host) &&
@@ -142,6 +150,28 @@ export async function GET(request: NextRequest) {
 
     const user = await getServerAuthUser()
     if (!user?.id) {
+      if (debug) {
+        return noStoreJson(
+          {
+            temporaryDebug: true,
+            route: TRIAL_EXPIRED_FN,
+            authenticated: false,
+            isOwner: false,
+            authenticatedEmail: null,
+            entitlementStatus: null,
+            deniedByFunction: null,
+            nextAction: "return unauthorized",
+            responseHeaders: {
+              "X-ListWise-OAuth-Version": OAUTH_START_VERSION,
+              "X-ListWise-Deny-Fn": null,
+              "X-ListWise-Deciding-Field": null,
+            },
+            code: "unauthorized",
+            error: "Sign in required to connect a marketplace.",
+          },
+          200
+        )
+      }
       return noStoreJson(
         {
           error: "Sign in required to connect a marketplace.",
@@ -154,11 +184,12 @@ export async function GET(request: NextRequest) {
     const owner = await resolveIsPermanentOwnerDetailed(user)
     const allEmails = await collectOwnerEmailsForUser(user)
     const emailIsOwner = allEmails.some((email) => isListWiseOwnerEmail(email))
+    const primaryEmail = user.email || allEmails[0] || null
     const entitlement = await getEntitlement(user.id, {
-      email: user.email || allEmails[0] || null,
+      email: primaryEmail,
       authUser: {
         ...user,
-        email: user.email || allEmails[0] || null,
+        email: primaryEmail,
       },
     })
 
@@ -169,9 +200,68 @@ export async function GET(request: NextRequest) {
       entitlement.ownerOverride === true ||
       entitlement.status === "owner"
 
-    if (isOwner) {
-      // Fall through to authorize URL — never trial_expired for Owner.
-    } else if (!entitlement.allowed) {
+    const wouldDenyAccess = !isOwner && !entitlement.allowed
+    const denyCode = wouldDenyAccess
+      ? entitlement.status === "expired"
+        ? "trial_expired"
+        : "subscription_required"
+      : null
+    const nextAction = wouldDenyAccess
+      ? denyCode === "trial_expired"
+        ? "return trial_expired"
+        : "return subscription_required"
+      : !isConnectionsCryptoConfigured()
+        ? "return connections_secret_missing"
+        : !isEbayConfigured()
+          ? "return ebay_not_configured"
+          : "redirect to eBay"
+
+    const denyFn = wouldDenyAccess ? TRIAL_EXPIRED_FN : null
+    const decidingField = wouldDenyAccess
+      ? entitlement.debug.decidingField
+      : null
+
+    if (debug) {
+      return noStoreJson(
+        {
+          temporaryDebug: true,
+          route: TRIAL_EXPIRED_FN,
+          authenticated: true,
+          isOwner,
+          authenticatedEmail: primaryEmail,
+          collectedEmails: allEmails,
+          ownerVia: owner.via,
+          entitlementStatus: entitlement.status,
+          entitlementAllowed: entitlement.allowed,
+          entitlementDecidingField: entitlement.debug.decidingField,
+          deniedByFunction: denyFn,
+          nextAction,
+          responseHeaders: {
+            "X-ListWise-OAuth-Version": OAUTH_START_VERSION,
+            "X-ListWise-Deny-Fn": denyFn,
+            "X-ListWise-Deciding-Field": decidingField,
+          },
+          wouldReturnCode: denyCode,
+        },
+        200,
+        wouldDenyAccess
+          ? {
+              "X-ListWise-Deny-Fn": TRIAL_EXPIRED_FN,
+              "X-ListWise-Is-Owner": "false",
+              "X-ListWise-Entitlement": entitlement.status,
+              "X-ListWise-Owner-Via": owner.via,
+              "X-ListWise-Has-Email": allEmails.length > 0 ? "1" : "0",
+              "X-ListWise-Deciding-Field": entitlement.debug.decidingField,
+            }
+          : {
+              "X-ListWise-Is-Owner": isOwner ? "true" : "false",
+              "X-ListWise-Owner-Via": owner.via,
+              "X-ListWise-Deciding-Field": entitlement.debug.decidingField,
+            }
+      )
+    }
+
+    if (wouldDenyAccess) {
       // Exact trial_expired emitter for Connect with OAuth.
       return noStoreJson(
         {
@@ -179,10 +269,7 @@ export async function GET(request: NextRequest) {
             entitlement.status === "expired"
               ? "Your free trial has expired. Subscribe on the Billing page to continue."
               : "Start your 7-day free trial to unlock this feature.",
-          code:
-            entitlement.status === "expired"
-              ? "trial_expired"
-              : "subscription_required",
+          code: denyCode,
         },
         402,
         {
@@ -254,6 +341,29 @@ export async function GET(request: NextRequest) {
 
     return response
   } catch (error) {
+    if (debug) {
+      return noStoreJson(
+        {
+          temporaryDebug: true,
+          route: TRIAL_EXPIRED_FN,
+          isOwner: false,
+          authenticatedEmail: null,
+          entitlementStatus: null,
+          deniedByFunction: null,
+          nextAction: "return error",
+          responseHeaders: {
+            "X-ListWise-OAuth-Version": OAUTH_START_VERSION,
+            "X-ListWise-Deny-Fn": null,
+            "X-ListWise-Deciding-Field": null,
+          },
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to start eBay OAuth.",
+        },
+        200
+      )
+    }
     return noStoreJson(
       {
         error:

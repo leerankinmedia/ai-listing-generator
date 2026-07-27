@@ -100,9 +100,30 @@ export function isActivePublishedOffer(offer: EbayOfferRaw): boolean {
   const offerStatus = (offer.status || "").toUpperCase()
   const listingStatus = (offer.listing?.listingStatus || "").toUpperCase()
   const listingId = offer.listing?.listingId?.trim()
-  if (!listingId || !offer.sku?.trim() || !offer.offerId?.trim()) return false
+  // Seller SKU may be blank/invalid for Inventory API — still import via listing/offer ids.
+  if (!listingId || !offer.offerId?.trim()) return false
   if (offerStatus === "PUBLISHED") return true
   return listingStatus === "ACTIVE"
+}
+
+/**
+ * eBay Inventory API SKUs must be 1–50 alphanumeric characters only.
+ * Spaces, hyphens, underscores, and other punctuation yield error 25707.
+ */
+export function isEbayInventoryApiSku(sku: string | null | undefined): boolean {
+  if (typeof sku !== "string") return false
+  const trimmed = sku.trim()
+  return /^[A-Za-z0-9]{1,50}$/.test(trimmed)
+}
+
+/** Internal ListWise key when the seller eBay SKU cannot be used with Inventory APIs. */
+export function listWiseImportKey(
+  ebayListingId: string,
+  offerId: string
+): string {
+  const raw = `LW${ebayListingId || offerId || ""}`.replace(/[^A-Za-z0-9]/g, "")
+  const key = raw.slice(0, 50)
+  return key || `LW${Date.now()}`.slice(0, 50)
 }
 
 export function mapEbayImportToListing(input: {
@@ -147,9 +168,14 @@ export function mapEbayImportToListing(input: {
         ? `eBay category ${imported.categoryId}`
         : undefined,
       extras: {
-        sku: imported.sku,
+        // ListWise inventory key (always Inventory-API-safe when generated).
+        sku: isEbayInventoryApiSku(imported.sku)
+          ? imported.sku.trim()
+          : listWiseImportKey(imported.ebayListingId, imported.offerId),
         quantity: String(Math.max(0, imported.quantity)),
+        // Preserve the seller's original eBay SKU even when it is API-invalid.
         ebaySku: imported.sku,
+        ebayOriginalSku: imported.sku,
         ebayQuantity: String(Math.max(0, imported.quantity)),
         ebayListingId: imported.ebayListingId,
         ebayOfferId: imported.offerId,

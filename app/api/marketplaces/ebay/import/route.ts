@@ -134,6 +134,8 @@ export async function POST(request: Request) {
     }
 
     const processed = created + updated
+    const skipped = page.skipped?.length ?? 0
+    const errorCount = failures.length + (page.errors?.length ?? 0)
     const totalOffers = page.totalOffers
     const progressPercent =
       totalOffers && totalOffers > 0
@@ -155,14 +157,16 @@ export async function POST(request: Request) {
       created,
       updated,
       processed,
+      imported: processed,
+      skipped,
+      errors: errorCount,
       failed: failures.length,
       failures,
+      skippedItems: page.skipped ?? [],
       warnings: page.warnings,
       message: page.done
-        ? `Import complete. ${created} new, ${updated} updated${
-            failures.length ? `, ${failures.length} failed` : ""
-          }.`
-        : `Imported page at offset ${page.offset}: ${processed} saved.`,
+        ? `Import complete. ${created} new, ${updated} updated, ${skipped} skipped, ${failures.length} failed.`
+        : `Imported page at offset ${page.offset}: ${processed} saved, ${skipped} skipped, ${failures.length} failed.`,
     })
   } catch (error) {
     console.error("[ebay/import] failed", error)

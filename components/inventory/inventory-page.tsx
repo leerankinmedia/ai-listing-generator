@@ -34,6 +34,9 @@ type ImportPageResponse = {
   created?: number
   updated?: number
   processed?: number
+  imported?: number
+  skipped?: number
+  errors?: number
   failed?: number
   failures?: Array<{ ebayListingId: string; error: string }>
   warnings?: string[]
@@ -113,6 +116,7 @@ export function InventoryPage() {
     let created = 0
     let updated = 0
     let failed = 0
+    let skipped = 0
     let scanned = 0
     const failureMessages: string[] = []
 
@@ -132,6 +136,7 @@ export function InventoryPage() {
         created += data.created || 0
         updated += data.updated || 0
         failed += data.failed || 0
+        skipped += data.skipped || 0
         scanned += data.scanned || 0
         if (data.failures?.length) {
           for (const failure of data.failures.slice(0, 5)) {
@@ -154,7 +159,7 @@ export function InventoryPage() {
         setProgressLabel(
           data.done
             ? data.message || "Import complete."
-            : `Scanning eBay offers… ${scanned} scanned · ${created + updated} saved`
+            : `Scanning eBay offers… ${scanned} scanned · ${created + updated} saved · ${skipped} skipped`
         )
 
         done = Boolean(data.done)
@@ -165,7 +170,7 @@ export function InventoryPage() {
       }
 
       setNotice(
-        `Imported from eBay: ${created} new, ${updated} updated${
+        `Imported from eBay: ${created} new, ${updated} updated, ${skipped} skipped${
           failed ? `, ${failed} failed` : ""
         }.`
       )

@@ -5,10 +5,11 @@ import { PRODUCTION_APP_URL } from "@/lib/app-url"
 import { getEntitlement } from "@/lib/billing/entitlement"
 import { resolveIsPermanentOwner } from "@/lib/billing/owner-resolve"
 import {
-  assertCookieMatchesQueryState,
   clearOAuthStateCookie,
-  consumeOAuthStateRaw,
+  OAUTH_STATE_COOKIE,
   readOAuthStateCookie,
+  readOAuthStateCookieFromRequest,
+  resolveAndAssertOAuthState,
 } from "@/lib/marketplaces/oauth-state"
 import { saveConnection } from "@/lib/marketplaces/connections/store"
 import { getServerAuthUser } from "@/lib/supabase/index"
@@ -95,7 +96,11 @@ export async function handleEbayOAuthCallback(request: NextRequest) {
     errorPresent: params.has("error"),
     errorDescriptionPresent: params.has("error_description"),
     expiresInPresent: params.has("expires_in"),
-    hasCookie: Boolean(await readOAuthStateCookie()),
+    hasCookie: Boolean(
+      readOAuthStateCookieFromRequest(request) ||
+        (await readOAuthStateCookie())
+    ),
+    cookieName: OAUTH_STATE_COOKIE,
     // No canonical-host redirect on this route — Auth Accepted URL must already
     // be the production callback so ?code=&state= are never bounced/stripped.
     canonicalRedirect: false,
@@ -145,8 +150,18 @@ export async function handleEbayOAuthCallback(request: NextRequest) {
   }
 
   try {
-    const cookieValue = await consumeOAuthStateRaw()
-    assertCookieMatchesQueryState(cookieValue, state, "ebay")
+    // Cookie may be missing after fetch()-based OAuth start (Set-Cookie on XHR
+    // then cross-site eBay round-trip). Prefer request jar; fall back to URL
+    // state which now carries the same encrypted payload as the cookie.
+    const cookieValue =
+      readOAuthStateCookieFromRequest(request) ||
+      (await readOAuthStateCookie())
+    resolveAndAssertOAuthState(cookieValue, state, "ebay")
+    console.info("[ebay/oauth] state verified", {
+      cookiePresent: Boolean(cookieValue),
+      queryStatePresent: Boolean(state),
+      usedUrlStateFallback: !cookieValue && Boolean(state),
+    })
 
     try {
       if (code.includes("%")) {

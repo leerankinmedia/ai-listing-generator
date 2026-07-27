@@ -3,6 +3,7 @@ import { exchangeEbayCode } from "@/lib/marketplaces/adapters/ebay/oauth"
 import { ebayFetch } from "@/lib/marketplaces/adapters/ebay/client"
 import { PRODUCTION_APP_URL } from "@/lib/app-url"
 import { getEntitlement } from "@/lib/billing/entitlement"
+import { resolveIsPermanentOwner } from "@/lib/billing/owner-resolve"
 import {
   assertCookieMatchesQueryState,
   clearOAuthStateCookie,
@@ -106,12 +107,15 @@ export async function handleEbayOAuthCallback(request: NextRequest) {
   }
 
   // Same entitlement path as Billing / OAuth start — Owner always completes connect.
+  const ownerBypass = await resolveIsPermanentOwner(user)
   const entitlement = await getEntitlement(user.id, {
     email: user.email,
     authUser: user,
   })
   const isOwner =
-    entitlement.ownerOverride === true || entitlement.status === "owner"
+    ownerBypass ||
+    entitlement.ownerOverride === true ||
+    entitlement.status === "owner"
   if (!isOwner && !entitlement.allowed) {
     return redirectWith(
       "error",

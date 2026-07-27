@@ -264,7 +264,10 @@ export async function getEntitlement(
 
   // Owner — permanent, server-side, before any Stripe/trial/subscription IO.
   const ownerCandidate: OwnerResolveUser = options.authUser?.id
-    ? options.authUser
+    ? {
+        ...options.authUser,
+        email: options.authUser.email ?? options.email,
+      }
     : { id: userId, email: options.email }
   if (isOwnerUserId(userId) || authUserHasOwnerEmail(ownerCandidate)) {
     return ownerEntitlement()

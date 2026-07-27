@@ -68,11 +68,6 @@ export async function checkMarketplaceConnectionAccess(
   })
 
   if (entitlement.ownerOverride || entitlement.status === "owner") {
-    console.info("[billing/access] marketplace Owner bypass via getEntitlement", {
-      userId: user.id,
-      decidingField: entitlement.debug.decidingField,
-      hasSessionEmail: Boolean(user.email),
-    })
     return {
       ok: true,
       access: {
@@ -87,13 +82,7 @@ export async function checkMarketplaceConnectionAccess(
   }
 
   if (!entitlement.allowed) {
-    console.info("[billing/access] marketplace access denied", {
-      userId: user.id,
-      hasSessionEmail: Boolean(user.email),
-      status: entitlement.status,
-      reason: entitlement.reason,
-      decidingField: entitlement.debug.decidingField,
-    })
+    // trial_expired emitter: lib/billing/access.ts → checkMarketplaceConnectionAccess
     return {
       ok: false,
       status: 402,

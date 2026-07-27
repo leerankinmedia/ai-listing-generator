@@ -27,13 +27,59 @@ export function createServiceRoleClient() {
   })
 }
 
+/**
+ * Authenticated user for API routes / server components.
+ * When the cookie JWT omits email/identities (seen on some full-page navigations
+ * like marketplace OAuth start), hydrate from Auth Admin so Owner / billing
+ * checks see the same emails as /api/billing/status.
+ */
 export async function getServerAuthUser() {
   if (!isSupabaseConfigured()) return null
   try {
     const supabase = await createServerClient()
     const { data, error } = await supabase.auth.getUser()
     if (error || !data.user) return null
-    return data.user
+
+    const sessionUser = data.user
+    const needsHydration =
+      !sessionUser.email ||
+      !sessionUser.identities ||
+      sessionUser.identities.length === 0
+
+    if (!needsHydration) return sessionUser
+
+    const admin = createServiceRoleClient()
+    if (!admin) return sessionUser
+
+    try {
+      const { data: adminData, error: adminError } =
+        await admin.auth.admin.getUserById(sessionUser.id)
+      if (adminError || !adminData?.user) return sessionUser
+
+      const adminUser = adminData.user
+      return {
+        ...sessionUser,
+        email: sessionUser.email || adminUser.email || undefined,
+        new_email:
+          (sessionUser as { new_email?: string | null }).new_email ||
+          (adminUser as { new_email?: string | null }).new_email ||
+          undefined,
+        user_metadata: {
+          ...(adminUser.user_metadata || {}),
+          ...(sessionUser.user_metadata || {}),
+        },
+        app_metadata: {
+          ...(adminUser.app_metadata || {}),
+          ...(sessionUser.app_metadata || {}),
+        },
+        identities:
+          sessionUser.identities && sessionUser.identities.length > 0
+            ? sessionUser.identities
+            : adminUser.identities,
+      }
+    } catch {
+      return sessionUser
+    }
   } catch {
     return null
   }

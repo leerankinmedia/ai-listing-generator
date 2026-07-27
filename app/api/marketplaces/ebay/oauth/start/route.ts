@@ -12,6 +12,7 @@ import {
   toCanonicalProductionUrl,
 } from "@/lib/app-url"
 import { getEntitlement } from "@/lib/billing/entitlement"
+import { resolveIsPermanentOwnerDetailed } from "@/lib/billing/owner-resolve"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import {
   attachOAuthStateCookie,
@@ -20,6 +21,7 @@ import {
 import { getServerAuthUser } from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
 
 function requestHost(request: NextRequest): string {
   const forwarded = request.headers.get("x-forwarded-host")
@@ -27,9 +29,24 @@ function requestHost(request: NextRequest): string {
   return request.headers.get("host") || request.nextUrl.host
 }
 
+function noStoreJson(
+  body: Record<string, unknown>,
+  status: number
+): NextResponse {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "private, no-store, max-age=0, must-revalidate",
+    },
+  })
+}
+
 /**
  * eBay Connect with OAuth — /api/marketplaces/ebay/oauth/start
- * Access gate MUST match Billing: getEntitlement(user.id, { email, authUser }).
+ *
+ * trial_expired is returned ONLY from this GET handler (below) when the user
+ * is not the permanent Owner and getEntitlement().status === "expired".
+ * Owner is resolved before that deny so Founder accounts never hit it.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -59,26 +76,31 @@ export async function GET(request: NextRequest) {
 
     const user = await getServerAuthUser()
     if (!user?.id) {
-      return NextResponse.json(
+      return noStoreJson(
         {
           error: "Sign in required to connect a marketplace.",
           code: "unauthorized",
         },
-        { status: 401 }
+        401
       )
     }
 
-    // Same server-side entitlement call as /api/billing/status (Owner bypass).
+    // Owner first — never fall through to trial_expired for Founder.
+    const owner = await resolveIsPermanentOwnerDetailed(user)
     const entitlement = await getEntitlement(user.id, {
       email: user.email,
       authUser: user,
     })
-
     const isOwner =
-      entitlement.ownerOverride === true || entitlement.status === "owner"
+      owner.isOwner ||
+      entitlement.ownerOverride === true ||
+      entitlement.status === "owner"
 
     if (!isOwner && !entitlement.allowed) {
-      return NextResponse.json(
+      // Exact trial_expired emitter for Connect with OAuth:
+      // file: app/api/marketplaces/ebay/oauth/start/route.ts
+      // function: GET
+      return noStoreJson(
         {
           error:
             entitlement.status === "expired"
@@ -89,34 +111,26 @@ export async function GET(request: NextRequest) {
               ? "trial_expired"
               : "subscription_required",
         },
-        { status: 402 }
+        402
       )
     }
 
-    if (isOwner) {
-      console.info("[ebay/oauth] Owner bypass via getEntitlement (Billing parity)", {
-        userId: user.id,
-        decidingField: entitlement.debug.decidingField,
-        hasSessionEmail: Boolean(user.email),
-      })
-    }
-
     if (!isConnectionsCryptoConfigured()) {
-      return NextResponse.json(
+      return noStoreJson(
         {
           error:
             "CONNECTIONS_SECRET is required before connecting marketplaces.",
         },
-        { status: 503 }
+        503
       )
     }
     if (!isEbayConfigured()) {
-      return NextResponse.json(
+      return noStoreJson(
         {
           error:
             "eBay is not configured. Set EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, and EBAY_REDIRECT_URI.",
         },
-        { status: 503 }
+        503
       )
     }
 
@@ -127,6 +141,10 @@ export async function GET(request: NextRequest) {
     // Set Location manually so Next validateURL()/URL() cannot alter encoding.
     const response = new NextResponse(null, { status: 302 })
     response.headers.set("Location", authorizeUrl)
+    response.headers.set(
+      "Cache-Control",
+      "private, no-store, max-age=0, must-revalidate"
+    )
     attachOAuthStateCookie(response, cookieValue)
 
     const location = response.headers.get("Location") || ""
@@ -136,8 +154,7 @@ export async function GET(request: NextRequest) {
     const clientId = ebayClientId()
     const clientIdRedacted =
       clientId.length <= 6 ? `***${clientId}` : `***${clientId.slice(-6)}`
-    console.info("[ebay/oauth] TEMP Location header consent URL (client_id redacted)", {
-      temporary: true,
+    console.info("[ebay/oauth] Location header consent URL (client_id redacted)", {
       purpose: "confirm browser redirect matches generated authorize URL",
       completeAuthorizeUrlRedacted: location.replace(
         `client_id=${clientId}`,
@@ -152,16 +169,17 @@ export async function GET(request: NextRequest) {
       param_names: Array.from(loc.searchParams.keys()),
       locationMatchesAuthorize: location === authorizeUrl,
       ownerBypass: isOwner,
+      ownerVia: owner.via,
     })
 
     return response
   } catch (error) {
-    return NextResponse.json(
+    return noStoreJson(
       {
         error:
           error instanceof Error ? error.message : "Failed to start eBay OAuth.",
       },
-      { status: 500 }
+      500
     )
   }
 }

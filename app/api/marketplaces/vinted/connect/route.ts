@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { splitVintedToken } from "@/lib/marketplaces/adapters/vinted/client"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
-import { checkSubscriptionAccess } from "@/lib/billing/access"
+import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import { saveConnection } from "@/lib/marketplaces/connections/store"
 import { getServerAuthUser } from "@/lib/supabase/index"
@@ -15,15 +15,9 @@ export const runtime = "nodejs"
 export async function POST(request: Request) {
   try {
     const user = await getServerAuthUser()
-    const access = await checkSubscriptionAccess(user?.id, user?.email)
-    if (!access.allowed) {
-      return NextResponse.json(
-        {
-          error: "Start your 7-day free trial to unlock this feature.",
-          code: "subscription_required",
-        },
-        { status: 402 }
-      )
+    const gate = await checkMarketplaceConnectionAccess(user)
+    if (!gate.ok) {
+      return NextResponse.json(gate.body, { status: gate.status })
     }
 
     if (!isConnectionsCryptoConfigured()) {

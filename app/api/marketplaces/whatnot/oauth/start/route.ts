@@ -3,7 +3,7 @@ import {
   buildWhatnotAuthorizeUrl,
   isWhatnotConfigured,
 } from "@/lib/marketplaces/adapters/whatnot/oauth"
-import { checkSubscriptionAccess } from "@/lib/billing/access"
+import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import {
   attachOAuthStateCookie,
@@ -16,15 +16,9 @@ export const runtime = "nodejs"
 export async function GET() {
   try {
     const user = await getServerAuthUser()
-    const access = await checkSubscriptionAccess(user?.id, user?.email)
-    if (!access.allowed) {
-      return NextResponse.json(
-        {
-          error: "Start your 7-day free trial to unlock this feature.",
-          code: "subscription_required",
-        },
-        { status: 402 }
-      )
+    const gate = await checkMarketplaceConnectionAccess(user)
+    if (!gate.ok) {
+      return NextResponse.json(gate.body, { status: gate.status })
     }
 
     if (!isConnectionsCryptoConfigured()) {

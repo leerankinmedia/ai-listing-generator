@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { checkSubscriptionAccess } from "@/lib/billing/access"
+import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
 import {
   EBAY_IMPORT_PAGE_SIZE,
   importEbayOffersPage,
@@ -29,25 +29,15 @@ type ImportBody = {
 export async function POST(request: Request) {
   try {
     const user = await getServerAuthUser()
-    if (!user?.id) {
-      return NextResponse.json({ error: "Sign in required." }, { status: 401 })
+    const gate = await checkMarketplaceConnectionAccess(user)
+    if (!gate.ok) {
+      return NextResponse.json(gate.body, { status: gate.status })
     }
 
     if (!isSupabaseConfigured()) {
       return NextResponse.json(
         { error: "Supabase is required to import inventory." },
         { status: 503 }
-      )
-    }
-
-    const access = await checkSubscriptionAccess(user.id, user.email)
-    if (!access.allowed) {
-      return NextResponse.json(
-        {
-          error: "Start your 7-day free trial to unlock this feature.",
-          code: "subscription_required",
-        },
-        { status: 402 }
       )
     }
 

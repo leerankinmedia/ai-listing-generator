@@ -8,6 +8,7 @@ import {
   isListWiseOwnerEmail,
   isOwnerBillingStatus,
   normalizeBillingEmail,
+  ownerBypassesMarketplaceSubscription,
 } from "@/lib/billing/owner"
 
 describe("ListWise Owner email", () => {
@@ -43,5 +44,29 @@ describe("ListWise Owner email", () => {
     assert.equal(isOwnerBillingStatus({ ownerOverride: true }), true)
     assert.equal(isOwnerBillingStatus({ status: "owner" }), true)
     assert.equal(isOwnerBillingStatus({ status: "active" }), false)
+  })
+
+  it("bypasses marketplace subscription checks for the Owner session", () => {
+    assert.equal(
+      ownerBypassesMarketplaceSubscription({
+        id: "user-1",
+        email: "leerankinmedia@gmail.com",
+      }),
+      true
+    )
+    assert.equal(
+      ownerBypassesMarketplaceSubscription({
+        id: "user-1",
+        email: "other@example.com",
+      }),
+      false
+    )
+    assert.equal(
+      ownerBypassesMarketplaceSubscription({
+        id: null,
+        email: "leerankinmedia@gmail.com",
+      }),
+      false
+    )
   })
 })

@@ -26,6 +26,16 @@ export function isListWiseOwnerEmail(
   return normalizeBillingEmail(email) === LISTWISE_OWNER_EMAIL
 }
 
+/**
+ * Marketplace connect/OAuth: Owner session email bypasses subscription/trial
+ * before any Stripe or subscriptions-table enforcement.
+ */
+export function ownerBypassesMarketplaceSubscription(
+  user: { id?: string | null; email?: string | null } | null | undefined
+): boolean {
+  return Boolean(user?.id && isListWiseOwnerEmail(user.email))
+}
+
 /** True when billing status payload is the permanent Owner. */
 export function isOwnerBillingStatus(status: {
   ownerOverride?: boolean

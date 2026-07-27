@@ -271,14 +271,14 @@ export async function getEntitlement(
   }
 
   // Owner email — permanent, server-side, no Stripe/trial/credits required.
-  // Prefer Auth Admin lookup by user id so a forged email string cannot unlock.
-  const lookedUpEmail = await lookupEmailByUserId(userId)
-  if (isListWiseOwnerEmail(lookedUpEmail)) {
+  // 1) Session email from getServerAuthUser() (JWT-verified) — check FIRST so
+  //    marketplace OAuth/connect never hits subscription enforcement for Owner.
+  // 2) Auth Admin lookup by user id as a second source of truth.
+  if (isListWiseOwnerEmail(options.email)) {
     return ownerEntitlement()
   }
-  // Fallback when service-role lookup is unavailable (local/dev): trust the
-  // session email passed from getServerAuthUser() only.
-  if (!lookedUpEmail && isListWiseOwnerEmail(options.email)) {
+  const lookedUpEmail = await lookupEmailByUserId(userId)
+  if (isListWiseOwnerEmail(lookedUpEmail)) {
     return ownerEntitlement()
   }
 

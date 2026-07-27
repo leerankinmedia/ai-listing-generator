@@ -12,7 +12,7 @@ import {
   isVercelDeploymentHost,
   toCanonicalProductionUrl,
 } from "@/lib/app-url"
-import { checkSubscriptionAccess } from "@/lib/billing/access"
+import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import {
   attachOAuthStateCookie,
@@ -55,15 +55,9 @@ export async function GET(request: NextRequest) {
     }
 
     const user = await getServerAuthUser()
-    const access = await checkSubscriptionAccess(user?.id, user?.email)
-    if (!access.allowed) {
-      return NextResponse.json(
-        {
-          error: "Start your 7-day free trial to unlock this feature.",
-          code: "subscription_required",
-        },
-        { status: 402 }
-      )
+    const gate = await checkMarketplaceConnectionAccess(user)
+    if (!gate.ok) {
+      return NextResponse.json(gate.body, { status: gate.status })
     }
 
     if (!isConnectionsCryptoConfigured()) {

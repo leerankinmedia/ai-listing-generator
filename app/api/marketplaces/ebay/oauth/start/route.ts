@@ -14,6 +14,7 @@ import {
 import { getEntitlement } from "@/lib/billing/entitlement"
 import {
   collectAuthUserEmails,
+  explainOwnerEmailMatch,
   isListWiseOwnerEmail,
   isOwnerUserId,
 } from "@/lib/billing/owner"
@@ -222,6 +223,7 @@ export async function GET(request: NextRequest) {
       : null
 
     if (debug) {
+      const emailMatch = explainOwnerEmailMatch(allEmails)
       return noStoreJson(
         {
           temporaryDebug: true,
@@ -230,6 +232,10 @@ export async function GET(request: NextRequest) {
           isOwner,
           authenticatedEmail: primaryEmail,
           collectedEmails: allEmails,
+          ownerWhitelist: emailMatch.ownerWhitelist,
+          ownerEmailMatch: emailMatch.matched,
+          ownerMatchedEmail: emailMatch.matchedEmail,
+          ownerMismatchReason: emailMatch.mismatchReason,
           ownerVia: owner.via,
           entitlementStatus: entitlement.status,
           entitlementAllowed: entitlement.allowed,

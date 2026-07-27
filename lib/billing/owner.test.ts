@@ -6,7 +6,9 @@ import {
   LIFETIME_FOUNDER_ACCESS,
   LISTWISE_OWNER_EMAIL,
   authUserHasOwnerEmail,
+  canonicalizeOwnerEmail,
   collectAuthUserEmails,
+  explainOwnerEmailMatch,
   isListWiseOwnerEmail,
   isOwnerBillingStatus,
   normalizeBillingEmail,
@@ -19,6 +21,36 @@ describe("ListWise Owner email", () => {
     assert.equal(isListWiseOwnerEmail("leerankinmedia@gmail.com"), true)
     assert.equal(isListWiseOwnerEmail("Leerankinmedia@Gmail.com"), true)
     assert.equal(isListWiseOwnerEmail("  Leerankinmedia@Gmail.com  "), true)
+  })
+
+  it("treats Gmail dots, plus-tags, and googlemail.com as the Owner", () => {
+    assert.equal(
+      canonicalizeOwnerEmail("lee.rankinmedia+app@googlemail.com"),
+      "leerankinmedia@gmail.com"
+    )
+    assert.equal(isListWiseOwnerEmail("lee.rankinmedia@gmail.com"), true)
+    assert.equal(isListWiseOwnerEmail("leerankinmedia+listwise@gmail.com"), true)
+    assert.equal(isListWiseOwnerEmail("leerankinmedia@googlemail.com"), true)
+  })
+
+  it("honors LISTWISE_OWNER_EMAILS allow-list aliases", () => {
+    const previous = process.env.LISTWISE_OWNER_EMAILS
+    process.env.LISTWISE_OWNER_EMAILS = "founder@shop.com, alt@example.com"
+    try {
+      assert.equal(isListWiseOwnerEmail("founder@shop.com"), true)
+      assert.equal(isListWiseOwnerEmail("alt@example.com"), true)
+      assert.equal(isListWiseOwnerEmail("other@example.com"), false)
+      const explained = explainOwnerEmailMatch(["founder@shop.com"])
+      assert.equal(explained.matched, true)
+      assert.deepEqual(explained.ownerWhitelist, [
+        "leerankinmedia@gmail.com",
+        "founder@shop.com",
+        "alt@example.com",
+      ])
+    } finally {
+      if (previous === undefined) delete process.env.LISTWISE_OWNER_EMAILS
+      else process.env.LISTWISE_OWNER_EMAILS = previous
+    }
   })
 
   it("rejects every other account", () => {

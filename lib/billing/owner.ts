@@ -18,12 +18,55 @@ export function normalizeBillingEmail(email: string): string {
   return email.normalize("NFKC").trim().toLowerCase()
 }
 
-/** True when the email is the permanent Owner account. */
+/**
+ * Canonical form for Owner comparisons.
+ * Gmail: ignore dots, ignore +tags, treat googlemail.com as gmail.com.
+ */
+export function canonicalizeOwnerEmail(email: string): string {
+  const normalized = normalizeBillingEmail(email)
+  const at = normalized.lastIndexOf("@")
+  if (at <= 0) return normalized
+
+  let local = normalized.slice(0, at)
+  let domain = normalized.slice(at + 1)
+
+  if (domain === "googlemail.com") domain = "gmail.com"
+
+  if (domain === "gmail.com") {
+    const plus = local.indexOf("+")
+    if (plus >= 0) local = local.slice(0, plus)
+    local = local.replace(/\./g, "")
+  }
+
+  return `${local}@${domain}`
+}
+
+/**
+ * Owner email whitelist: hardcoded Founder address plus optional
+ * LISTWISE_OWNER_EMAILS (comma-separated) for additional login emails
+ * on the same Founder (e.g. alternate Google account used on mobile).
+ */
+export function getOwnerEmailWhitelist(): string[] {
+  const emails = [LISTWISE_OWNER_EMAIL]
+  const raw = process.env.LISTWISE_OWNER_EMAILS || ""
+  for (const part of raw.split(",")) {
+    const trimmed = part.trim()
+    if (!trimmed || !trimmed.includes("@")) continue
+    const normalized = normalizeBillingEmail(trimmed)
+    if (!emails.includes(normalized)) emails.push(normalized)
+  }
+  return emails
+}
+
+/** True when the email is the permanent Owner account (or an allow-listed alias). */
 export function isListWiseOwnerEmail(
   email: string | null | undefined
 ): boolean {
   if (!email || typeof email !== "string") return false
-  return normalizeBillingEmail(email) === LISTWISE_OWNER_EMAIL
+  const candidate = canonicalizeOwnerEmail(email)
+  return getOwnerEmailWhitelist().some(
+    (ownerEmail) => canonicalizeOwnerEmail(ownerEmail) === candidate
+  )
 }
 
 /** Optional Owner user ids (comma-separated). Primary Owner match remains the email. */
@@ -85,6 +128,44 @@ export function authUserHasOwnerEmail(
   return collectAuthUserEmails(user).some((email) =>
     isListWiseOwnerEmail(email)
   )
+}
+
+/**
+ * Explain why a session email did or did not match the Owner whitelist.
+ * Used by temporary OAuth ?debug=1 diagnostics.
+ */
+export function explainOwnerEmailMatch(
+  sessionEmails: string[]
+): {
+  ownerWhitelist: string[]
+  sessionEmails: string[]
+  matched: boolean
+  matchedEmail: string | null
+  mismatchReason: string | null
+} {
+  const ownerWhitelist = getOwnerEmailWhitelist()
+  for (const email of sessionEmails) {
+    if (isListWiseOwnerEmail(email)) {
+      return {
+        ownerWhitelist,
+        sessionEmails,
+        matched: true,
+        matchedEmail: email,
+        mismatchReason: null,
+      }
+    }
+  }
+
+  const session =
+    sessionEmails.length > 0 ? sessionEmails.join(", ") : "(none)"
+  const whitelist = ownerWhitelist.join(", ")
+  return {
+    ownerWhitelist,
+    sessionEmails,
+    matched: false,
+    matchedEmail: null,
+    mismatchReason: `Session email(s) [${session}] are not in Owner whitelist [${whitelist}] (compared with Gmail-canonical form).`,
+  }
 }
 
 /**

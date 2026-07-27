@@ -13,6 +13,7 @@ import {
   toCanonicalProductionUrl,
 } from "@/lib/app-url"
 import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
+import { resolveIsPermanentOwner } from "@/lib/billing/owner-resolve"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import {
   attachOAuthStateCookie,
@@ -55,9 +56,29 @@ export async function GET(request: NextRequest) {
     }
 
     const user = await getServerAuthUser()
-    const gate = await checkMarketplaceConnectionAccess(user)
-    if (!gate.ok) {
-      return NextResponse.json(gate.body, { status: gate.status })
+    if (!user?.id) {
+      return NextResponse.json(
+        {
+          error: "Sign in required to connect a marketplace.",
+          code: "unauthorized",
+        },
+        { status: 401 }
+      )
+    }
+
+    // Owner must always reach the eBay authorize redirect — resolve before any
+    // subscription/trial helper that could return trial_expired.
+    const isOwner = await resolveIsPermanentOwner(user)
+    if (!isOwner) {
+      const gate = await checkMarketplaceConnectionAccess(user)
+      if (!gate.ok) {
+        return NextResponse.json(gate.body, { status: gate.status })
+      }
+    } else {
+      console.info("[ebay/oauth] Owner bypass — skipping subscription gate", {
+        userId: user.id,
+        hasSessionEmail: Boolean(user.email),
+      })
     }
 
     if (!isConnectionsCryptoConfigured()) {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { exchangeWhatnotCode } from "@/lib/marketplaces/adapters/whatnot/oauth"
 import { PRODUCTION_APP_URL } from "@/lib/app-url"
 import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
+import { resolveIsPermanentOwner } from "@/lib/billing/owner-resolve"
 import {
   assertCookieMatchesQueryState,
   clearOAuthStateCookie,
@@ -23,9 +24,14 @@ function redirectWith(status: "connected" | "error", message?: string) {
 
 export async function GET(request: NextRequest) {
   const user = await getServerAuthUser()
-  const gate = await checkMarketplaceConnectionAccess(user)
-  if (!gate.ok) {
-    return redirectWith("error", gate.body.error)
+  if (!user?.id) {
+    return redirectWith("error", "Sign in required to connect a marketplace.")
+  }
+  if (!(await resolveIsPermanentOwner(user))) {
+    const gate = await checkMarketplaceConnectionAccess(user)
+    if (!gate.ok) {
+      return redirectWith("error", gate.body.error)
+    }
   }
 
   const { searchParams } = request.nextUrl

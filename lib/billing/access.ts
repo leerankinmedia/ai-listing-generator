@@ -1,9 +1,10 @@
 import "server-only"
 import { getEntitlement, type Entitlement } from "@/lib/billing/entitlement"
+import { authUserHasOwnerEmail, isOwnerUserId } from "@/lib/billing/owner"
 import {
-  isListWiseOwnerEmail,
-  ownerBypassesMarketplaceSubscription,
-} from "@/lib/billing/owner"
+  resolveIsPermanentOwner,
+  type OwnerResolveUser,
+} from "@/lib/billing/owner-resolve"
 
 export interface SubscriptionAccessResult {
   allowed: boolean
@@ -53,20 +54,30 @@ function ownerAccessResult(): SubscriptionAccessResult {
 }
 
 /**
- * Paid-tool guard — delegates entirely to getEntitlement().
- * Pass the authenticated user's email so the permanent Owner account
- * can be recognized without an extra Auth Admin lookup when possible.
+ * Paid-tool guard.
+ * Owner is resolved before any Stripe / subscription / trial IO.
  */
 export async function checkSubscriptionAccess(
   userId: string | null | undefined,
-  email?: string | null
+  email?: string | null,
+  authUser?: OwnerResolveUser | null
 ): Promise<SubscriptionAccessResult> {
-  // Owner email short-circuit — before any Stripe / subscription / trial IO.
-  if (isListWiseOwnerEmail(email)) {
+  if (userId && isOwnerUserId(userId)) {
+    return ownerAccessResult()
+  }
+  if (authUserHasOwnerEmail(authUser ?? { id: userId || "", email })) {
+    return ownerAccessResult()
+  }
+  if (userId && (await resolveIsPermanentOwner(authUser ?? { id: userId, email }))) {
     return ownerAccessResult()
   }
 
-  const entitlement = await getEntitlement(userId, { email })
+  const entitlement = await getEntitlement(userId, { email, authUser })
+  // Belt-and-suspenders: never surface trial_expired for an Owner entitlement.
+  if (entitlement.ownerOverride || entitlement.status === "owner") {
+    return ownerAccessResult()
+  }
+
   return {
     allowed: entitlement.allowed,
     reason: entitlement.reason,
@@ -79,12 +90,12 @@ export async function checkSubscriptionAccess(
 
 /**
  * Marketplace connect/disconnect/OAuth guard.
- * Owner (JWT session email) bypasses subscription/trial before any enforcement.
+ * Owner bypass is fully resolved before any subscription/trial enforcement.
+ * This is the only gate marketplace OAuth start routes should use.
  */
-export async function checkMarketplaceConnectionAccess(user: {
-  id?: string | null
-  email?: string | null
-} | null): Promise<
+export async function checkMarketplaceConnectionAccess(
+  user: OwnerResolveUser | null
+): Promise<
   | { ok: true; access: SubscriptionAccessResult }
   | {
       ok: false
@@ -104,12 +115,34 @@ export async function checkMarketplaceConnectionAccess(user: {
   }
 
   // Owner first — never run trial/subscription enforcement for this account.
-  if (ownerBypassesMarketplaceSubscription(user)) {
+  if (await resolveIsPermanentOwner(user)) {
+    console.info("[billing/access] marketplace Owner bypass", {
+      userId: user.id,
+      owner: true,
+      hasSessionEmail: Boolean(user.email),
+    })
     return { ok: true, access: ownerAccessResult() }
   }
 
-  const access = await checkSubscriptionAccess(user.id, user.email)
+  const access = await checkSubscriptionAccess(user.id, user.email, user)
+
+  // Final Owner guard — never return subscription_required / trial_expired to Owner.
+  if (
+    access.entitlement.ownerOverride ||
+    access.status === "owner" ||
+    access.reason === "owner"
+  ) {
+    return { ok: true, access: ownerAccessResult() }
+  }
+
   if (!access.allowed) {
+    console.info("[billing/access] marketplace access denied", {
+      userId: user.id,
+      hasSessionEmail: Boolean(user.email),
+      status: access.status,
+      reason: access.reason,
+      decidingField: access.entitlement.debug.decidingField,
+    })
     return {
       ok: false,
       status: 402,
@@ -131,9 +164,17 @@ export async function checkMarketplaceConnectionAccess(user: {
 
 export async function assertSubscriptionAccess(
   userId: string | null | undefined,
-  email?: string | null
+  email?: string | null,
+  authUser?: OwnerResolveUser | null
 ) {
-  const result = await checkSubscriptionAccess(userId, email)
+  const result = await checkSubscriptionAccess(userId, email, authUser)
+  if (
+    result.entitlement.ownerOverride ||
+    result.status === "owner" ||
+    result.reason === "owner"
+  ) {
+    return result
+  }
   if (!result.allowed) {
     const error = new Error(
       result.status === "expired"

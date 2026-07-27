@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { splitVintedToken } from "@/lib/marketplaces/adapters/vinted/client"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
+import { resolveIsPermanentOwner } from "@/lib/billing/owner-resolve"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import { saveConnection } from "@/lib/marketplaces/connections/store"
 import { getServerAuthUser } from "@/lib/supabase/index"
@@ -15,9 +16,20 @@ export const runtime = "nodejs"
 export async function POST(request: Request) {
   try {
     const user = await getServerAuthUser()
-    const gate = await checkMarketplaceConnectionAccess(user)
-    if (!gate.ok) {
-      return NextResponse.json(gate.body, { status: gate.status })
+    if (!user?.id) {
+      return NextResponse.json(
+        {
+          error: "Sign in required to connect a marketplace.",
+          code: "unauthorized",
+        },
+        { status: 401 }
+      )
+    }
+    if (!(await resolveIsPermanentOwner(user))) {
+      const gate = await checkMarketplaceConnectionAccess(user)
+      if (!gate.ok) {
+        return NextResponse.json(gate.body, { status: gate.status })
+      }
     }
 
     if (!isConnectionsCryptoConfigured()) {

@@ -4,6 +4,7 @@ import {
   isWhatnotConfigured,
 } from "@/lib/marketplaces/adapters/whatnot/oauth"
 import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
+import { resolveIsPermanentOwner } from "@/lib/billing/owner-resolve"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import {
   attachOAuthStateCookie,
@@ -16,9 +17,20 @@ export const runtime = "nodejs"
 export async function GET() {
   try {
     const user = await getServerAuthUser()
-    const gate = await checkMarketplaceConnectionAccess(user)
-    if (!gate.ok) {
-      return NextResponse.json(gate.body, { status: gate.status })
+    if (!user?.id) {
+      return NextResponse.json(
+        {
+          error: "Sign in required to connect a marketplace.",
+          code: "unauthorized",
+        },
+        { status: 401 }
+      )
+    }
+    if (!(await resolveIsPermanentOwner(user))) {
+      const gate = await checkMarketplaceConnectionAccess(user)
+      if (!gate.ok) {
+        return NextResponse.json(gate.body, { status: gate.status })
+      }
     }
 
     if (!isConnectionsCryptoConfigured()) {

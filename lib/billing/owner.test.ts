@@ -5,6 +5,8 @@ import {
   FOUNDER_OWNER_LABEL,
   LIFETIME_FOUNDER_ACCESS,
   LISTWISE_OWNER_EMAIL,
+  authUserHasOwnerEmail,
+  collectAuthUserEmails,
   isListWiseOwnerEmail,
   isOwnerBillingStatus,
   normalizeBillingEmail,
@@ -46,11 +48,42 @@ describe("ListWise Owner email", () => {
     assert.equal(isOwnerBillingStatus({ status: "active" }), false)
   })
 
+  it("collects Owner email from identities when user.email is empty", () => {
+    const emails = collectAuthUserEmails({
+      email: null,
+      identities: [
+        {
+          identity_data: { email: "leerankinmedia@gmail.com" },
+        },
+      ],
+    })
+    assert.deepEqual(emails, ["leerankinmedia@gmail.com"])
+    assert.equal(
+      authUserHasOwnerEmail({
+        email: null,
+        identities: [
+          { identity_data: { email: "Leerankinmedia@Gmail.com" } },
+        ],
+      }),
+      true
+    )
+  })
+
   it("bypasses marketplace subscription checks for the Owner session", () => {
     assert.equal(
       ownerBypassesMarketplaceSubscription({
         id: "user-1",
         email: "leerankinmedia@gmail.com",
+      }),
+      true
+    )
+    assert.equal(
+      ownerBypassesMarketplaceSubscription({
+        id: "user-1",
+        email: null,
+        identities: [
+          { identity_data: { email: "leerankinmedia@gmail.com" } },
+        ],
       }),
       true
     )

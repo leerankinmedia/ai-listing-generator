@@ -24,7 +24,10 @@ export async function GET() {
     return NextResponse.json({ error: "Sign in required." }, { status: 401 })
   }
 
-  const entitlement = await getEntitlement(user.id, { email: user.email })
+  const entitlement = await getEntitlement(user.id, {
+    email: user.email,
+    authUser: user,
+  })
   const subscription = entitlement.subscription
   const periodStart = creditPeriodStartFromSubscription(subscription)
   const credits = await getListingCreditsSummary({

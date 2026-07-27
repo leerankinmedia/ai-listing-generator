@@ -3,6 +3,7 @@ import { exchangeEbayCode } from "@/lib/marketplaces/adapters/ebay/oauth"
 import { ebayFetch } from "@/lib/marketplaces/adapters/ebay/client"
 import { PRODUCTION_APP_URL } from "@/lib/app-url"
 import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
+import { resolveIsPermanentOwner } from "@/lib/billing/owner-resolve"
 import {
   assertCookieMatchesQueryState,
   clearOAuthStateCookie,
@@ -101,9 +102,15 @@ export async function handleEbayOAuthCallback(request: NextRequest) {
   })
 
   const user = await getServerAuthUser()
-  const gate = await checkMarketplaceConnectionAccess(user)
-  if (!gate.ok) {
-    return redirectWith("error", gate.body.error)
+  if (!user?.id) {
+    return redirectWith("error", "Sign in required to connect a marketplace.")
+  }
+  // Owner always completes token storage — never block on trial/subscription.
+  if (!(await resolveIsPermanentOwner(user))) {
+    const gate = await checkMarketplaceConnectionAccess(user)
+    if (!gate.ok) {
+      return redirectWith("error", gate.body.error)
+    }
   }
 
   const error = params.get("error")

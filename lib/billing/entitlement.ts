@@ -2,13 +2,16 @@ import "server-only"
 import { getStripe } from "@/lib/billing/stripe"
 import { isStripeBillingConfigured } from "@/lib/billing/config"
 import { decideEntitlement } from "@/lib/billing/entitlement-rules"
-import { isListWiseOwnerEmail } from "@/lib/billing/owner"
+import { authUserHasOwnerEmail, isOwnerUserId } from "@/lib/billing/owner"
+import {
+  resolveIsPermanentOwner,
+  type OwnerResolveUser,
+} from "@/lib/billing/owner-resolve"
 import {
   getSubscriptionByUserId,
   upsertSubscriptionForUser,
   type SubscriptionRow,
 } from "@/lib/billing/subscription-store"
-import { createServiceRoleClient } from "@/lib/supabase/index"
 
 export type EntitlementStatus =
   | "none"
@@ -58,6 +61,8 @@ export type GetEntitlementOptions = {
   nowMs?: number
   /** Prefer the authenticated user's email when available. */
   email?: string | null
+  /** Full auth user — used to resolve Owner from identities / metadata. */
+  authUser?: OwnerResolveUser | null
 }
 
 function statusLabelFor(status: EntitlementStatus): string {
@@ -82,19 +87,6 @@ function statusLabelFor(status: EntitlementStatus): string {
       return "No subscription"
     default:
       return status
-  }
-}
-
-/** Look up the auth email for a user id (source of truth for Owner checks). */
-async function lookupEmailByUserId(userId: string): Promise<string | null> {
-  const admin = createServiceRoleClient()
-  if (!admin) return null
-  try {
-    const { data, error } = await admin.auth.admin.getUserById(userId)
-    if (error || !data.user?.email) return null
-    return data.user.email
-  } catch {
-    return null
   }
 }
 
@@ -270,15 +262,14 @@ export async function getEntitlement(
     }
   }
 
-  // Owner email — permanent, server-side, no Stripe/trial/credits required.
-  // 1) Session email from getServerAuthUser() (JWT-verified) — check FIRST so
-  //    marketplace OAuth/connect never hits subscription enforcement for Owner.
-  // 2) Auth Admin lookup by user id as a second source of truth.
-  if (isListWiseOwnerEmail(options.email)) {
+  // Owner — permanent, server-side, before any Stripe/trial/subscription IO.
+  const ownerCandidate: OwnerResolveUser = options.authUser?.id
+    ? options.authUser
+    : { id: userId, email: options.email }
+  if (isOwnerUserId(userId) || authUserHasOwnerEmail(ownerCandidate)) {
     return ownerEntitlement()
   }
-  const lookedUpEmail = await lookupEmailByUserId(userId)
-  if (isListWiseOwnerEmail(lookedUpEmail)) {
+  if (await resolveIsPermanentOwner(ownerCandidate)) {
     return ownerEntitlement()
   }
 

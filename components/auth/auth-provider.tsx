@@ -18,6 +18,7 @@ import {
   type DemoUser,
 } from "@/lib/auth/demo"
 import { getEmailValidationError, normalizeEmail } from "@/lib/auth/email"
+import { clearBrowserSupabaseAuthCookies } from "@/lib/supabase/auth-cookies"
 import { createClient } from "@/lib/supabase/client"
 
 interface AuthUser {
@@ -45,6 +46,19 @@ function toAuthUser(demo: DemoUser): AuthUser {
   return { id: demo.id, email: demo.email, fullName: demo.fullName }
 }
 
+function toAuthUserFromSupabase(user: {
+  id: string
+  email?: string | null
+  user_metadata?: Record<string, unknown> | null
+}): AuthUser {
+  return {
+    id: user.id,
+    email: user.email ?? "",
+    fullName:
+      (user.user_metadata?.full_name as string | undefined) ?? undefined,
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null)
   const [loading, setLoading] = useState(true)
@@ -53,31 +67,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let mounted = true
 
-    async function init() {
-      if (demoMode) {
-        const demo = getDemoUser()
-        if (mounted) {
-          setUser(demo ? toAuthUser(demo) : null)
-          setLoading(false)
-        }
-        return
+    if (demoMode) {
+      const demo = getDemoUser()
+      setUser(demo ? toAuthUser(demo) : null)
+      setLoading(false)
+      return () => {
+        mounted = false
       }
+    }
 
+    const supabase = createClient()
+
+    async function init() {
       try {
-        const supabase = createClient()
         const { data } = await supabase.auth.getUser()
         if (!mounted) return
-        if (data.user) {
-          setUser({
-            id: data.user.id,
-            email: data.user.email ?? "",
-            fullName:
-              (data.user.user_metadata?.full_name as string | undefined) ??
-              undefined,
-          })
-        } else {
-          setUser(null)
-        }
+        setUser(data.user ? toAuthUserFromSupabase(data.user) : null)
       } catch {
         if (mounted) setUser(null)
       } finally {
@@ -86,8 +91,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     void init()
+
+    // Keep React auth state aligned with the cookie-backed SSR session.
+    // Without this, the UI can show user A while document cookies still have user B
+    // (full-page OAuth navigations only see cookies).
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return
+      setUser(session?.user ? toAuthUserFromSupabase(session.user) : null)
+      setLoading(false)
+    })
+
     return () => {
       mounted = false
+      subscription.unsubscribe()
     }
   }, [demoMode])
 
@@ -109,20 +127,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       try {
         const supabase = createClient()
+        // Drop any prior account session/cookies first (e.g. leerankin53) so the
+        // cookie jar cannot keep serving that user to /api routes after login.
+        await supabase.auth.signOut({ scope: "local" })
+        clearBrowserSupabaseAuthCookies()
+
         const { error } = await supabase.auth.signInWithPassword({
           email,
           password,
         })
         if (error) return { error: error.message }
+
+        // Re-persist the new session into cookies (source of truth for OAuth).
+        const { data: sessionData, error: sessionError } =
+          await supabase.auth.getSession()
+        if (sessionError) return { error: sessionError.message }
+        if (sessionData.session) {
+          await supabase.auth.setSession({
+            access_token: sessionData.session.access_token,
+            refresh_token: sessionData.session.refresh_token,
+          })
+        }
+
         const { data } = await supabase.auth.getUser()
         if (data.user) {
-          setUser({
-            id: data.user.id,
-            email: data.user.email ?? "",
-            fullName:
-              (data.user.user_metadata?.full_name as string | undefined) ??
-              undefined,
-          })
+          setUser(toAuthUserFromSupabase(data.user))
         }
         return {}
       } catch {
@@ -150,16 +179,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       try {
         const supabase = createClient()
+        await supabase.auth.signOut({ scope: "local" })
+        clearBrowserSupabaseAuthCookies()
+
         const { error } = await supabase.auth.signUp({
           email: normalizedEmail,
           password,
           options: { data: { full_name: fullName } },
         })
         if (error) return { error: error.message }
+
+        const { data: sessionData } = await supabase.auth.getSession()
+        if (sessionData.session) {
+          await supabase.auth.setSession({
+            access_token: sessionData.session.access_token,
+            refresh_token: sessionData.session.refresh_token,
+          })
+        }
+
         const { data } = await supabase.auth.getUser()
         if (data.user) {
           setUser({
-            id: data.user.id,
+            ...toAuthUserFromSupabase(data.user),
             email: data.user.email ?? normalizedEmail,
             fullName:
               (data.user.user_metadata?.full_name as string | undefined) ??
@@ -182,8 +223,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     try {
       const supabase = createClient()
-      await supabase.auth.signOut()
+      await supabase.auth.signOut({ scope: "global" })
     } finally {
+      clearBrowserSupabaseAuthCookies()
       setUser(null)
     }
   }, [demoMode])

@@ -16,6 +16,7 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { PasswordInput } from "@/components/auth/password-input"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import type { MarketplaceId } from "@/lib/types"
+import { createClient } from "@/lib/supabase/client"
 import { cn } from "@/lib/utils"
 
 type AdapterStatus = "live" | "requires_credentials" | "coming_soon"
@@ -147,6 +148,44 @@ export function MarketplaceConnectionsPanel() {
       setError(err instanceof Error ? err.message : "Vinted connect failed.")
     } finally {
       setBusyId(null)
+    }
+  }
+
+  /**
+   * OAuth start is a full document navigation — only cookies are sent.
+   * Re-persist the in-memory Supabase session into cookies first so the API
+   * route cannot see a stale prior account (e.g. leerankin53) while the UI
+   * shows the current user (leerankinmedia).
+   */
+  async function startOAuth(marketplaceId: MarketplaceId) {
+    setBusyId(marketplaceId)
+    setError(null)
+    try {
+      const supabase = createClient()
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.getSession()
+      if (sessionError) throw sessionError
+      const session = sessionData.session
+      if (!session) {
+        throw new Error("Sign in required to connect a marketplace.")
+      }
+
+      const { error: refreshError } = await supabase.auth.refreshSession()
+      if (refreshError) {
+        await supabase.auth.setSession({
+          access_token: session.access_token,
+          refresh_token: session.refresh_token,
+        })
+      }
+
+      window.location.assign(
+        `/api/marketplaces/${marketplaceId}/oauth/start`
+      )
+    } catch (err) {
+      setBusyId(null)
+      setError(
+        err instanceof Error ? err.message : "Could not start OAuth connect."
+      )
     }
   }
 
@@ -301,20 +340,23 @@ export function MarketplaceConnectionsPanel() {
                         </Button>
                       </>
                     ) : adapter.authMethod === "oauth" ? (
-                      <a
-                        href={`/api/marketplaces/${adapter.id}/oauth/start`}
-                        className={cn(
-                          buttonVariants({ variant: "accent", size: "sm" }),
-                          (!isLive || !status?.connectionsSecretConfigured) &&
-                            "pointer-events-none opacity-50"
-                        )}
-                        aria-disabled={
-                          !isLive || !status?.connectionsSecretConfigured
+                      <Button
+                        variant="accent"
+                        size="sm"
+                        disabled={
+                          busy ||
+                          !isLive ||
+                          !status?.connectionsSecretConfigured
                         }
+                        onClick={() => void startOAuth(adapter.id)}
                       >
-                        <Plug />
+                        {busy ? (
+                          <Loader2 className="animate-spin" />
+                        ) : (
+                          <Plug />
+                        )}
                         Connect with OAuth
-                      </a>
+                      </Button>
                     ) : adapter.authMethod === "api_token" ? (
                       <Button
                         variant="accent"

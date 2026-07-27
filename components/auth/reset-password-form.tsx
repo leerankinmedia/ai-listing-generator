@@ -175,7 +175,11 @@ function ResetPasswordFormInner() {
       }
 
       setMessage("Password updated. Redirecting you to log in…")
-      await supabase.auth.signOut()
+      await supabase.auth.signOut({ scope: "global" })
+      const { clearBrowserSupabaseAuthCookies } = await import(
+        "@/lib/supabase/auth-cookies"
+      )
+      clearBrowserSupabaseAuthCookies()
       router.push("/login?reset=success")
     } catch {
       setError("Could not update your password. Please try again.")

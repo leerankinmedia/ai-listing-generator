@@ -44,8 +44,9 @@ export function listingToInventoryRow(listing: Listing): InventoryRow | null {
   const qtyRaw = Number(extras.quantity ?? extras.ebayQuantity ?? 1)
   const quantity = Number.isFinite(qtyRaw) ? Math.max(0, Math.floor(qtyRaw)) : 1
   const sku =
-    extras.sku?.trim() ||
+    extras.ebayOriginalSku?.trim() ||
     extras.ebaySku?.trim() ||
+    extras.sku?.trim() ||
     ebayRef?.externalId ||
     listing.id.slice(0, 8)
   const listingId =

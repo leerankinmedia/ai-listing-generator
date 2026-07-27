@@ -3,7 +3,13 @@ import { getEntitlement, type Entitlement } from "@/lib/billing/entitlement"
 
 export interface SubscriptionAccessResult {
   allowed: boolean
-  reason: "missing_user" | "no_subscription" | "inactive" | "active" | "admin"
+  reason:
+    | "missing_user"
+    | "no_subscription"
+    | "inactive"
+    | "active"
+    | "admin"
+    | "owner"
   status: string | null
   subscription: Entitlement["subscription"]
   displayPeriodEnd: string | null
@@ -12,11 +18,14 @@ export interface SubscriptionAccessResult {
 
 /**
  * Paid-tool guard — delegates entirely to getEntitlement().
+ * Pass the authenticated user's email so the permanent Owner account
+ * can be recognized without an extra Auth Admin lookup when possible.
  */
 export async function checkSubscriptionAccess(
-  userId: string | null | undefined
+  userId: string | null | undefined,
+  email?: string | null
 ): Promise<SubscriptionAccessResult> {
-  const entitlement = await getEntitlement(userId)
+  const entitlement = await getEntitlement(userId, { email })
   return {
     allowed: entitlement.allowed,
     reason: entitlement.reason,
@@ -28,9 +37,10 @@ export async function checkSubscriptionAccess(
 }
 
 export async function assertSubscriptionAccess(
-  userId: string | null | undefined
+  userId: string | null | undefined,
+  email?: string | null
 ) {
-  const result = await checkSubscriptionAccess(userId)
+  const result = await checkSubscriptionAccess(userId, email)
   if (!result.allowed) {
     const error = new Error(
       result.status === "expired"

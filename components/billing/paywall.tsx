@@ -55,6 +55,7 @@ export interface BillingStatusPayload {
   paidToolsUnlocked: boolean
   previewMode: boolean
   adminOverride?: boolean
+  ownerOverride?: boolean
   entitlementDebug?: EntitlementDebugPayload
 }
 

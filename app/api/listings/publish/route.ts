@@ -27,7 +27,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 })
     }
 
-    const access = await checkSubscriptionAccess(user.id)
+    const access = await checkSubscriptionAccess(user.id, user.email)
     if (!access.allowed) {
       return NextResponse.json(
         {

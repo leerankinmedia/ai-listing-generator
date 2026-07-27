@@ -23,7 +23,7 @@ function redirectWith(status: "connected" | "error", message?: string) {
 
 export async function GET(request: NextRequest) {
   const user = await getServerAuthUser()
-  const access = await checkSubscriptionAccess(user?.id)
+  const access = await checkSubscriptionAccess(user?.id, user?.email)
   if (!access.allowed) {
     return redirectWith(
       "error",

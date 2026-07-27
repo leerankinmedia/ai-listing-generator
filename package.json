@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test": "npx tsx --test lib/billing/entitlement-rules.test.ts lib/listings/condition-details.test.ts lib/dashboard/stats.test.ts lib/dashboard/sales.test.ts lib/insights/compute.test.ts lib/challenge/activity.test.ts lib/challenge/progress.test.ts lib/marketplaces/adapters/ebay/account-deletion.test.ts lib/marketplaces/adapters/ebay/oauth-env.test.ts components/brand/logo.test.ts"
+    "test": "npx tsx --test lib/billing/entitlement-rules.test.ts lib/billing/owner.test.ts lib/listings/condition-details.test.ts lib/dashboard/stats.test.ts lib/dashboard/sales.test.ts lib/insights/compute.test.ts lib/challenge/activity.test.ts lib/challenge/progress.test.ts lib/marketplaces/adapters/ebay/account-deletion.test.ts lib/marketplaces/adapters/ebay/oauth-env.test.ts components/brand/logo.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.11",

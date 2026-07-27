@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     )
   }
 
-  const access = await checkSubscriptionAccess(user?.id)
+  const access = await checkSubscriptionAccess(user?.id, user?.email)
   if (!access.allowed) {
     return NextResponse.json(
       {
@@ -46,7 +46,8 @@ export async function POST(request: Request) {
 
   // One completed AI listing = 1 customer credit (not per internal OpenAI call).
   // No-op while BILLING_ENFORCEMENT=false — does not lock test users.
-  if (user?.id) {
+  // Permanent Owner always bypasses credit limits.
+  if (user?.id && !access.entitlement.ownerOverride) {
     const periodStart = creditPeriodStartFromSubscription(
       access.subscription
         ? {
@@ -59,6 +60,8 @@ export async function POST(request: Request) {
     const creditCheck = await assertListingCreditAvailable({
       userId: user.id,
       periodStartIso: periodStart,
+      email: user.email,
+      ownerOverride: access.entitlement.ownerOverride,
     })
     if (!creditCheck.ok) {
       return NextResponse.json(

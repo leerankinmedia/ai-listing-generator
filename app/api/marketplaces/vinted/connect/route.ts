@@ -15,7 +15,7 @@ export const runtime = "nodejs"
 export async function POST(request: Request) {
   try {
     const user = await getServerAuthUser()
-    const access = await checkSubscriptionAccess(user?.id)
+    const access = await checkSubscriptionAccess(user?.id, user?.email)
     if (!access.allowed) {
       return NextResponse.json(
         {

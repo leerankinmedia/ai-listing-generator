@@ -30,9 +30,11 @@ export function formatEntitlementStatusLabel(billing: {
   statusLabel?: string
   status?: string
   adminOverride?: boolean
+  ownerOverride?: boolean
 } | null): string {
   if (!billing) return "Loading…"
   if (billing.paidToolsUnlocked) {
+    if (billing.ownerOverride || billing.status === "owner") return "Owner"
     if (billing.adminOverride) return "Admin override"
     if (billing.status === "trialing") return "Trialing"
     if (billing.status === "active") return "Active"

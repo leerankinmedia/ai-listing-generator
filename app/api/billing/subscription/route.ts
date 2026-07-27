@@ -49,6 +49,18 @@ export async function POST(request: Request) {
       )
     }
 
+    const entitlement = await getEntitlement(user.id, { email: user.email })
+    if (entitlement.ownerOverride) {
+      return NextResponse.json(
+        {
+          error: "Owner account does not use Stripe subscription management.",
+          code: "owner_no_subscription",
+          status: entitlement.status,
+        },
+        { status: 409 }
+      )
+    }
+
     const row = await getSubscriptionByUserId(user.id)
     if (!row?.stripe_subscription_id) {
       return NextResponse.json(
@@ -57,7 +69,6 @@ export async function POST(request: Request) {
       )
     }
 
-    const entitlement = await getEntitlement(user.id)
     if (!entitlement.allowed) {
       return NextResponse.json(
         {

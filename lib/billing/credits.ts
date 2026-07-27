@@ -4,6 +4,7 @@ import {
   MONTHLY_LISTING_CREDITS,
 } from "@/lib/billing/config"
 import { isBillingEnforcementEnabled } from "@/lib/billing/env-flags"
+import { isListWiseOwnerEmail } from "@/lib/billing/owner"
 
 /**
  * Customer billing credits vs internal OpenAI usage:
@@ -96,7 +97,12 @@ export async function getListingCreditsSummary(input: {
   userId: string
   periodStartIso: string | null
   allowance?: number
+  /** Owner email bypasses credit enforcement forever. */
+  email?: string | null
+  ownerOverride?: boolean
 }): Promise<ListingCreditsSummary> {
+  const owner =
+    input.ownerOverride === true || isListWiseOwnerEmail(input.email)
   const allowance = input.allowance ?? MONTHLY_LISTING_CREDITS
   const used = await getListingCreditsUsed(input.userId, input.periodStartIso)
   const remaining = Math.max(0, allowance - used)
@@ -105,20 +111,26 @@ export async function getListingCreditsSummary(input: {
     allowance,
     used,
     remaining,
-    enforced: isBillingEnforcementEnabled(),
-    exhausted,
+    // Owner never hits credit limits, regardless of BILLING_ENFORCEMENT.
+    enforced: owner ? false : isBillingEnforcementEnabled(),
+    exhausted: owner ? false : exhausted,
     periodStart: input.periodStartIso,
   }
 }
 
 /**
  * Guard for future enforcement. Always allows while BILLING_ENFORCEMENT=false.
- * Does not lock or reject current test users.
+ * Permanent Owner account always allowed.
  */
 export async function assertListingCreditAvailable(input: {
   userId: string
   periodStartIso: string | null
+  email?: string | null
+  ownerOverride?: boolean
 }): Promise<{ ok: true } | { ok: false; summary: ListingCreditsSummary }> {
+  if (input.ownerOverride === true || isListWiseOwnerEmail(input.email)) {
+    return { ok: true }
+  }
   const summary = await getListingCreditsSummary(input)
   if (!summary.enforced) {
     return { ok: true }

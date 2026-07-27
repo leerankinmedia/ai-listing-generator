@@ -24,12 +24,14 @@ export async function GET() {
     return NextResponse.json({ error: "Sign in required." }, { status: 401 })
   }
 
-  const entitlement = await getEntitlement(user.id)
+  const entitlement = await getEntitlement(user.id, { email: user.email })
   const subscription = entitlement.subscription
   const periodStart = creditPeriodStartFromSubscription(subscription)
   const credits = await getListingCreditsSummary({
     userId: user.id,
     periodStartIso: periodStart,
+    email: user.email,
+    ownerOverride: entitlement.ownerOverride,
   })
 
   const toolsUnlocked = entitlement.allowed
@@ -53,7 +55,8 @@ export async function GET() {
       listingCreditsUsed: credits.used,
       listingCreditsRemaining: credits.remaining,
       listingCreditsPeriodStart: credits.periodStart,
-      listingCreditsEnforced: credits.enforced && toolsUnlocked,
+      listingCreditsEnforced:
+        credits.enforced && toolsUnlocked && !entitlement.ownerOverride,
       features: PLAN_FEATURES,
       allowed: entitlement.allowed,
       reason: entitlement.reason,
@@ -64,6 +67,7 @@ export async function GET() {
       ),
       trialEligible:
         !entitlement.allowed &&
+        !entitlement.ownerOverride &&
         !(subscription?.has_used_trial || subscription?.trial_start),
       trialStart: subscription?.trial_start ?? null,
       trialEnd,
@@ -78,6 +82,7 @@ export async function GET() {
       paidToolsUnlocked: toolsUnlocked,
       previewMode: !toolsUnlocked,
       adminOverride: entitlement.adminOverride,
+      ownerOverride: entitlement.ownerOverride,
       entitlementDebug: entitlement.debug,
     },
     {

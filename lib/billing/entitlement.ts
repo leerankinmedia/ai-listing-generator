@@ -2,11 +2,13 @@ import "server-only"
 import { getStripe } from "@/lib/billing/stripe"
 import { isStripeBillingConfigured } from "@/lib/billing/config"
 import { decideEntitlement } from "@/lib/billing/entitlement-rules"
+import { isListWiseOwnerEmail } from "@/lib/billing/owner"
 import {
   getSubscriptionByUserId,
   upsertSubscriptionForUser,
   type SubscriptionRow,
 } from "@/lib/billing/subscription-store"
+import { createServiceRoleClient } from "@/lib/supabase/index"
 
 export type EntitlementStatus =
   | "none"
@@ -20,6 +22,7 @@ export type EntitlementStatus =
   | "incomplete_expired"
   | "paused"
   | "admin"
+  | "owner"
 
 export type EntitlementDebug = {
   rawDatabaseStatus: string | null
@@ -37,11 +40,24 @@ export type Entitlement = {
   statusLabel: string
   displayPeriodEnd: string | null
   trialEnd: string | null
-  reason: "missing_user" | "no_subscription" | "inactive" | "active" | "admin"
+  reason:
+    | "missing_user"
+    | "no_subscription"
+    | "inactive"
+    | "active"
+    | "admin"
+    | "owner"
   adminOverride: boolean
+  ownerOverride: boolean
   stripeSubscriptionId: string | null
   subscription: SubscriptionRow | null
   debug: EntitlementDebug
+}
+
+export type GetEntitlementOptions = {
+  nowMs?: number
+  /** Prefer the authenticated user's email when available. */
+  email?: string | null
 }
 
 function statusLabelFor(status: EntitlementStatus): string {
@@ -52,6 +68,8 @@ function statusLabelFor(status: EntitlementStatus): string {
       return "Active"
     case "expired":
       return "Trial expired"
+    case "owner":
+      return "Owner"
     case "admin":
       return "Admin override"
     case "past_due":
@@ -64,6 +82,68 @@ function statusLabelFor(status: EntitlementStatus): string {
       return "No subscription"
     default:
       return status
+  }
+}
+
+/** Look up the auth email for a user id (source of truth for Owner checks). */
+async function lookupEmailByUserId(userId: string): Promise<string | null> {
+  const admin = createServiceRoleClient()
+  if (!admin) return null
+  try {
+    const { data, error } = await admin.auth.admin.getUserById(userId)
+    if (error || !data.user?.email) return null
+    return data.user.email
+  } catch {
+    return null
+  }
+}
+
+function ownerEntitlement(): Entitlement {
+  return {
+    allowed: true,
+    status: "owner",
+    statusLabel: statusLabelFor("owner"),
+    displayPeriodEnd: null,
+    trialEnd: null,
+    reason: "owner",
+    adminOverride: true,
+    ownerOverride: true,
+    stripeSubscriptionId: null,
+    subscription: null,
+    debug: {
+      rawDatabaseStatus: null,
+      trialEnd: null,
+      stripeSubscriptionIdPresent: false,
+      stripeVerifiedStatus: null,
+      finalEntitlement: "owner",
+      decidingField: "owner_email",
+      summary:
+        "Permanent Owner account — bypasses subscription, trial, Stripe, credits, and feature locks.",
+    },
+  }
+}
+
+function adminEntitlement(): Entitlement {
+  return {
+    allowed: true,
+    status: "admin",
+    statusLabel: statusLabelFor("admin"),
+    displayPeriodEnd: null,
+    trialEnd: null,
+    reason: "admin",
+    adminOverride: true,
+    ownerOverride: false,
+    stripeSubscriptionId: null,
+    subscription: null,
+    debug: {
+      rawDatabaseStatus: null,
+      trialEnd: null,
+      stripeSubscriptionIdPresent: false,
+      stripeVerifiedStatus: null,
+      finalEntitlement: "admin",
+      decidingField: "admin_override",
+      summary: "Access granted via LISTWISE_ADMIN_USER_IDS for this user id.",
+    },
   }
 }
 
@@ -152,11 +232,20 @@ async function persistExpiredCorrection(
 /**
  * Single server-side source of truth for paid access.
  * See entitlement-rules.ts for the pure decision table.
+ *
+ * Permanent Owner (leerankinmedia@gmail.com) and LISTWISE_ADMIN_USER_IDS
+ * bypass Stripe / trial / subscription checks forever.
  */
 export async function getEntitlement(
   userId: string | null | undefined,
-  nowMs: number = Date.now()
+  nowOrOptions: number | GetEntitlementOptions = Date.now()
 ): Promise<Entitlement> {
+  const options: GetEntitlementOptions =
+    typeof nowOrOptions === "number"
+      ? { nowMs: nowOrOptions }
+      : nowOrOptions ?? {}
+  const nowMs = options.nowMs ?? Date.now()
+
   if (!userId) {
     return {
       allowed: false,
@@ -166,6 +255,7 @@ export async function getEntitlement(
       trialEnd: null,
       reason: "missing_user",
       adminOverride: false,
+      ownerOverride: false,
       stripeSubscriptionId: null,
       subscription: null,
       debug: {
@@ -180,27 +270,20 @@ export async function getEntitlement(
     }
   }
 
+  // Owner email — permanent, server-side, no Stripe/trial/credits required.
+  // Prefer Auth Admin lookup by user id so a forged email string cannot unlock.
+  const lookedUpEmail = await lookupEmailByUserId(userId)
+  if (isListWiseOwnerEmail(lookedUpEmail)) {
+    return ownerEntitlement()
+  }
+  // Fallback when service-role lookup is unavailable (local/dev): trust the
+  // session email passed from getServerAuthUser() only.
+  if (!lookedUpEmail && isListWiseOwnerEmail(options.email)) {
+    return ownerEntitlement()
+  }
+
   if (isAdminOverrideUser(userId)) {
-    return {
-      allowed: true,
-      status: "admin",
-      statusLabel: statusLabelFor("admin"),
-      displayPeriodEnd: null,
-      trialEnd: null,
-      reason: "admin",
-      adminOverride: true,
-      stripeSubscriptionId: null,
-      subscription: null,
-      debug: {
-        rawDatabaseStatus: null,
-        trialEnd: null,
-        stripeSubscriptionIdPresent: false,
-        stripeVerifiedStatus: null,
-        finalEntitlement: "admin",
-        decidingField: "admin_override",
-        summary: "Access granted via LISTWISE_ADMIN_USER_IDS for this user id.",
-      },
-    }
+    return adminEntitlement()
   }
 
   const subscription = await getSubscriptionByUserId(userId)
@@ -213,6 +296,7 @@ export async function getEntitlement(
       trialEnd: null,
       reason: "no_subscription",
       adminOverride: false,
+      ownerOverride: false,
       stripeSubscriptionId: null,
       subscription: null,
       debug: {
@@ -267,6 +351,7 @@ export async function getEntitlement(
     trialEnd: stripeTrialEnd || subscription.trial_end,
     reason: decision.allowed ? "active" : "inactive",
     adminOverride: false,
+    ownerOverride: false,
     stripeSubscriptionId: stripeId,
     subscription,
     debug: {

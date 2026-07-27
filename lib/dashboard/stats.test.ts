@@ -69,5 +69,14 @@ describe("dashboard stats", () => {
       }),
       "Active"
     )
+    assert.equal(
+      formatEntitlementStatusLabel({
+        paidToolsUnlocked: true,
+        status: "owner",
+        ownerOverride: true,
+        statusLabel: "Owner",
+      }),
+      "Owner"
+    )
   })
 })

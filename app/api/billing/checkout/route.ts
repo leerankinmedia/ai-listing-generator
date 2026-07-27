@@ -142,7 +142,19 @@ export async function POST(request: Request) {
     const stripe = getStripe()
     const origin = getBillingAppOrigin()
     const existing = await getSubscriptionByUserId(user.id)
-    const entitlement = await getEntitlement(user.id)
+    const entitlement = await getEntitlement(user.id, { email: user.email })
+
+    // Permanent Owner never needs Stripe checkout.
+    if (entitlement.ownerOverride) {
+      return NextResponse.json(
+        {
+          error: "Owner account does not require a Stripe subscription.",
+          code: "owner_no_checkout",
+          status: entitlement.status,
+        },
+        { status: 409 }
+      )
+    }
 
     // Only block when Stripe-verified entitlement is already unlocked.
     // Expired trials with stale DB status=active must still be able to subscribe.

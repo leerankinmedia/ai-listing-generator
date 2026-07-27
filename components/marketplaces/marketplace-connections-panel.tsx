@@ -152,74 +152,101 @@ export function MarketplaceConnectionsPanel() {
 
   /**
    * Use the same fetch()/cookie jar as Billing (`/api/billing/status`).
-   * Do NOT top-level navigate to oauth/start first — that path was reading a
-   * different session than the Billing XHR on some clients.
-   * Only navigate after we receive eBay's authorize Location.
+   * OAuth start returns JSON `{ authorizeUrl }` for credentialed fetch so we
+   * never depend on reading a cross-origin 302 Location (HTTP status 0).
    */
   async function startOAuth(marketplaceId: MarketplaceId) {
     setBusyId(marketplaceId)
     setError(null)
     try {
-      // Prove we share Billing's session before starting OAuth.
-      const billingRes = await fetch("/api/billing/status", {
-        method: "GET",
-        cache: "no-store",
-        credentials: "same-origin",
-        headers: { "Cache-Control": "no-store" },
-      })
-      const billingJson = (await billingRes.json()) as {
-        error?: string
-        ownerOverride?: boolean
-        status?: string
-        authenticatedUser?: { id: string; email: string | null }
-      }
-      if (!billingRes.ok) {
-        throw new Error(billingJson.error || "Billing auth failed.")
-      }
-
-      const oauthPath = `/api/marketplaces/${marketplaceId}/oauth/start`
-      const res = await fetch(oauthPath, {
-        method: "GET",
-        cache: "no-store",
-        credentials: "same-origin",
-        redirect: "manual",
-        headers: { "Cache-Control": "no-store" },
-      })
-
-      if (res.status === 401 || res.status === 402 || res.status === 503) {
-        const data = (await res.json()) as { error?: string; code?: string }
-        throw new Error(data.error || data.code || `OAuth start failed (${res.status})`)
-      }
-
-      if (
-        res.status === 301 ||
-        res.status === 302 ||
-        res.status === 303 ||
-        res.status === 307 ||
-        res.status === 308
-      ) {
-        const loc = res.headers.get("Location")
-        if (!loc) {
-          throw new Error("OAuth start returned a redirect without Location.")
-        }
-        window.location.assign(loc)
-        return
-      }
-
-      // Unexpected JSON (e.g. debug left on) — surface it.
-      if (res.status === 200) {
-        const data = (await res.json()) as {
-          error?: string
-          authenticatedEmail?: string | null
-          nextAction?: string
-        }
+      const oauthPath = `/api/marketplaces/${marketplaceId}/oauth/start?format=json`
+      let res: Response
+      try {
+        res = await fetch(oauthPath, {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+          redirect: "manual",
+          headers: {
+            "Cache-Control": "no-store",
+            Accept: "application/json",
+          },
+        })
+      } catch (err) {
         throw new Error(
-          data.error ||
-            `OAuth start returned JSON instead of redirect (email=${data.authenticatedEmail}, next=${data.nextAction}).`
+          JSON.stringify(
+            {
+              failingEndpoint: oauthPath,
+              httpStatus: 0,
+              responseBody: null,
+              redirectUrl: null,
+              serverError:
+                err instanceof Error ? err.message : "Failed to fetch",
+            },
+            null,
+            2
+          )
         )
       }
 
-      throw new Error(`OAuth start failed (HTTP ${res.status}).`)
+      const locationHeader = res.headers.get("Location")
+      const rawText = await res.text()
+      let body: Record<string, unknown> | null = null
+      try {
+        body = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : null
+      } catch {
+        body = rawText ? { raw: rawText.slice(0, 500) } : null
+      }
+
+      const fail = (serverError: string | null) => {
+        throw new Error(
+          JSON.stringify(
+            {
+              failingEndpoint: oauthPath,
+              httpStatus: res.status,
+              responseBody: body,
+              redirectUrl:
+                locationHeader ||
+                (typeof body?.authorizeUrl === "string"
+                  ? body.authorizeUrl
+                  : typeof body?.redirectUrl === "string"
+                    ? body.redirectUrl
+                    : null),
+              responseType: res.type,
+              serverError,
+            },
+            null,
+            2
+          )
+        )
+      }
+
+      // Opaque cross-origin redirect (legacy 302-to-eBay path).
+      if (res.status === 0 || res.type === "opaqueredirect") {
+        fail(
+          "Opaque redirect (HTTP 0). OAuth start must return JSON authorizeUrl for fetch clients."
+        )
+      }
+
+      if (!res.ok) {
+        fail(
+          (body?.error as string | undefined) ||
+            (body?.code as string | undefined) ||
+            `OAuth start failed (HTTP ${res.status})`
+        )
+      }
+
+      const authorizeUrl =
+        (typeof body?.authorizeUrl === "string" && body.authorizeUrl) ||
+        (typeof body?.redirectUrl === "string" && body.redirectUrl) ||
+        locationHeader
+
+      if (!authorizeUrl) {
+        fail("OAuth start returned 200 without authorizeUrl/Location.")
+        return
+      }
+
+      window.location.assign(authorizeUrl)
     } catch (err) {
       setBusyId(null)
       setError(

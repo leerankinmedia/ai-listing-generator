@@ -231,6 +231,33 @@ export async function GET(request: NextRequest) {
     const { urlState, cookieValue } = createOAuthState("ebay")
     const authorizeUrl = buildEbayAuthorizeUrl(urlState)
 
+    // Credentialed fetch() + redirect:manual cannot read a cross-origin 302
+    // Location (browser reports status 0 / opaqueredirect). Return the eBay
+    // authorize URL as JSON so Connect can navigate explicitly.
+    const wantsJsonAuthorize =
+      isCredentialedFetch ||
+      request.nextUrl.searchParams.get("format") === "json" ||
+      (request.headers.get("accept") || "").includes("application/json")
+
+    if (wantsJsonAuthorize) {
+      const jsonResponse = noStoreJson(
+        {
+          ok: true,
+          authorizeUrl,
+          redirectUrl: authorizeUrl,
+          isOwner,
+          authenticatedUserId: user.id,
+          authenticatedEmail: user.email ?? null,
+        },
+        200,
+        {
+          "X-ListWise-Is-Owner": isOwner ? "true" : "false",
+        }
+      )
+      attachOAuthStateCookie(jsonResponse, cookieValue)
+      return jsonResponse
+    }
+
     const response = new NextResponse(null, { status: 302 })
     response.headers.set("Location", authorizeUrl)
     for (const [key, value] of Object.entries(

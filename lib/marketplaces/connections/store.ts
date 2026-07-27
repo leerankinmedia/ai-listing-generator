@@ -89,24 +89,65 @@ export async function saveConnection(
   const user = await getServerAuthUser()
   if (user && isSupabaseConfigured()) {
     const supabase = await createServerClient()
-    const { error } = await supabase.from("marketplace_connections").upsert(
-      {
-        user_id: user.id,
-        marketplace_id: updated.marketplaceId,
-        auth_method: updated.authMethod,
-        account_label: updated.accountLabel ?? null,
-        encrypted_payload: encryptedPayload,
-        expires_at: updated.expiresAt ?? null,
-        connected_at: updated.connectedAt,
-        updated_at: updated.updatedAt,
-        external_user_id: externalUserId,
-        external_username: externalUsername,
-      },
-      { onConflict: "user_id,marketplace_id" }
-    )
-    if (error) throw error
-    // Keep cookie mirror for same-browser publish calls without re-fetch races
-    await saveCookieConnection(updated)
+    const row = {
+      user_id: user.id,
+      marketplace_id: updated.marketplaceId,
+      auth_method: updated.authMethod,
+      account_label: updated.accountLabel ?? null,
+      encrypted_payload: encryptedPayload,
+      expires_at: updated.expiresAt ?? null,
+      connected_at: updated.connectedAt,
+      updated_at: updated.updatedAt,
+      external_user_id: externalUserId,
+      external_username: externalUsername,
+    }
+
+    let { error } = await supabase
+      .from("marketplace_connections")
+      .upsert(row, { onConflict: "user_id,marketplace_id" })
+
+    // Migration 007 may be missing in older projects — retry without those cols.
+    if (
+      error &&
+      /external_user_id|external_username/i.test(
+        `${error.message} ${error.details || ""} ${error.hint || ""}`
+      )
+    ) {
+      console.warn(
+        "[connections] upsert retry without external_* columns",
+        error.message
+      )
+      const { external_user_id: _u, external_username: _n, ...legacyRow } = row
+      ;({ error } = await supabase
+        .from("marketplace_connections")
+        .upsert(legacyRow, { onConflict: "user_id,marketplace_id" }))
+    }
+
+    if (error) {
+      throw new Error(
+        [
+          "marketplace_connections upsert failed",
+          error.message,
+          error.code ? `code=${error.code}` : null,
+          error.details ? `details=${error.details}` : null,
+          error.hint ? `hint=${error.hint}` : null,
+        ]
+          .filter(Boolean)
+          .join(" | ")
+      )
+    }
+
+    // Cookie mirror is best-effort. eBay token payloads can exceed browser
+    // cookie size limits; Supabase is the source of truth for authenticated users.
+    try {
+      await saveCookieConnection(updated)
+    } catch (cookieErr) {
+      console.warn("[connections] cookie mirror skipped after DB save", {
+        marketplaceId: updated.marketplaceId,
+        error:
+          cookieErr instanceof Error ? cookieErr.message : String(cookieErr),
+      })
+    }
     return
   }
 

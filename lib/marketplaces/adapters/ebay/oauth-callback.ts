@@ -14,6 +14,61 @@ import {
 import { saveConnection } from "@/lib/marketplaces/connections/store"
 import { getServerAuthUser } from "@/lib/supabase/index"
 
+/** Structured OAuth callback failure — always instanceof Error for the UI. */
+export class EbayOAuthStepError extends Error {
+  readonly step: string
+  readonly details: Record<string, unknown>
+
+  constructor(
+    step: string,
+    cause: unknown,
+    details: Record<string, unknown> = {}
+  ) {
+    super(formatOAuthFailure(step, cause, details))
+    this.name = "EbayOAuthStepError"
+    this.step = step
+    this.details = details
+    if (cause instanceof Error) {
+      this.cause = cause
+    }
+  }
+}
+
+function formatUnknownError(err: unknown): string {
+  if (err instanceof Error) return err.message || err.name
+  if (typeof err === "string") return err
+  if (err && typeof err === "object") {
+    const o = err as Record<string, unknown>
+    // Supabase PostgrestError: { message, code, details, hint }
+    const parts = [o.message, o.code, o.details, o.hint]
+      .filter((v) => v != null && String(v).trim() !== "")
+      .map(String)
+    if (parts.length) return parts.join(" | ")
+    try {
+      return JSON.stringify(err)
+    } catch {
+      return Object.prototype.toString.call(err)
+    }
+  }
+  return String(err)
+}
+
+function formatOAuthFailure(
+  step: string,
+  cause: unknown,
+  details: Record<string, unknown> = {}
+): string {
+  const detailBits = Object.entries(details)
+    .filter(([, v]) => v != null && v !== "")
+    .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+  return [
+    `eBay OAuth failed`,
+    `step=${step}`,
+    `error=${formatUnknownError(cause)}`,
+    ...detailBits,
+  ].join(" | ")
+}
+
 /**
  * Read OAuth query params from nextUrl, falling back to the raw request URL.
  * Never log param values (authorization codes are secrets).
@@ -59,7 +114,8 @@ function postOAuthConnectionsUrl(
 ) {
   const url = new URL("/dashboard/connections", PRODUCTION_APP_URL)
   url.searchParams.set("ebay", status)
-  if (message) url.searchParams.set("message", message.slice(0, 240))
+  // Allow longer diagnostic messages (step + PostgrestError fields).
+  if (message) url.searchParams.set("message", message.slice(0, 700))
   console.info("[ebay/oauth] post-OAuth redirect", {
     location: url.toString(),
     status,
@@ -133,7 +189,12 @@ export async function handleEbayOAuthCallback(request: NextRequest) {
   const error = params.get("error")
   const errorDescription = params.get("error_description")
   if (error) {
-    return redirectWith("error", errorDescription || error)
+    return redirectWith(
+      "error",
+      formatOAuthFailure("ebay_oauth_deny", errorDescription || error, {
+        ebayError: error,
+      })
+    )
   }
 
   let code = params.get("code")
@@ -143,38 +204,89 @@ export async function handleEbayOAuthCallback(request: NextRequest) {
   if (!code || !state) {
     return redirectWith(
       "error",
-      !paramNames.length
-        ? "OAuth callback reached ListWise without query parameters. Check Vercel logs for [ebay/oauth] middleware entry — a redirect may have stripped ?code=&state=."
-        : "Missing OAuth code or state from eBay."
+      formatOAuthFailure(
+        "callback_params",
+        !paramNames.length
+          ? "OAuth callback reached ListWise without query parameters."
+          : "Missing OAuth code or state from eBay.",
+        {
+          paramNames: paramNames.join(",") || "(none)",
+          codePresent: Boolean(code),
+          statePresent: Boolean(state),
+        }
+      )
     )
   }
+
+  let step =
+    "init" as
+      | "init"
+      | "state_verify"
+      | "code_decode"
+      | "token_exchange"
+      | "identity_lookup"
+      | "database_save"
 
   try {
     // Cookie may be missing after fetch()-based OAuth start (Set-Cookie on XHR
     // then cross-site eBay round-trip). Prefer request jar; fall back to URL
     // state which now carries the same encrypted payload as the cookie.
+    step = "state_verify"
     const cookieValue =
       readOAuthStateCookieFromRequest(request) ||
       (await readOAuthStateCookie())
-    resolveAndAssertOAuthState(cookieValue, state, "ebay")
+    try {
+      resolveAndAssertOAuthState(cookieValue, state, "ebay")
+    } catch (err) {
+      throw new EbayOAuthStepError("state_verify", err, {
+        cookiePresent: Boolean(cookieValue),
+        queryStatePresent: Boolean(state),
+        queryStateLength: state?.length ?? 0,
+      })
+    }
     console.info("[ebay/oauth] state verified", {
       cookiePresent: Boolean(cookieValue),
       queryStatePresent: Boolean(state),
       usedUrlStateFallback: !cookieValue && Boolean(state),
     })
 
+    step = "code_decode"
     try {
-      if (code.includes("%")) {
-        code = decodeURIComponent(code)
+      // nextUrl.searchParams is already decoded once. Only undo *extra*
+      // percent-encoding (e.g. %252F → %2F → /), never decode a raw `#`.
+      if (/%[0-9A-Fa-f]{2}/.test(code) && !code.includes("#")) {
+        const once = decodeURIComponent(code)
+        if (once !== code) code = once
       }
-    } catch {
-      // keep raw code
+    } catch (err) {
+      throw new EbayOAuthStepError("code_decode", err, {
+        codeLength: code.length,
+      })
     }
 
-    const tokens = await exchangeEbayCode(code)
+    step = "token_exchange"
+    let tokens: Awaited<ReturnType<typeof exchangeEbayCode>>
+    try {
+      tokens = await exchangeEbayCode(code)
+    } catch (err) {
+      throw new EbayOAuthStepError("token_exchange", err, {
+        codeLength: code.length,
+        codeHasHash: code.includes("#"),
+        codeHasPercent: code.includes("%"),
+      })
+    }
+    if (!tokens.accessToken) {
+      throw new EbayOAuthStepError(
+        "token_exchange",
+        "Token exchange returned no access_token",
+        { expiresIn: tokens.expiresIn }
+      )
+    }
+
     const now = new Date().toISOString()
     let accountLabel = "eBay seller"
     const meta: Record<string, string> = {}
+    step = "identity_lookup"
     try {
       const identity = (await ebayFetch(
         `/commerce/identity/v1/user/`,
@@ -192,29 +304,47 @@ export async function handleEbayOAuthCallback(request: NextRequest) {
       if (identity?.userId) {
         meta.ebayUserId = identity.userId
       }
-    } catch {
+    } catch (identityErr) {
       // Identity scope may be unavailable — connection still saved.
       console.info("[ebay/oauth] identity lookup skipped", {
         reason: "identity_unavailable",
+        error: formatUnknownError(identityErr),
       })
     }
 
-    await saveConnection({
-      marketplaceId: "ebay",
-      authMethod: "oauth",
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      expiresAt: new Date(Date.now() + tokens.expiresIn * 1000).toISOString(),
-      accountLabel,
-      meta: Object.keys(meta).length ? meta : undefined,
-      connectedAt: now,
-      updatedAt: now,
-    })
+    step = "database_save"
+    try {
+      await saveConnection({
+        marketplaceId: "ebay",
+        authMethod: "oauth",
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        expiresAt: new Date(Date.now() + tokens.expiresIn * 1000).toISOString(),
+        accountLabel,
+        meta: Object.keys(meta).length ? meta : undefined,
+        connectedAt: now,
+        updatedAt: now,
+      })
+    } catch (err) {
+      throw new EbayOAuthStepError("database_save", err, {
+        marketplaceId: "ebay",
+        hasRefreshToken: Boolean(tokens.refreshToken),
+        accountLabel,
+      })
+    }
     return redirectWith("connected")
   } catch (err) {
-    return redirectWith(
-      "error",
-      err instanceof Error ? err.message : "eBay OAuth failed."
-    )
+    const message =
+      err instanceof EbayOAuthStepError
+        ? err.message
+        : formatOAuthFailure(step, err)
+    console.error("[ebay/oauth] callback failure", {
+      step: err instanceof EbayOAuthStepError ? err.step : step,
+      message,
+      details: err instanceof EbayOAuthStepError ? err.details : undefined,
+      errorName: err instanceof Error ? err.name : typeof err,
+      errorRaw: formatUnknownError(err),
+    })
+    return redirectWith("error", message)
   }
 }

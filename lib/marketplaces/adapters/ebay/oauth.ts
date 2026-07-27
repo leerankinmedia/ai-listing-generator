@@ -314,12 +314,33 @@ export async function exchangeEbayCode(code: string) {
     body,
   })
 
-  const payload = await response.json()
-  if (!response.ok) {
+  let payload: Record<string, unknown> = {}
+  const rawText = await response.text()
+  try {
+    payload = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {}
+  } catch {
     throw new Error(
-      payload.error_description ||
-        payload.error ||
-        `eBay token exchange failed (${response.status})`
+      `eBay token exchange returned non-JSON (${response.status}): ${rawText.slice(0, 180)}`
+    )
+  }
+  if (!response.ok) {
+    const description =
+      (typeof payload.error_description === "string" &&
+        payload.error_description) ||
+      (typeof payload.error === "string" && payload.error) ||
+      `eBay token exchange failed (${response.status})`
+    console.error("[ebay/oauth] token exchange failed", {
+      status: response.status,
+      error: payload.error ?? null,
+      error_description:
+        typeof payload.error_description === "string"
+          ? payload.error_description.slice(0, 300)
+          : null,
+      env: ebayEnv(),
+      redirect_uri: redirectUri,
+    })
+    throw new Error(
+      `${description} | httpStatus=${response.status} | ebayError=${String(payload.error ?? "unknown")} | env=${ebayEnv()} | redirect_uri=${redirectUri}`
     )
   }
 

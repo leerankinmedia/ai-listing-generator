@@ -20,6 +20,11 @@ import {
   getMembershipPriceLabel,
   PLAN_NAME,
 } from "@/lib/billing/config"
+import {
+  FOUNDER_OWNER_LABEL,
+  LIFETIME_FOUNDER_ACCESS,
+  isOwnerBillingStatus,
+} from "@/lib/billing/owner"
 import { getEmailValidationError } from "@/lib/auth/email"
 import { cn } from "@/lib/utils"
 import { useRouter } from "next/navigation"
@@ -142,6 +147,27 @@ export function EmbeddedCheckoutPage() {
     return (
       <CheckoutShell>
         <p className="text-sm text-muted-foreground">Redirecting to log in…</p>
+      </CheckoutShell>
+    )
+  }
+
+  if (isOwnerBillingStatus(status)) {
+    return (
+      <CheckoutShell>
+        <div className="mx-auto max-w-md space-y-4 text-center">
+          <h1 className="font-display text-2xl font-semibold tracking-tight">
+            {LIFETIME_FOUNDER_ACCESS}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            {FOUNDER_OWNER_LABEL} — no pricing or Stripe checkout required.
+          </p>
+          <Link
+            href="/dashboard"
+            className={cn(buttonVariants({ variant: "accent" }))}
+          >
+            Go to dashboard
+          </Link>
+        </div>
       </CheckoutShell>
     )
   }

@@ -69,7 +69,7 @@ function statusLabelFor(status: EntitlementStatus): string {
     case "expired":
       return "Trial expired"
     case "owner":
-      return "Owner"
+      return "Founder • Owner"
     case "admin":
       return "Admin override"
     case "past_due":

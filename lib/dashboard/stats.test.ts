@@ -74,9 +74,9 @@ describe("dashboard stats", () => {
         paidToolsUnlocked: true,
         status: "owner",
         ownerOverride: true,
-        statusLabel: "Owner",
+        statusLabel: "Founder • Owner",
       }),
-      "Owner"
+      "Founder • Owner"
     )
   })
 })

@@ -19,6 +19,10 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import { useAuth } from "@/components/auth/auth-provider"
 import { usePaidToolsAccess } from "@/components/billing/paid-feature-gate"
 import { buttonVariants } from "@/components/ui/button"
+import {
+  FOUNDER_OWNER_BADGE,
+  isOwnerBillingStatus,
+} from "@/lib/billing/owner"
 import { cn } from "@/lib/utils"
 
 const navItems = [
@@ -33,18 +37,45 @@ const navItems = [
   { href: "/dashboard#settings", label: "Account", icon: Settings },
 ]
 
+/** Primary top tabs — Overview | Challenge | Insights | Listings | Connections | Billing */
+const topNavItems = [
+  navItems[0],
+  navItems[1],
+  navItems[2],
+  navItems[3],
+  navItems[5],
+  navItems[6],
+]
+
+function navItemActive(
+  pathname: string,
+  item: (typeof navItems)[number]
+): boolean {
+  if (item.exact) return pathname === item.href
+  return (
+    pathname === item.href ||
+    (item.href !== "/dashboard" &&
+      !item.href.includes("#") &&
+      pathname.startsWith(item.href) &&
+      !(
+        item.href === "/dashboard/listings" &&
+        pathname.startsWith("/dashboard/listings/new")
+      ))
+  )
+}
+
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   const { user, signOut, isDemo } = useAuth()
   const { unlocked, status } = usePaidToolsAccess()
+  const isOwner = isOwnerBillingStatus(status)
   const createHref = unlocked ? "/dashboard/listings/new" : "/checkout"
-  const createLabel =
-    unlocked
-      ? "New listing"
-      : status?.trialEligible === false || status?.status === "expired"
-        ? "Subscribe"
-        : "Start free trial"
+  const createLabel = unlocked
+    ? "New listing"
+    : status?.trialEligible === false || status?.status === "expired"
+      ? "Subscribe"
+      : "Start free trial"
 
   async function handleSignOut() {
     await signOut()
@@ -75,16 +106,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         <nav className="flex-1 space-y-1 px-3 py-2">
           {navItems.map((item) => {
             const Icon = item.icon
-            const active = item.exact
-              ? pathname === item.href
-              : pathname === item.href ||
-                (item.href !== "/dashboard" &&
-                  !item.href.includes("#") &&
-                  pathname.startsWith(item.href) &&
-                  !(
-                    item.href === "/dashboard/listings" &&
-                    pathname.startsWith("/dashboard/listings/new")
-                  ))
+            const active = navItemActive(pathname, item)
             return (
               <Link
                 key={item.href}
@@ -105,6 +127,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         <div className="border-t border-sidebar-border p-4">
           <div className="mb-3 truncate px-1 text-xs text-sidebar-muted">
             {user?.email}
+            {isOwner && (
+              <span className="mt-1 block text-[10px] font-medium tracking-wide text-accent">
+                {FOUNDER_OWNER_BADGE}
+              </span>
+            )}
             {isDemo && (
               <span className="mt-1 block text-[10px] uppercase tracking-wider text-accent">
                 Demo mode
@@ -123,14 +150,25 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       <div className="flex min-h-screen flex-col">
-        <header className="sticky top-0 z-40 flex h-12 items-center justify-between border-b border-border bg-background/85 px-4 backdrop-blur-xl sm:px-6 lg:h-16">
-          <div className="flex items-center gap-3 lg:hidden">
-            <Logo href="/dashboard" />
+        <header className="sticky top-0 z-40 flex h-12 items-center justify-between gap-3 border-b border-border bg-background/85 px-4 backdrop-blur-xl sm:px-6 lg:h-16">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="lg:hidden">
+              <Logo href="/dashboard" />
+            </div>
+            {isOwner ? (
+              <span
+                className="inline-flex max-w-full items-center truncate rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[11px] font-semibold tracking-wide text-foreground sm:text-xs"
+                title={FOUNDER_OWNER_BADGE}
+              >
+                {FOUNDER_OWNER_BADGE}
+              </span>
+            ) : (
+              <p className="hidden text-sm text-muted-foreground lg:block">
+                Sell smarter across every marketplace.
+              </p>
+            )}
           </div>
-          <p className="hidden text-sm text-muted-foreground lg:block">
-            Sell smarter across every marketplace.
-          </p>
-          <div className="flex items-center gap-1.5 sm:gap-2">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             <Link
               href={createHref}
               className={cn(
@@ -152,20 +190,20 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <nav className="flex gap-1 overflow-x-auto border-b border-border px-3 py-1.5 lg:hidden">
-          {[
-            navItems[0],
-            navItems[1],
-            navItems[2],
-            navItems[3],
-            navItems[5],
-          ].map((item) => {
+        <nav className="flex gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
+          {topNavItems.map((item) => {
             const Icon = item.icon
+            const active = navItemActive(pathname, item)
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                className="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
+                className={cn(
+                  "flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
+                  active
+                    ? "bg-secondary text-foreground"
+                    : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                )}
               >
                 <Icon className="h-3.5 w-3.5" />
                 {item.label}

@@ -5,6 +5,15 @@
 
 export const LISTWISE_OWNER_EMAIL = "leerankinmedia@gmail.com"
 
+/** Header badge copy for the Owner account. */
+export const FOUNDER_OWNER_BADGE = "👑 Founder • Owner"
+
+/** Overview / status label under the Owner name. */
+export const FOUNDER_OWNER_LABEL = "Founder • Owner"
+
+/** Billing page membership copy for the Owner account. */
+export const LIFETIME_FOUNDER_ACCESS = "Lifetime Founder Access"
+
 export function normalizeBillingEmail(email: string): string {
   return email.trim().toLowerCase()
 }
@@ -15,4 +24,13 @@ export function isListWiseOwnerEmail(
 ): boolean {
   if (!email || typeof email !== "string") return false
   return normalizeBillingEmail(email) === LISTWISE_OWNER_EMAIL
+}
+
+/** True when billing status payload is the permanent Owner. */
+export function isOwnerBillingStatus(status: {
+  ownerOverride?: boolean
+  status?: string
+} | null | undefined): boolean {
+  if (!status) return false
+  return status.ownerOverride === true || status.status === "owner"
 }

@@ -28,6 +28,11 @@ import {
   MONTHLY_LISTING_CREDITS,
   PLAN_NAME,
 } from "@/lib/billing/config"
+import {
+  FOUNDER_OWNER_LABEL,
+  LIFETIME_FOUNDER_ACCESS,
+  isOwnerBillingStatus,
+} from "@/lib/billing/owner"
 import { cn } from "@/lib/utils"
 
 type PublicConnection = {
@@ -47,16 +52,21 @@ export function DashboardOverview() {
     "Seller"
   const firstName = displayName.split(" ")[0] || "Seller"
   const toolsUnlocked = billing?.paidToolsUnlocked === true
-  const previewMode = Boolean(billing?.previewMode || (billing && !toolsUnlocked))
+  const isOwner = isOwnerBillingStatus(billing)
+  const previewMode = Boolean(
+    !isOwner && (billing?.previewMode || (billing && !toolsUnlocked))
+  )
   const trialExpired =
     billing?.status === "expired" || billing?.trialEligible === false
   const unlockCta = trialExpired
     ? "Subscribe"
     : `Start ${BILLING_TRIAL_DAYS}-day trial`
   const entitlementLabel = formatEntitlementStatusLabel(billing)
-  const planLine = toolsUnlocked
-    ? `${PLAN_NAME} · ${entitlementLabel}`
-    : entitlementLabel
+  const planLine = isOwner
+    ? FOUNDER_OWNER_LABEL
+    : toolsUnlocked
+      ? `${PLAN_NAME} · ${entitlementLabel}`
+      : entitlementLabel
 
   useEffect(() => {
     if (!user) return
@@ -251,11 +261,22 @@ export function DashboardOverview() {
               {displayName}
             </p>
             <p className="mt-1 text-sm text-muted-foreground">
-              {planLine}
-              {" · "}
-              {billing?.listingCreditsUsed ?? 0}/
-              {billing?.listingCreditsAllowance ?? MONTHLY_LISTING_CREDITS}{" "}
-              credits used
+              {isOwner ? (
+                <>
+                  {planLine}
+                  <span className="mt-0.5 block text-xs">
+                    {LIFETIME_FOUNDER_ACCESS}
+                  </span>
+                </>
+              ) : (
+                <>
+                  {planLine}
+                  {" · "}
+                  {billing?.listingCreditsUsed ?? 0}/
+                  {billing?.listingCreditsAllowance ?? MONTHLY_LISTING_CREDITS}{" "}
+                  credits used
+                </>
+              )}
             </p>
           </div>
           <Link
@@ -265,7 +286,7 @@ export function DashboardOverview() {
               "self-start sm:self-auto"
             )}
           >
-            Manage billing
+            {isOwner ? "View access" : "Manage billing"}
           </Link>
         </div>
       </section>

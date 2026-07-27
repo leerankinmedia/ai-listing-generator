@@ -11,6 +11,11 @@ import {
   PLAN_NAME,
   PLAN_FEATURES,
 } from "@/lib/billing/config"
+import {
+  FOUNDER_OWNER_LABEL,
+  LIFETIME_FOUNDER_ACCESS,
+  isOwnerBillingStatus,
+} from "@/lib/billing/owner"
 
 function formatDate(value: string | null) {
   if (!value) return "—"
@@ -36,6 +41,8 @@ function statusLabel(status: string, explicit?: string) {
       return "Trial expired"
     case "admin":
       return "Admin override"
+    case "owner":
+      return FOUNDER_OWNER_LABEL
     case "past_due":
       return "Past due"
     case "canceled":
@@ -179,6 +186,43 @@ export function BillingPanel() {
         <Button variant="outline" size="sm" onClick={() => void refresh()}>
           <RefreshCw />
           Retry
+        </Button>
+      </div>
+    )
+  }
+
+  if (isOwnerBillingStatus(status)) {
+    return (
+      <div className="space-y-6">
+        <div className="rounded-2xl border border-accent/30 bg-accent/10 px-5 py-6 sm:px-6">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Membership
+          </p>
+          <h2 className="mt-2 font-display text-2xl font-semibold tracking-tight">
+            {LIFETIME_FOUNDER_ACCESS}
+          </h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {FOUNDER_OWNER_LABEL} — permanent full access with no subscription,
+            trial, pricing, or credit limits.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-xl border border-border bg-card/70 px-4 py-3">
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              Plan
+            </p>
+            <p className="mt-1 text-sm font-semibold">{FOUNDER_OWNER_LABEL}</p>
+          </div>
+          <div className="rounded-xl border border-border bg-card/70 px-4 py-3">
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              Status
+            </p>
+            <p className="mt-1 text-sm font-semibold">{LIFETIME_FOUNDER_ACCESS}</p>
+          </div>
+        </div>
+        <Button variant="ghost" size="sm" onClick={() => void refresh()}>
+          <RefreshCw />
+          Refresh
         </Button>
       </div>
     )

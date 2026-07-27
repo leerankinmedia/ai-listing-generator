@@ -14,6 +14,11 @@ import {
   PLAN_FEATURES,
   PLAN_NAME,
 } from "@/lib/billing/config"
+import {
+  FOUNDER_OWNER_LABEL,
+  LIFETIME_FOUNDER_ACCESS,
+  isOwnerBillingStatus,
+} from "@/lib/billing/owner"
 import { cn } from "@/lib/utils"
 
 function PricingInner() {
@@ -71,6 +76,25 @@ function PricingInner() {
             </Link>
           </div>
         </div>
+      </div>
+    )
+  }
+
+  if (isOwnerBillingStatus(status)) {
+    return (
+      <div className="space-y-4 text-center">
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
+          {LIFETIME_FOUNDER_ACCESS}
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          {FOUNDER_OWNER_LABEL} — no pricing, trial, or subscription required.
+        </p>
+        <Link
+          href="/dashboard"
+          className={cn(buttonVariants({ variant: "accent" }))}
+        >
+          Go to dashboard
+        </Link>
       </div>
     )
   }

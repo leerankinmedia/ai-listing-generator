@@ -37,6 +37,9 @@ type ImportPageResponse = {
   processed?: number
   imported?: number
   skipped?: number
+  detailFull?: number
+  detailPartial?: number
+  detailError?: number
   errors?: number
   failed?: number
   failures?: Array<{ ebayListingId: string; error: string }>
@@ -127,6 +130,9 @@ export function InventoryPage() {
     let failed = 0
     let skipped = 0
     let scanned = 0
+    let detailFull = 0
+    let detailPartial = 0
+    let detailError = 0
     let activeListingsFound = 0
     let source = ""
     let sample: Array<{ ebayListingId: string; title: string }> = []
@@ -150,6 +156,9 @@ export function InventoryPage() {
         failed += data.failed || 0
         skipped += data.skipped || 0
         scanned += data.scanned || 0
+        detailFull += data.detailFull || 0
+        detailPartial += data.detailPartial || 0
+        detailError += data.detailError || 0
         if (typeof data.activeListingsFound === "number") {
           activeListingsFound = Math.max(
             activeListingsFound,
@@ -181,7 +190,7 @@ export function InventoryPage() {
         setProgressLabel(
           data.done
             ? data.message || "Import complete."
-            : `Scanning via ${data.source || "eBay"}… found ${activeListingsFound || scanned} · saved ${created + updated}`
+            : `Importing full details via ${data.source || "eBay"}… ${activeListingsFound || scanned} found · saved ${created + updated} · full ${detailFull} · partial ${detailPartial} · errors ${detailError}`
         )
 
         done = Boolean(data.done)
@@ -197,7 +206,7 @@ export function InventoryPage() {
             .join("; ")}.`
         : ""
       setNotice(
-        `Imported from eBay (${source || "unknown"}): activeFound=${activeListingsFound}, imported=${created + updated} (${created} new, ${updated} updated), skipped=${skipped}${
+        `Imported from eBay (${source || "unknown"}): activeFound=${activeListingsFound}, imported=${created + updated} (${created} new, ${updated} updated), fullDetail=${detailFull}, partial=${detailPartial}, detailErrors=${detailError}, skipped=${skipped}${
           failed ? `, failed=${failed}` : ""
         }.${sampleText}`
       )

@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto"
-import type { Listing, ListingImage, ListingStatus } from "@/lib/types"
+import type {
+  ItemCondition,
+  Listing,
+  ListingImage,
+  ListingSpecifics,
+  ListingStatus,
+} from "@/lib/types"
 
 export type EbayOfferRaw = {
   offerId?: string
@@ -38,6 +44,12 @@ export type EbayInventoryItemRaw = {
   }
 }
 
+export type EbayImportDetailStatus =
+  | "full"
+  | "partial"
+  | "summary_only"
+  | "error"
+
 export type EbayImportedOffer = {
   offerId: string
   sku: string
@@ -48,14 +60,28 @@ export type EbayImportedOffer = {
   currency: string
   quantity: number
   categoryId: string
+  categoryName?: string
+  categoryPath?: string
   imageUrls: string[]
   brand?: string
   condition?: string
+  conditionId?: string
+  conditionDescription?: string
   listingStatus: string
   offerStatus: string
+  listingFormat?: string
+  startTime?: string
+  endTime?: string
+  shippingType?: string
+  shippingCost?: string
+  shippingService?: string
+  /** Raw eBay item specifics (Name → Value). */
+  itemSpecifics?: Record<string, string>
+  detailStatus?: EbayImportDetailStatus
+  detailError?: string
 }
 
-export const EBAY_IMPORT_PAGE_SIZE = 25
+export const EBAY_IMPORT_PAGE_SIZE = 20
 
 /** Deterministic ListWise listing id for an eBay listing (stable re-imports). */
 export function listingIdForEbayImport(
@@ -148,6 +174,189 @@ export function buildImportGetOffersPath(
   return path
 }
 
+function specificValue(
+  specifics: Record<string, string> | undefined,
+  ...names: string[]
+): string | undefined {
+  if (!specifics) return undefined
+  for (const name of names) {
+    const direct = specifics[name]?.trim()
+    if (direct) return direct
+  }
+  const lowerNames = names.map((n) => n.toLowerCase())
+  for (const [key, value] of Object.entries(specifics)) {
+    if (lowerNames.includes(key.toLowerCase()) && value.trim()) {
+      return value.trim()
+    }
+  }
+  return undefined
+}
+
+/** Map eBay condition display / inventory enums onto ListWise condition labels. */
+export function mapEbayConditionToListWise(
+  condition?: string,
+  conditionId?: string
+): ItemCondition | string | undefined {
+  const raw = (condition || "").trim()
+  const id = (conditionId || "").trim()
+  const lower = raw.toLowerCase()
+
+  if (
+    id === "1000" ||
+    /\bnew with tags\b/i.test(raw) ||
+    /^new$/i.test(raw)
+  ) {
+    return "New with tags"
+  }
+  if (
+    id === "1500" ||
+    id === "1750" ||
+    /new without tags|new \(other\)|new other|new with defects/i.test(lower)
+  ) {
+    return "New without tags"
+  }
+  if (
+    id === "2000" ||
+    id === "2500" ||
+    id === "2750" ||
+    /like new|excellent|refurbished/i.test(lower)
+  ) {
+    return "Excellent"
+  }
+  if (id === "3000" || id === "4000" || /very good|\bgood\b/i.test(lower)) {
+    return "Good"
+  }
+  if (id === "5000" || id === "6000" || /acceptable|\bfair\b/i.test(lower)) {
+    return "Fair"
+  }
+  if (/poor|for parts/i.test(lower)) {
+    return "Poor"
+  }
+  if (raw) return raw
+  if (id) return `eBay condition ${id}`
+  return undefined
+}
+
+const TOP_LEVEL_SPECIFIC_KEYS = new Set([
+  "brand",
+  "size",
+  "color",
+  "colour",
+  "material",
+  "style",
+  "pattern",
+  "gender",
+])
+
+function extrasKey(name: string): string {
+  const cleaned = name
+    .trim()
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+  return cleaned || "aspect"
+}
+
+/** Map imported eBay payload (including GetItem specifics) into ListWise specifics. */
+export function mapEbayImportSpecifics(
+  imported: EbayImportedOffer
+): ListingSpecifics {
+  const itemSpecifics = imported.itemSpecifics || {}
+  const brand =
+    imported.brand ||
+    specificValue(itemSpecifics, "Brand", "Manufacturer", "Make")
+  const size = specificValue(
+    itemSpecifics,
+    "Size",
+    "Size Type",
+    "Waist Size",
+    "Shoe Size"
+  )
+  const color = specificValue(itemSpecifics, "Color", "Colour", "Main Color")
+  const material = specificValue(
+    itemSpecifics,
+    "Material",
+    "Fabric Type",
+    "Fabric"
+  )
+  const style = specificValue(itemSpecifics, "Style", "Dress Style")
+  const pattern = specificValue(itemSpecifics, "Pattern", "Print")
+  const gender = specificValue(itemSpecifics, "Gender")
+
+  const categoryLabel =
+    imported.categoryPath?.trim() ||
+    imported.categoryName?.trim() ||
+    (imported.categoryId ? `eBay category ${imported.categoryId}` : undefined)
+
+  const condition = mapEbayConditionToListWise(
+    imported.condition,
+    imported.conditionId
+  )
+  const flaws = imported.conditionDescription?.trim() || undefined
+
+  const extras: Record<string, string> = {
+    // ListWise inventory key (always Inventory-API-safe when generated).
+    sku: isEbayInventoryApiSku(imported.sku)
+      ? imported.sku.trim()
+      : listWiseImportKey(imported.ebayListingId, imported.offerId),
+    quantity: String(Math.max(0, imported.quantity)),
+    // Preserve the seller's original eBay SKU even when it is API-invalid.
+    ebaySku: imported.sku,
+    ebayOriginalSku: imported.sku,
+    ebayQuantity: String(Math.max(0, imported.quantity)),
+    ebayListingId: imported.ebayListingId,
+    ebayOfferId: imported.offerId,
+    ebayCategoryId: imported.categoryId || "",
+    source: "ebay_import",
+  }
+
+  if (imported.categoryName) extras.ebayCategoryName = imported.categoryName
+  if (imported.categoryPath) extras.ebayCategoryPath = imported.categoryPath
+  if (imported.conditionId) extras.ebayConditionId = imported.conditionId
+  if (imported.condition) extras.ebayConditionDisplay = imported.condition
+  if (imported.conditionDescription) {
+    extras.ebayConditionDescription = imported.conditionDescription
+  }
+  if (imported.listingFormat) extras.ebayListingFormat = imported.listingFormat
+  if (imported.startTime) extras.ebayStartTime = imported.startTime
+  if (imported.endTime) extras.ebayEndTime = imported.endTime
+  if (imported.shippingType) extras.ebayShippingType = imported.shippingType
+  if (imported.shippingCost) extras.ebayShippingCost = imported.shippingCost
+  if (imported.shippingService) {
+    extras.ebayShippingService = imported.shippingService
+  }
+  if (imported.detailStatus) extras.ebayImportDetailStatus = imported.detailStatus
+
+  for (const [name, value] of Object.entries(itemSpecifics)) {
+    const trimmed = value.trim()
+    if (!trimmed) continue
+    if (TOP_LEVEL_SPECIFIC_KEYS.has(name.toLowerCase())) continue
+    const key = extrasKey(name)
+    if (!extras[key]) extras[key] = trimmed
+    // Preserve original eBay aspect name for round-trip clarity.
+    extras[`ebayAspect_${extrasKey(name)}`] = trimmed
+  }
+
+  // Common apparel extras explicitly requested.
+  const department = specificValue(itemSpecifics, "Department")
+  const type = specificValue(itemSpecifics, "Type", "Item Type")
+  if (department) extras.department = department
+  if (type) extras.type = type
+
+  return {
+    brand: brand || undefined,
+    size: size || undefined,
+    color: color || undefined,
+    material: material || undefined,
+    style: style || undefined,
+    pattern: pattern || undefined,
+    gender: gender || undefined,
+    condition,
+    category: categoryLabel,
+    flaws,
+    extras,
+  }
+}
+
 export function mapEbayImportToListing(input: {
   userId: string
   imported: EbayImportedOffer
@@ -172,6 +381,8 @@ export function mapEbayImportToListing(input: {
       ? "listed"
       : "ready"
 
+  const specifics = mapEbayImportSpecifics(imported)
+
   return {
     id: listingIdForEbayImport(userId, imported.ebayListingId),
     userId,
@@ -183,28 +394,7 @@ export function mapEbayImportToListing(input: {
     price: Number.isFinite(imported.price) ? imported.price : 0,
     currency: imported.currency || "USD",
     keywords: [],
-    specifics: {
-      brand: imported.brand,
-      condition: imported.condition,
-      category: imported.categoryId
-        ? `eBay category ${imported.categoryId}`
-        : undefined,
-      extras: {
-        // ListWise inventory key (always Inventory-API-safe when generated).
-        sku: isEbayInventoryApiSku(imported.sku)
-          ? imported.sku.trim()
-          : listWiseImportKey(imported.ebayListingId, imported.offerId),
-        quantity: String(Math.max(0, imported.quantity)),
-        // Preserve the seller's original eBay SKU even when it is API-invalid.
-        ebaySku: imported.sku,
-        ebayOriginalSku: imported.sku,
-        ebayQuantity: String(Math.max(0, imported.quantity)),
-        ebayListingId: imported.ebayListingId,
-        ebayOfferId: imported.offerId,
-        ebayCategoryId: imported.categoryId,
-        source: "ebay_import",
-      },
-    },
+    specifics,
     fieldConfidence: {},
     images,
     status,
@@ -222,7 +412,10 @@ export function mapEbayImportToListing(input: {
     aiGenerated: false,
     analysisMeta: {
       imagesAnalyzed: images.length,
-      model: "ebay_import",
+      model:
+        imported.detailStatus === "full" || imported.detailStatus === "partial"
+          ? "ebay_import_getitem"
+          : "ebay_import",
       analyzedAt: now,
     },
     createdAt: now,

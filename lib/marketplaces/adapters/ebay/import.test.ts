@@ -63,27 +63,63 @@ describe("eBay inventory import mapping", () => {
         currency: "USD",
         quantity: 3,
         categoryId: "15724",
-        imageUrls: ["https://i.ebayimg.com/images/g/abc/s-l1600.jpg"],
+        categoryName: "T-Shirts",
+        imageUrls: [
+          "https://i.ebayimg.com/images/g/abc/s-l1600.jpg",
+          "https://i.ebayimg.com/images/g/def/s-l1600.jpg",
+        ],
         brand: "Nike",
-        condition: "USED_EXCELLENT",
+        condition: "Used",
+        conditionId: "3000",
+        conditionDescription: "Light wear",
         listingStatus: "ACTIVE",
         offerStatus: "PUBLISHED",
+        listingFormat: "FixedPriceItem",
+        startTime: "2026-01-01T00:00:00.000Z",
+        shippingType: "Flat",
+        shippingCost: "5.99",
+        itemSpecifics: {
+          Brand: "Nike",
+          Size: "M",
+          Color: "Red",
+          Material: "Cotton",
+          Style: "Crew Neck",
+          Pattern: "Solid",
+          Gender: "Men",
+          Department: "Men",
+          Type: "T-Shirt",
+        },
+        detailStatus: "full",
       },
     })
 
     assert.equal(listing.title, "Vintage Red Tee")
+    assert.equal(listing.description, "Soft cotton tee")
     assert.equal(listing.price, 24.5)
     assert.equal(listing.currency, "USD")
     assert.equal(listing.status, "listed")
     assert.equal(listing.specifics.brand, "Nike")
-    assert.equal(listing.specifics.category, "eBay category 15724")
+    assert.equal(listing.specifics.size, "M")
+    assert.equal(listing.specifics.color, "Red")
+    assert.equal(listing.specifics.material, "Cotton")
+    assert.equal(listing.specifics.style, "Crew Neck")
+    assert.equal(listing.specifics.pattern, "Solid")
+    assert.equal(listing.specifics.gender, "Men")
+    assert.equal(listing.specifics.condition, "Good")
+    assert.equal(listing.specifics.flaws, "Light wear")
+    assert.equal(listing.specifics.category, "T-Shirts")
     assert.equal(listing.specifics.extras?.sku, "SKUREDTEE")
     assert.equal(listing.specifics.extras?.ebaySku, "SKUREDTEE")
     assert.equal(listing.specifics.extras?.quantity, "3")
+    assert.equal(listing.specifics.extras?.department, "Men")
+    assert.equal(listing.specifics.extras?.type, "T-Shirt")
+    assert.equal(listing.specifics.extras?.ebayListingFormat, "FixedPriceItem")
+    assert.equal(listing.specifics.extras?.ebayShippingCost, "5.99")
     assert.equal(listing.marketplaceListings[0]?.marketplaceId, "ebay")
     assert.equal(listing.marketplaceListings[0]?.externalId, "999888777666")
-    assert.equal(listing.images.length, 1)
+    assert.equal(listing.images.length, 2)
     assert.equal(listing.images[0]?.isPrimary, true)
+    assert.equal(listing.images[1]?.sortOrder, 1)
     assert.equal(listing.aiGenerated, false)
     assert.deepEqual(listing.targetMarketplaces, ["ebay"])
   })

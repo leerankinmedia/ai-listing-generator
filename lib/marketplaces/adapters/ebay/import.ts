@@ -13,7 +13,10 @@ import {
   type EbayInventoryItemRaw,
   type EbayOfferRaw,
 } from "@/lib/marketplaces/adapters/ebay/import-map"
-import { fetchTradingActiveListPage } from "@/lib/marketplaces/adapters/ebay/trading"
+import {
+  enrichImportedOffersWithGetItem,
+  fetchTradingActiveListPage,
+} from "@/lib/marketplaces/adapters/ebay/trading"
 
 export {
   EBAY_IMPORT_PAGE_SIZE,
@@ -168,6 +171,12 @@ function offerToImported(
     )
   }
 
+  const itemSpecifics: Record<string, string> = {}
+  for (const [name, values] of Object.entries(item?.product?.aspects || {})) {
+    const joined = (values || []).map((v) => String(v).trim()).filter(Boolean)
+    if (joined.length) itemSpecifics[name] = joined.join(", ")
+  }
+
   return {
     offerId,
     sku: sellerSku || listWiseImportKey(ebayListingId, offerId),
@@ -183,6 +192,9 @@ function offerToImported(
     condition: item?.condition,
     listingStatus: offer.listing?.listingStatus || "ACTIVE",
     offerStatus: offer.status || "PUBLISHED",
+    listingFormat: offer.format,
+    itemSpecifics,
+    detailStatus: "summary_only",
   }
 }
 
@@ -268,6 +280,12 @@ export async function hydrateImportedInventoryItems(
       const quantity =
         item.availability?.shipToLocationAvailability?.quantity ?? 1
 
+      const itemSpecifics: Record<string, string> = {}
+      for (const [name, values] of Object.entries(item.product?.aspects || {})) {
+        const joined = (values || []).map((v) => String(v).trim()).filter(Boolean)
+        if (joined.length) itemSpecifics[name] = joined.join(", ")
+      }
+
       imported.push({
         offerId: internalKey,
         sku: sellerSku || internalKey,
@@ -283,6 +301,8 @@ export async function hydrateImportedInventoryItems(
         condition: item.condition,
         listingStatus: "ACTIVE",
         offerStatus: "PUBLISHED",
+        itemSpecifics,
+        detailStatus: "partial",
       })
     } catch (error) {
       errors.push(
@@ -320,6 +340,50 @@ export type EbayImportPageResult = {
     | "trading_active_list"
   apiCalls: EbayImportApiCallLog[]
   sample: Array<{ ebayListingId: string; title: string }>
+  detailFull: number
+  detailPartial: number
+  detailError: number
+}
+
+async function finalizeImportedPage(
+  accessToken: string,
+  base: Omit<
+    EbayImportPageResult,
+    "detailFull" | "detailPartial" | "detailError" | "imported" | "sample"
+  > & { imported: EbayImportedOffer[] }
+): Promise<EbayImportPageResult> {
+  const enrich = await enrichImportedOffersWithGetItem(
+    accessToken,
+    base.imported
+  )
+  for (const call of enrich.apiCalls) {
+    base.apiCalls.push({
+      api: "Trading",
+      step: "importGetItem",
+      pathOrCall: `GetItem/${call.itemId || ""}`,
+      httpStatus: call.httpStatus,
+      resultCount: call.error ? 0 : 1,
+      note: call.error
+        ? `GetItem failed: ${call.error}`
+        : `GetItem ack=${call.ack}`,
+    })
+  }
+  if (enrich.detailError > 0) {
+    base.warnings.push(
+      `${enrich.detailError} listing(s) saved with summary data only after GetItem errors.`
+    )
+  }
+  return {
+    ...base,
+    imported: enrich.imported,
+    detailFull: enrich.detailFull,
+    detailPartial: enrich.detailPartial,
+    detailError: enrich.detailError,
+    sample: enrich.imported.slice(0, 5).map((row) => ({
+      ebayListingId: row.ebayListingId,
+      title: row.title,
+    })),
+  }
 }
 
 /** Fetch one page and hydrate. Falls back Inventory → Trading when empty. */
@@ -408,7 +472,7 @@ export async function importEbayOffersPage(
           ? nextOffset >= totalOffers
           : offers.length < pageSize
 
-      return {
+      return finalizeImportedPage(accessToken, {
         offset: safeOffset,
         nextOffset,
         done,
@@ -423,11 +487,7 @@ export async function importEbayOffersPage(
         errors: hydrated.errors,
         source: "sell_inventory_offers",
         apiCalls,
-        sample: hydrated.imported.slice(0, 5).map((row) => ({
-          ebayListingId: row.ebayListingId,
-          title: row.title,
-        })),
-      }
+      })
     }
 
     warnings.push(
@@ -471,7 +531,9 @@ export async function importEbayOffersPage(
       const nextOffset = safeOffset + items.length
       const done =
         invTotal !== null ? nextOffset >= invTotal : items.length < pageSize
-      return {
+      // inventory_item rows lack numeric ItemIDs — GetItem enrichment is skipped
+      // inside enrichImportedOffersWithGetItem and counted as partial.
+      return finalizeImportedPage(accessToken, {
         offset: safeOffset,
         nextOffset,
         done,
@@ -490,11 +552,7 @@ export async function importEbayOffersPage(
         errors: hydrated.errors,
         source: "sell_inventory_items",
         apiCalls,
-        sample: hydrated.imported.slice(0, 5).map((row) => ({
-          ebayListingId: row.ebayListingId,
-          title: row.title,
-        })),
-      }
+      })
     }
 
     warnings.push("Sell Inventory inventory_item list returned 0 items.")
@@ -539,7 +597,7 @@ export async function importEbayOffersPage(
       nextOffset >= tradingPage.totalEntries ||
       imported.length < pageSize
 
-    return {
+    return finalizeImportedPage(accessToken, {
       offset: safeOffset,
       nextOffset,
       done,
@@ -552,16 +610,12 @@ export async function importEbayOffersPage(
       skipped: [],
       warnings: [
         ...warnings,
-        "Sell Inventory returned 0; imported via Trading API GetMyeBaySelling ActiveList.",
+        "Sell Inventory returned 0; imported via Trading API GetMyeBaySelling ActiveList + GetItem.",
       ],
       errors: [],
       source: "trading_active_list",
       apiCalls,
-      sample: imported.slice(0, 5).map((row) => ({
-        ebayListingId: row.ebayListingId,
-        title: row.title,
-      })),
-    }
+    })
   } catch (tradingErr) {
     const message =
       tradingErr instanceof Error ? tradingErr.message : "Trading API failed"

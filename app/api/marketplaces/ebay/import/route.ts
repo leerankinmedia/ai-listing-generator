@@ -23,8 +23,9 @@ type ImportBody = {
 
 /**
  * Paginated eBay Inventory import.
- * Imports one page of active/published offers into ListWise listings each call.
+ * Imports one page of active listings, then enriches each via Trading GetItem.
  * Client loops with nextOffset until done=true for progress UI.
+ * Re-imports upsert by deterministic eBay listing ID (no duplicates).
  */
 export async function POST(request: Request) {
   try {
@@ -135,7 +136,11 @@ export async function POST(request: Request) {
 
     const processed = created + updated
     const skipped = page.skipped?.length ?? 0
-    const errorCount = failures.length + (page.errors?.length ?? 0)
+    const detailFull = page.detailFull ?? 0
+    const detailPartial = page.detailPartial ?? 0
+    const detailError = page.detailError ?? 0
+    const errorCount =
+      failures.length + (page.errors?.length ?? 0) + detailError
     const totalOffers = page.totalOffers
     const activeListingsFound = page.activeListingsFound ?? processed
     const progressPercent =
@@ -152,18 +157,21 @@ export async function POST(request: Request) {
 
     console.info("[ebay/import] page summary", {
       source: page.source,
-      apiCalls: page.apiCalls,
+      apiCalls: page.apiCalls?.length,
       activeListingsFound,
       imported: processed,
       created,
       updated,
       skipped,
       failed: failures.length,
+      detailFull,
+      detailPartial,
+      detailError,
       sample,
     })
 
     return NextResponse.json({
-      ok: failures.length === 0,
+      ok: failures.length === 0 && detailError === 0,
       done: page.done,
       offset: page.offset,
       nextOffset: page.nextOffset,
@@ -178,6 +186,9 @@ export async function POST(request: Request) {
       processed,
       imported: processed,
       skipped,
+      detailFull,
+      detailPartial,
+      detailError,
       errors: errorCount,
       failed: failures.length,
       failures,
@@ -188,8 +199,8 @@ export async function POST(request: Request) {
       apiCalls: page.apiCalls,
       sample,
       message: page.done
-        ? `Import complete via ${page.source}. Active found ${activeListingsFound}. ${created} new, ${updated} updated, ${skipped} skipped, ${failures.length} failed.`
-        : `Page via ${page.source}: activeFound=${activeListingsFound}, imported=${processed}, skipped=${skipped}.`,
+        ? `Import complete via ${page.source}. Active found ${activeListingsFound}. ${created} new, ${updated} updated. Full detail ${detailFull}, partial ${detailPartial}, detail errors ${detailError}, save failures ${failures.length}.`
+        : `Page via ${page.source}: activeFound=${activeListingsFound}, imported=${processed}, full=${detailFull}, partial=${detailPartial}, detailErrors=${detailError}.`,
     })
   } catch (error) {
     console.error("[ebay/import] failed", error)

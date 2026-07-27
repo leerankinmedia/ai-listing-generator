@@ -126,6 +126,28 @@ export function listWiseImportKey(
   return key || `LW${Date.now()}`.slice(0, 50)
 }
 
+/**
+ * Build the getOffers LIST url for import. Must never include sku= —
+ * eBay returns errorId 25707 when an invalid seller SKU is passed as sku.
+ */
+export function buildImportGetOffersPath(
+  offset: number,
+  limit: number,
+  marketplaceId = process.env.EBAY_MARKETPLACE_ID?.trim() || "EBAY_US"
+): string {
+  const safeLimit = Math.min(50, Math.max(1, Math.floor(limit)))
+  const safeOffset = Math.max(0, Math.floor(offset))
+  const path =
+    `/sell/inventory/v1/offer` +
+    `?limit=${encodeURIComponent(String(safeLimit))}` +
+    `&offset=${encodeURIComponent(String(safeOffset))}` +
+    `&marketplace_ids=${encodeURIComponent(marketplaceId)}`
+  if (/[?&]sku=/i.test(path)) {
+    throw new Error("BUG: import getOffers path must not include sku=")
+  }
+  return path
+}
+
 export function mapEbayImportToListing(input: {
   userId: string
   imported: EbayImportedOffer

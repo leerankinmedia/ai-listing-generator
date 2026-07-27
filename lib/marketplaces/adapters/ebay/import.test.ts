@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
+  buildImportGetOffersPath,
   isActivePublishedOffer,
   isEbayInventoryApiSku,
   listWiseImportKey,
@@ -19,6 +20,15 @@ describe("eBay inventory import mapping", () => {
       a,
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
     )
+  })
+
+  it("import getOffers path never includes sku=", () => {
+    const path = buildImportGetOffersPath(0, 25, "EBAY_US")
+    assert.equal(/[?&]sku=/i.test(path), false)
+    assert.match(path, /\/sell\/inventory\/v1\/offer\?/)
+    assert.match(path, /limit=25/)
+    assert.match(path, /offset=0/)
+    assert.match(path, /marketplace_ids=EBAY_US/)
   })
 
   it("only allows strictly alphanumeric Inventory API SKUs ≤50 chars", () => {

@@ -29,6 +29,7 @@ export interface BillingStatusPayload {
   enforcement: boolean
   testControlsEnabled: boolean
   stripeConfigured: boolean
+  authenticatedUser?: { id: string; email: string | null }
   planName: string
   priceLabel: string
   trialDays: number

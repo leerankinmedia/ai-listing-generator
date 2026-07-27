@@ -51,6 +51,11 @@ export async function GET() {
       enforcement: isBillingEnforcementEnabled(),
       testControlsEnabled: isBillingTestControlsEnabled(),
       stripeConfigured: isStripeBillingConfigured(),
+      // Same getServerAuthUser() identity OAuth start must use.
+      authenticatedUser: {
+        id: user.id,
+        email: user.email ?? null,
+      },
       planName: PLAN_NAME,
       priceLabel: getMembershipPriceLabel(),
       trialDays: BILLING_TRIAL_DAYS,

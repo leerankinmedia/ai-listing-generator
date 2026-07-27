@@ -14,10 +14,8 @@ import {
 } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { PasswordInput } from "@/components/auth/password-input"
-import { useAuth } from "@/components/auth/auth-provider"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import type { MarketplaceId } from "@/lib/types"
-import { createClient } from "@/lib/supabase/client"
 import { cn } from "@/lib/utils"
 
 type AdapterStatus = "live" | "requires_credentials" | "coming_soon"
@@ -50,7 +48,6 @@ interface StatusPayload {
 
 export function MarketplaceConnectionsPanel() {
   const searchParams = useSearchParams()
-  const { user: authUser } = useAuth()
   const [status, setStatus] = useState<StatusPayload | null>(null)
   const [connections, setConnections] = useState<PublicConnection[]>([])
   const [loading, setLoading] = useState(true)
@@ -154,79 +151,125 @@ export function MarketplaceConnectionsPanel() {
   }
 
   /**
-   * OAuth start is a full document navigation — only cookies are sent.
-   * Rebuild auth cookies from the current session tokens via /api/auth/session
-   * before navigating so a stale prior-account cookie cannot win.
+   * Use the same fetch()/cookie jar as Billing (`/api/billing/status`).
+   * Do NOT top-level navigate to oauth/start first — that path was reading a
+   * different session than the Billing XHR on some clients.
+   * Only navigate after we receive eBay's authorize Location.
    */
   async function startOAuth(marketplaceId: MarketplaceId) {
     setBusyId(marketplaceId)
     setError(null)
     try {
-      const supabase = createClient({ fresh: true })
-      const { data: sessionData, error: sessionError } =
-        await supabase.auth.getSession()
-      if (sessionError) throw sessionError
-      let session = sessionData.session
-      if (!session) {
-        throw new Error("Sign in required to connect a marketplace.")
-      }
-
-      // If React auth UI is a different user than the cookie session, refuse
-      // to continue with the stale cookie — force a clean re-login.
-      if (
-        authUser?.id &&
-        session.user?.id &&
-        authUser.id !== session.user.id
-      ) {
-        throw new Error(
-          `Session cookie is still ${session.user.email || session.user.id}, but the app is signed in as ${authUser.email}. Sign out, then sign in again as ${authUser.email}.`
-        )
-      }
-
-      const { data: refreshed, error: refreshError } =
-        await supabase.auth.refreshSession()
-      if (!refreshError && refreshed.session) {
-        session = refreshed.session
-      }
-
-      const persistRes = await fetch("/api/auth/session", {
-        method: "POST",
-        credentials: "same-origin",
+      // Prove we share Billing's session before starting OAuth.
+      const billingRes = await fetch("/api/billing/status", {
+        method: "GET",
         cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          access_token: session.access_token,
-          refresh_token: session.refresh_token,
-        }),
+        credentials: "same-origin",
+        headers: { "Cache-Control": "no-store" },
       })
-      const persistJson = (await persistRes.json()) as {
-        ok?: boolean
+      const billingJson = (await billingRes.json()) as {
         error?: string
-        user?: { id: string; email: string | null }
+        ownerOverride?: boolean
+        status?: string
+        authenticatedUser?: { id: string; email: string | null }
       }
-      if (!persistRes.ok || !persistJson.ok) {
-        throw new Error(
-          persistJson.error || "Could not rebuild auth session cookies."
-        )
+      if (!billingRes.ok) {
+        throw new Error(billingJson.error || "Billing auth failed.")
+      }
+
+      const oauthPath = `/api/marketplaces/${marketplaceId}/oauth/start`
+      const res = await fetch(oauthPath, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "same-origin",
+        redirect: "manual",
+        headers: { "Cache-Control": "no-store" },
+      })
+
+      if (res.status === 401 || res.status === 402 || res.status === 503) {
+        const data = (await res.json()) as { error?: string; code?: string }
+        throw new Error(data.error || data.code || `OAuth start failed (${res.status})`)
       }
 
       if (
-        authUser?.email &&
-        persistJson.user?.email &&
-        authUser.email.toLowerCase() !== persistJson.user.email.toLowerCase()
+        res.status === 301 ||
+        res.status === 302 ||
+        res.status === 303 ||
+        res.status === 307 ||
+        res.status === 308
       ) {
+        const loc = res.headers.get("Location")
+        if (!loc) {
+          throw new Error("OAuth start returned a redirect without Location.")
+        }
+        window.location.assign(loc)
+        return
+      }
+
+      // Unexpected JSON (e.g. debug left on) — surface it.
+      if (res.status === 200) {
+        const data = (await res.json()) as {
+          error?: string
+          authenticatedEmail?: string | null
+          nextAction?: string
+        }
         throw new Error(
-          `Auth cookie rebuilt for ${persistJson.user.email}, but the app UI is ${authUser.email}. Sign out completely and sign in as ${authUser.email}.`
+          data.error ||
+            `OAuth start returned JSON instead of redirect (email=${data.authenticatedEmail}, next=${data.nextAction}).`
         )
       }
 
-      window.location.assign(
-        `/api/marketplaces/${marketplaceId}/oauth/start`
-      )
+      throw new Error(`OAuth start failed (HTTP ${res.status}).`)
     } catch (err) {
       setBusyId(null)
       setError(
         err instanceof Error ? err.message : "Could not start OAuth connect."
+      )
+    }
+  }
+
+  /** Same-cookie-jar comparison Billing vs OAuth (for Android / no DevTools). */
+  async function compareBillingAndOAuthSession() {
+    setError(null)
+    setNotice(null)
+    try {
+      const [billingRes, oauthRes] = await Promise.all([
+        fetch("/api/billing/status", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { "Cache-Control": "no-store" },
+        }),
+        fetch("/api/marketplaces/ebay/oauth/start?debug=1", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { "Cache-Control": "no-store" },
+        }),
+      ])
+      const billingJson = await billingRes.json()
+      const oauthJson = await oauthRes.json()
+      setNotice(
+        JSON.stringify(
+          {
+            billingAuthenticatedUser: billingJson.authenticatedUser ?? null,
+            billingOwnerOverride: billingJson.ownerOverride ?? null,
+            billingStatus: billingJson.status ?? null,
+            oauthAuthenticatedEmail: oauthJson.authenticatedEmail ?? null,
+            oauthAuthenticatedUserId: oauthJson.authenticatedUserId ?? null,
+            oauthIsOwner: oauthJson.isOwner ?? null,
+            oauthAuthSource: oauthJson.authSource ?? null,
+            sessionsMatch:
+              (billingJson.authenticatedUser?.email || null) ===
+              (oauthJson.authenticatedEmail || null),
+          },
+          null,
+          2
+        )
+      )
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Session compare failed."
       )
     }
   }
@@ -260,9 +303,22 @@ export function MarketplaceConnectionsPanel() {
       {notice && (
         <div className="flex items-start gap-2 rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-sm">
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
-          <span>{notice}</span>
+          <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs">
+            {notice}
+          </pre>
         </div>
       )}
+
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => void compareBillingAndOAuthSession()}
+        >
+          Compare Billing vs OAuth session
+        </Button>
+      </div>
 
       {error && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive" role="alert">

@@ -12,22 +12,12 @@ import {
   toCanonicalProductionUrl,
 } from "@/lib/app-url"
 import { getEntitlement } from "@/lib/billing/entitlement"
-import {
-  collectAuthUserEmails,
-  explainOwnerEmailMatch,
-  isListWiseOwnerEmail,
-  isOwnerUserId,
-} from "@/lib/billing/owner"
-import { resolveIsPermanentOwnerDetailed } from "@/lib/billing/owner-resolve"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import {
   attachOAuthStateCookie,
   createOAuthState,
 } from "@/lib/marketplaces/oauth-state"
-import {
-  createServiceRoleClient,
-  getServerAuthUser,
-} from "@/lib/supabase/index"
+import { getServerAuthUser } from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -38,6 +28,10 @@ const OAUTH_START_VERSION = "verify-hdr-1"
 /** Exact function that can emit trial_expired for Connect with OAuth. */
 const TRIAL_EXPIRED_FN =
   "app/api/marketplaces/ebay/oauth/start/route.ts:GET"
+
+/** Same auth retrieval as /api/billing/status — do not diverge. */
+const BILLING_AUTH_SOURCE =
+  "getServerAuthUser() + getEntitlement(user.id, { email: user.email, authUser: user })"
 
 function requestHost(request: NextRequest): string {
   const forwarded = request.headers.get("x-forwarded-host")
@@ -71,54 +65,11 @@ function isDebugRequest(request: NextRequest): boolean {
 }
 
 /**
- * Last-resort Owner email resolution for this route only.
- * Unions session + Auth Admin + profiles emails before any trial deny.
- */
-async function collectOwnerEmailsForUser(user: {
-  id: string
-  email?: string | null
-  new_email?: string | null
-  user_metadata?: Record<string, unknown> | null
-  identities?: Array<{
-    identity_data?: Record<string, unknown> | null
-    email?: string | null
-  }> | null
-}): Promise<string[]> {
-  const emails = new Set(collectAuthUserEmails(user))
-  const admin = createServiceRoleClient()
-  if (!admin) return [...emails]
-
-  try {
-    const { data } = await admin.auth.admin.getUserById(user.id)
-    for (const email of collectAuthUserEmails(data?.user)) {
-      emails.add(email)
-    }
-  } catch {
-    // continue
-  }
-
-  try {
-    const { data } = await admin
-      .from("profiles")
-      .select("email")
-      .eq("id", user.id)
-      .maybeSingle()
-    if (typeof data?.email === "string" && data.email.includes("@")) {
-      emails.add(data.email.normalize("NFKC").trim().toLowerCase())
-    }
-  } catch {
-    // ignore
-  }
-
-  return [...emails]
-}
-
-/**
  * eBay Connect with OAuth — /api/marketplaces/ebay/oauth/start
  *
- * Temporary: ?debug=1 returns JSON diagnostics instead of redirect/deny.
- * trial_expired is emitted only from GET below when Owner resolution fails and
- * getEntitlement().status === "expired".
+ * Authentication MUST match /api/billing/status exactly:
+ *   const user = await getServerAuthUser()
+ *   const entitlement = await getEntitlement(user.id, { email: user.email, authUser: user })
  */
 export async function GET(request: NextRequest) {
   const debug = isDebugRequest(request)
@@ -128,7 +79,6 @@ export async function GET(request: NextRequest) {
 
     // Bounce off temporary deployment hosts so the state cookie is set on the
     // canonical production host (must match RuName Auth Accepted URL).
-    // Preserve search (including ?debug=1).
     if (
       !isLocalAppHost(host) &&
       !isCanonicalProductionHost(host) &&
@@ -149,26 +99,22 @@ export async function GET(request: NextRequest) {
       return redirect
     }
 
+    // ——— identical to app/api/billing/status/route.ts ———
     const user = await getServerAuthUser()
     if (!user?.id) {
       if (debug) {
         return noStoreJson(
           {
             temporaryDebug: true,
-            route: TRIAL_EXPIRED_FN,
+            authSource: BILLING_AUTH_SOURCE,
+            matchesBillingStatusRoute: true,
             authenticated: false,
             isOwner: false,
+            authenticatedUserId: null,
             authenticatedEmail: null,
             entitlementStatus: null,
-            deniedByFunction: null,
             nextAction: "return unauthorized",
-            responseHeaders: {
-              "X-ListWise-OAuth-Version": OAUTH_START_VERSION,
-              "X-ListWise-Deny-Fn": null,
-              "X-ListWise-Deciding-Field": null,
-            },
             code: "unauthorized",
-            error: "Sign in required to connect a marketplace.",
           },
           200
         )
@@ -182,24 +128,15 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const owner = await resolveIsPermanentOwnerDetailed(user)
-    const allEmails = await collectOwnerEmailsForUser(user)
-    const emailIsOwner = allEmails.some((email) => isListWiseOwnerEmail(email))
-    const primaryEmail = user.email || allEmails[0] || null
     const entitlement = await getEntitlement(user.id, {
-      email: primaryEmail,
-      authUser: {
-        ...user,
-        email: primaryEmail,
-      },
+      email: user.email,
+      authUser: user,
     })
+    // ——— end identical billing auth block ———
 
+    // Same Owner recognition Billing uses for Founder UI.
     const isOwner =
-      isOwnerUserId(user.id) ||
-      owner.isOwner ||
-      emailIsOwner ||
-      entitlement.ownerOverride === true ||
-      entitlement.status === "owner"
+      entitlement.ownerOverride === true || entitlement.status === "owner"
 
     const wouldDenyAccess = !isOwner && !entitlement.allowed
     const denyCode = wouldDenyAccess
@@ -217,69 +154,37 @@ export async function GET(request: NextRequest) {
           ? "return ebay_not_configured"
           : "redirect to eBay"
 
-    const denyFn = wouldDenyAccess ? TRIAL_EXPIRED_FN : null
-    const decidingField = wouldDenyAccess
-      ? entitlement.debug.decidingField
-      : null
-
     if (debug) {
-      const emailMatch = explainOwnerEmailMatch(allEmails)
       return noStoreJson(
         {
           temporaryDebug: true,
           route: TRIAL_EXPIRED_FN,
+          authSource: BILLING_AUTH_SOURCE,
+          matchesBillingStatusRoute: true,
           authenticated: true,
           isOwner,
-          authenticatedEmail: primaryEmail,
-          collectedEmails: allEmails,
-          ownerIdentification: {
-            method:
-              "email whitelist (leerankinmedia@gmail.com) + optional LISTWISE_OWNER_USER_IDS; not a pre-created UUID",
-            ownerWhitelist: emailMatch.ownerWhitelist,
-            hardcodedOwnerEmail: "leerankinmedia@gmail.com",
-            userId: user.id,
-            sessionEmail: owner.sessionEmail,
-            authAdminEmail: owner.authAdminEmail,
-            profileEmail: owner.profileEmail,
-            ownerVia: owner.via,
-            ownerUserIdsFromEnv: owner.ownerUserIdsFromEnv,
-            ownerUserIdsResolvedFromEmail: owner.ownerUserIdsResolvedFromEmail,
-            ownerEmailMatch: emailMatch.matched,
-            ownerMatchedEmail: emailMatch.matchedEmail,
-            whyIsOwnerFalse: isOwner ? null : owner.whyFalse || emailMatch.mismatchReason,
-          },
+          authenticatedUserId: user.id,
+          authenticatedEmail: user.email ?? null,
           entitlementStatus: entitlement.status,
           entitlementAllowed: entitlement.allowed,
+          ownerOverride: entitlement.ownerOverride,
           entitlementDecidingField: entitlement.debug.decidingField,
-          deniedByFunction: denyFn,
+          deniedByFunction: wouldDenyAccess ? TRIAL_EXPIRED_FN : null,
           nextAction,
+          wouldReturnCode: denyCode,
           responseHeaders: {
             "X-ListWise-OAuth-Version": OAUTH_START_VERSION,
-            "X-ListWise-Deny-Fn": denyFn,
-            "X-ListWise-Deciding-Field": decidingField,
+            "X-ListWise-Deny-Fn": wouldDenyAccess ? TRIAL_EXPIRED_FN : null,
+            "X-ListWise-Deciding-Field": wouldDenyAccess
+              ? entitlement.debug.decidingField
+              : null,
           },
-          wouldReturnCode: denyCode,
         },
-        200,
-        wouldDenyAccess
-          ? {
-              "X-ListWise-Deny-Fn": TRIAL_EXPIRED_FN,
-              "X-ListWise-Is-Owner": "false",
-              "X-ListWise-Entitlement": entitlement.status,
-              "X-ListWise-Owner-Via": owner.via,
-              "X-ListWise-Has-Email": allEmails.length > 0 ? "1" : "0",
-              "X-ListWise-Deciding-Field": entitlement.debug.decidingField,
-            }
-          : {
-              "X-ListWise-Is-Owner": isOwner ? "true" : "false",
-              "X-ListWise-Owner-Via": owner.via,
-              "X-ListWise-Deciding-Field": entitlement.debug.decidingField,
-            }
+        200
       )
     }
 
     if (wouldDenyAccess) {
-      // Exact trial_expired emitter for Connect with OAuth.
       return noStoreJson(
         {
           error:
@@ -293,8 +198,6 @@ export async function GET(request: NextRequest) {
           "X-ListWise-Deny-Fn": TRIAL_EXPIRED_FN,
           "X-ListWise-Is-Owner": "false",
           "X-ListWise-Entitlement": entitlement.status,
-          "X-ListWise-Owner-Via": owner.via,
-          "X-ListWise-Has-Email": allEmails.length > 0 ? "1" : "0",
           "X-ListWise-Deciding-Field": entitlement.debug.decidingField,
         }
       )
@@ -327,7 +230,6 @@ export async function GET(request: NextRequest) {
     for (const [key, value] of Object.entries(
       withOAuthVersionHeaders({
         "X-ListWise-Is-Owner": isOwner ? "true" : "false",
-        "X-ListWise-Owner-Via": owner.via,
       })
     )) {
       response.headers.set(key, value)
@@ -352,7 +254,8 @@ export async function GET(request: NextRequest) {
       scope_exact: locScope ? locScope[1] : null,
       state_present: Boolean(loc.searchParams.get("state")),
       ownerBypass: isOwner,
-      ownerVia: owner.via,
+      authUserId: user.id,
+      authEmail: user.email ?? null,
       oauthVersion: OAUTH_START_VERSION,
     })
 
@@ -362,17 +265,7 @@ export async function GET(request: NextRequest) {
       return noStoreJson(
         {
           temporaryDebug: true,
-          route: TRIAL_EXPIRED_FN,
-          isOwner: false,
-          authenticatedEmail: null,
-          entitlementStatus: null,
-          deniedByFunction: null,
-          nextAction: "return error",
-          responseHeaders: {
-            "X-ListWise-OAuth-Version": OAUTH_START_VERSION,
-            "X-ListWise-Deny-Fn": null,
-            "X-ListWise-Deciding-Field": null,
-          },
+          authSource: BILLING_AUTH_SOURCE,
           error:
             error instanceof Error
               ? error.message

@@ -12,16 +12,31 @@ import {
   toCanonicalProductionUrl,
 } from "@/lib/app-url"
 import { getEntitlement } from "@/lib/billing/entitlement"
+import {
+  collectAuthUserEmails,
+  isListWiseOwnerEmail,
+  isOwnerUserId,
+} from "@/lib/billing/owner"
 import { resolveIsPermanentOwnerDetailed } from "@/lib/billing/owner-resolve"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import {
   attachOAuthStateCookie,
   createOAuthState,
 } from "@/lib/marketplaces/oauth-state"
-import { getServerAuthUser } from "@/lib/supabase/index"
+import {
+  createServiceRoleClient,
+  getServerAuthUser,
+} from "@/lib/supabase/index"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
+
+/** Temporary — confirm Connect hits this route handler. Remove after verification. */
+const OAUTH_START_VERSION = "verify-hdr-1"
+
+/** Exact function that can emit trial_expired for Connect with OAuth. */
+const TRIAL_EXPIRED_FN =
+  "app/api/marketplaces/ebay/oauth/start/route.ts:GET"
 
 function requestHost(request: NextRequest): string {
   const forwarded = request.headers.get("x-forwarded-host")
@@ -29,24 +44,75 @@ function requestHost(request: NextRequest): string {
   return request.headers.get("host") || request.nextUrl.host
 }
 
+function withOAuthVersionHeaders(
+  headers: Record<string, string> = {}
+): Record<string, string> {
+  return {
+    "Cache-Control": "private, no-store, max-age=0, must-revalidate",
+    "X-ListWise-OAuth-Version": OAUTH_START_VERSION,
+    ...headers,
+  }
+}
+
 function noStoreJson(
   body: Record<string, unknown>,
-  status: number
+  status: number,
+  extraHeaders: Record<string, string> = {}
 ): NextResponse {
   return NextResponse.json(body, {
     status,
-    headers: {
-      "Cache-Control": "private, no-store, max-age=0, must-revalidate",
-    },
+    headers: withOAuthVersionHeaders(extraHeaders),
   })
+}
+
+/**
+ * Last-resort Owner email resolution for this route only.
+ * Unions session + Auth Admin + profiles emails before any trial deny.
+ */
+async function collectOwnerEmailsForUser(user: {
+  id: string
+  email?: string | null
+  new_email?: string | null
+  user_metadata?: Record<string, unknown> | null
+  identities?: Array<{
+    identity_data?: Record<string, unknown> | null
+    email?: string | null
+  }> | null
+}): Promise<string[]> {
+  const emails = new Set(collectAuthUserEmails(user))
+  const admin = createServiceRoleClient()
+  if (!admin) return [...emails]
+
+  try {
+    const { data } = await admin.auth.admin.getUserById(user.id)
+    for (const email of collectAuthUserEmails(data?.user)) {
+      emails.add(email)
+    }
+  } catch {
+    // continue
+  }
+
+  try {
+    const { data } = await admin
+      .from("profiles")
+      .select("email")
+      .eq("id", user.id)
+      .maybeSingle()
+    if (typeof data?.email === "string" && data.email.includes("@")) {
+      emails.add(data.email.normalize("NFKC").trim().toLowerCase())
+    }
+  } catch {
+    // ignore
+  }
+
+  return [...emails]
 }
 
 /**
  * eBay Connect with OAuth — /api/marketplaces/ebay/oauth/start
  *
- * trial_expired is returned ONLY from this GET handler (below) when the user
- * is not the permanent Owner and getEntitlement().status === "expired".
- * Owner is resolved before that deny so Founder accounts never hit it.
+ * trial_expired is emitted only from GET below when Owner resolution fails and
+ * getEntitlement().status === "expired".
  */
 export async function GET(request: NextRequest) {
   try {
@@ -54,7 +120,6 @@ export async function GET(request: NextRequest) {
 
     // Bounce off temporary deployment hosts so the state cookie is set on the
     // canonical production host (must match RuName Auth Accepted URL).
-    // Preserve search explicitly; never use cacheable 308.
     if (
       !isLocalAppHost(host) &&
       !isCanonicalProductionHost(host) &&
@@ -68,10 +133,11 @@ export async function GET(request: NextRequest) {
         from: host,
         toHost: PRODUCTION_HOST,
         to,
-        queryPreserved: to.includes(originalSearch || "") || !originalSearch,
         redirected: true,
       })
-      return NextResponse.redirect(to, 307)
+      const redirect = NextResponse.redirect(to, 307)
+      redirect.headers.set("X-ListWise-OAuth-Version", OAUTH_START_VERSION)
+      return redirect
     }
 
     const user = await getServerAuthUser()
@@ -85,21 +151,28 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Owner first — never fall through to trial_expired for Founder.
     const owner = await resolveIsPermanentOwnerDetailed(user)
+    const allEmails = await collectOwnerEmailsForUser(user)
+    const emailIsOwner = allEmails.some((email) => isListWiseOwnerEmail(email))
     const entitlement = await getEntitlement(user.id, {
-      email: user.email,
-      authUser: user,
+      email: user.email || allEmails[0] || null,
+      authUser: {
+        ...user,
+        email: user.email || allEmails[0] || null,
+      },
     })
+
     const isOwner =
+      isOwnerUserId(user.id) ||
       owner.isOwner ||
+      emailIsOwner ||
       entitlement.ownerOverride === true ||
       entitlement.status === "owner"
 
-    if (!isOwner && !entitlement.allowed) {
-      // Exact trial_expired emitter for Connect with OAuth:
-      // file: app/api/marketplaces/ebay/oauth/start/route.ts
-      // function: GET
+    if (isOwner) {
+      // Fall through to authorize URL — never trial_expired for Owner.
+    } else if (!entitlement.allowed) {
+      // Exact trial_expired emitter for Connect with OAuth.
       return noStoreJson(
         {
           error:
@@ -111,7 +184,15 @@ export async function GET(request: NextRequest) {
               ? "trial_expired"
               : "subscription_required",
         },
-        402
+        402,
+        {
+          "X-ListWise-Deny-Fn": TRIAL_EXPIRED_FN,
+          "X-ListWise-Is-Owner": "false",
+          "X-ListWise-Entitlement": entitlement.status,
+          "X-ListWise-Owner-Via": owner.via,
+          "X-ListWise-Has-Email": allEmails.length > 0 ? "1" : "0",
+          "X-ListWise-Deciding-Field": entitlement.debug.decidingField,
+        }
       )
     }
 
@@ -135,16 +216,18 @@ export async function GET(request: NextRequest) {
     }
 
     const { urlState, cookieValue } = createOAuthState("ebay")
-    // Official ebay-oauth-nodejs-client builder (+ start checks logged inside).
     const authorizeUrl = buildEbayAuthorizeUrl(urlState)
 
-    // Set Location manually so Next validateURL()/URL() cannot alter encoding.
     const response = new NextResponse(null, { status: 302 })
     response.headers.set("Location", authorizeUrl)
-    response.headers.set(
-      "Cache-Control",
-      "private, no-store, max-age=0, must-revalidate"
-    )
+    for (const [key, value] of Object.entries(
+      withOAuthVersionHeaders({
+        "X-ListWise-Is-Owner": isOwner ? "true" : "false",
+        "X-ListWise-Owner-Via": owner.via,
+      })
+    )) {
+      response.headers.set(key, value)
+    }
     attachOAuthStateCookie(response, cookieValue)
 
     const location = response.headers.get("Location") || ""
@@ -155,7 +238,6 @@ export async function GET(request: NextRequest) {
     const clientIdRedacted =
       clientId.length <= 6 ? `***${clientId}` : `***${clientId.slice(-6)}`
     console.info("[ebay/oauth] Location header consent URL (client_id redacted)", {
-      purpose: "confirm browser redirect matches generated authorize URL",
       completeAuthorizeUrlRedacted: location.replace(
         `client_id=${clientId}`,
         `client_id=${clientIdRedacted}`
@@ -165,11 +247,9 @@ export async function GET(request: NextRequest) {
       response_type: loc.searchParams.get("response_type"),
       scope_exact: locScope ? locScope[1] : null,
       state_present: Boolean(loc.searchParams.get("state")),
-      state_length: loc.searchParams.get("state")?.length ?? 0,
-      param_names: Array.from(loc.searchParams.keys()),
-      locationMatchesAuthorize: location === authorizeUrl,
       ownerBypass: isOwner,
       ownerVia: owner.via,
+      oauthVersion: OAUTH_START_VERSION,
     })
 
     return response

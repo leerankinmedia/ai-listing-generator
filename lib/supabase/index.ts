@@ -1,4 +1,5 @@
 import { createClient as createSupabaseJsClient } from "@supabase/supabase-js"
+import type { User } from "@supabase/supabase-js"
 import { createClient as createBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client"
 import { createClient as createServerClient } from "@/lib/supabase/server"
 
@@ -27,11 +28,44 @@ export function createServiceRoleClient() {
   })
 }
 
+function mergeAuthUsers(sessionUser: User, adminUser: User): User {
+  const sessionMeta = sessionUser.user_metadata || {}
+  const adminMeta = adminUser.user_metadata || {}
+  const sessionIdentities = sessionUser.identities || []
+  const adminIdentities = adminUser.identities || []
+
+  return {
+    ...sessionUser,
+    email: sessionUser.email || adminUser.email || undefined,
+    new_email:
+      (sessionUser as { new_email?: string | null }).new_email ||
+      (adminUser as { new_email?: string | null }).new_email ||
+      undefined,
+    user_metadata: {
+      ...adminMeta,
+      ...sessionMeta,
+      email:
+        sessionMeta.email ||
+        adminMeta.email ||
+        sessionUser.email ||
+        adminUser.email,
+    },
+    app_metadata: {
+      ...(adminUser.app_metadata || {}),
+      ...(sessionUser.app_metadata || {}),
+    },
+    // Prefer the richer identity list so Owner email can resolve from either side.
+    identities:
+      adminIdentities.length >= sessionIdentities.length
+        ? adminIdentities
+        : sessionIdentities,
+  } as User
+}
+
 /**
  * Authenticated user for API routes / server components.
- * When the cookie JWT omits email/identities (seen on some full-page navigations
- * like marketplace OAuth start), hydrate from Auth Admin so Owner / billing
- * checks see the same emails as /api/billing/status.
+ * Always merges Auth Admin email/identities when service role is available so
+ * Owner checks on full-page navigations (eBay OAuth start) match Billing.
  */
 export async function getServerAuthUser() {
   if (!isSupabaseConfigured()) return null
@@ -41,13 +75,6 @@ export async function getServerAuthUser() {
     if (error || !data.user) return null
 
     const sessionUser = data.user
-    const needsHydration =
-      !sessionUser.email ||
-      !sessionUser.identities ||
-      sessionUser.identities.length === 0
-
-    if (!needsHydration) return sessionUser
-
     const admin = createServiceRoleClient()
     if (!admin) return sessionUser
 
@@ -55,28 +82,7 @@ export async function getServerAuthUser() {
       const { data: adminData, error: adminError } =
         await admin.auth.admin.getUserById(sessionUser.id)
       if (adminError || !adminData?.user) return sessionUser
-
-      const adminUser = adminData.user
-      return {
-        ...sessionUser,
-        email: sessionUser.email || adminUser.email || undefined,
-        new_email:
-          (sessionUser as { new_email?: string | null }).new_email ||
-          (adminUser as { new_email?: string | null }).new_email ||
-          undefined,
-        user_metadata: {
-          ...(adminUser.user_metadata || {}),
-          ...(sessionUser.user_metadata || {}),
-        },
-        app_metadata: {
-          ...(adminUser.app_metadata || {}),
-          ...(sessionUser.app_metadata || {}),
-        },
-        identities:
-          sessionUser.identities && sessionUser.identities.length > 0
-            ? sessionUser.identities
-            : adminUser.identities,
-      }
+      return mergeAuthUsers(sessionUser, adminData.user)
     } catch {
       return sessionUser
     }

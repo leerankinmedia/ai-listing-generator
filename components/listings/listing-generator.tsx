@@ -8,7 +8,8 @@ import { ListingEditorForm } from "@/components/listings/listing-editor-form"
 import { OneClickPublishBar } from "@/components/listings/one-click-publish-bar"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/components/auth/auth-provider"
-import { dataUrlToBlob } from "@/lib/listings/images"
+import { readApiJsonResponse } from "@/lib/api/read-json-response"
+import { buildAnalyzeUploadBlobs } from "@/lib/listings/images"
 import { createEmptyListing, withImages } from "@/lib/listings/local-db"
 import {
   mapDraftToListingFields,
@@ -49,9 +50,18 @@ export function ListingGenerator() {
     )
 
     try {
+      const ordered = [...images].sort(
+        (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
+      )
+      const { blobs, totalBytes } = await buildAnalyzeUploadBlobs(
+        ordered.map((image) => image.url)
+      )
+      setProgress(
+        `Uploading ${blobs.length} photo${blobs.length === 1 ? "" : "s"} (${Math.round(totalBytes / 1024)}KB) and running Vision analysis…`
+      )
+
       const formData = new FormData()
-      for (const [index, image] of images.entries()) {
-        const blob = dataUrlToBlob(image.url)
+      for (const [index, blob] of blobs.entries()) {
         formData.append("images", blob, `photo-${index + 1}.jpg`)
       }
 
@@ -60,10 +70,18 @@ export function ListingGenerator() {
         body: formData,
         credentials: "same-origin",
       })
-      const payload = await response.json()
-      if (!response.ok) {
-        throw new Error(payload.error || "Generation failed")
+      const parsed = await readApiJsonResponse<{
+        error?: string
+        draft?: GeneratedListingOutput
+        model?: string
+        imagesAnalyzed?: number
+        usageRecorded?: boolean
+        usageRecordError?: string
+      }>(response)
+      if (!parsed.ok) {
+        throw new Error(parsed.error)
       }
+      const payload = parsed.data
       if (payload.usageRecorded === false) {
         console.warn(
           "[listing-generator] AI usage was not recorded",
@@ -77,7 +95,7 @@ export function ListingGenerator() {
 
       const mapped = mapDraftToListingFields(draft)
       const base = createEmptyListing(user.id)
-      const next = withImages(base, images, {
+      const next = withImages(base, ordered, {
         title: mapped.title,
         description: mapped.description,
         price: mapped.price,
@@ -90,7 +108,7 @@ export function ListingGenerator() {
         status: "draft",
         targetMarketplaces: ["ebay"],
         analysisMeta: {
-          imagesAnalyzed: payload.imagesAnalyzed ?? images.length,
+          imagesAnalyzed: payload.imagesAnalyzed ?? ordered.length,
           model: payload.model ?? "gpt-4o",
           analyzedAt: new Date().toISOString(),
         },

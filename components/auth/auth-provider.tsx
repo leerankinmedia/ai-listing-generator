@@ -59,6 +59,41 @@ function toAuthUserFromSupabase(user: {
   }
 }
 
+/** Server-authoritative wipe of every sb-*-auth-* cookie. */
+async function purgeServerAuthCookies(): Promise<void> {
+  await fetch("/api/auth/session", {
+    method: "DELETE",
+    credentials: "same-origin",
+    cache: "no-store",
+  })
+}
+
+/** Rebuild auth cookies from scratch via the server Set-Cookie path. */
+async function persistSessionCookies(session: {
+  access_token: string
+  refresh_token: string
+}): Promise<{ id: string; email: string | null } | null> {
+  const res = await fetch("/api/auth/session", {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      access_token: session.access_token,
+      refresh_token: session.refresh_token,
+    }),
+  })
+  const json = (await res.json()) as {
+    ok?: boolean
+    error?: string
+    user?: { id: string; email: string | null }
+  }
+  if (!res.ok || !json.ok || !json.user) {
+    throw new Error(json.error || "Could not persist auth session cookies.")
+  }
+  return json.user
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null)
   const [loading, setLoading] = useState(true)
@@ -92,9 +127,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     void init()
 
-    // Keep React auth state aligned with the cookie-backed SSR session.
-    // Without this, the UI can show user A while document cookies still have user B
-    // (full-page OAuth navigations only see cookies).
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -106,6 +138,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       mounted = false
       subscription.unsubscribe()
+    }
+  }, [demoMode])
+
+  const signOut = useCallback(async () => {
+    if (demoMode) {
+      clearDemoSession()
+      setUser(null)
+      return
+    }
+    try {
+      const supabase = createClient()
+      await supabase.auth.signOut({ scope: "global" })
+    } catch {
+      // continue wipe
+    } finally {
+      clearBrowserSupabaseAuthCookies()
+      try {
+        await purgeServerAuthCookies()
+      } catch {
+        // ignore network errors — browser cookies already cleared
+      }
+      setUser(null)
     }
   }, [demoMode])
 
@@ -126,36 +180,62 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const supabase = createClient()
-        // Drop any prior account session/cookies first (e.g. leerankin53) so the
-        // cookie jar cannot keep serving that user to /api routes after login.
-        await supabase.auth.signOut({ scope: "local" })
+        // 1) Complete logout — invalidate + wipe every prior auth cookie.
+        try {
+          const existing = createClient()
+          await existing.auth.signOut({ scope: "global" })
+        } catch {
+          // ignore
+        }
+        clearBrowserSupabaseAuthCookies()
+        await purgeServerAuthCookies()
         clearBrowserSupabaseAuthCookies()
 
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        })
+        // 2) Fresh client (no singleton memory from the previous account).
+        const supabase = createClient({ fresh: true })
+        const { data: signInData, error } = await supabase.auth.signInWithPassword(
+          {
+            email,
+            password,
+          }
+        )
         if (error) return { error: error.message }
 
-        // Re-persist the new session into cookies (source of truth for OAuth).
-        const { data: sessionData, error: sessionError } =
-          await supabase.auth.getSession()
-        if (sessionError) return { error: sessionError.message }
-        if (sessionData.session) {
-          await supabase.auth.setSession({
-            access_token: sessionData.session.access_token,
-            refresh_token: sessionData.session.refresh_token,
-          })
+        const session = signInData.session
+        if (!session?.access_token || !session.refresh_token) {
+          return {
+            error:
+              "Sign-in succeeded but no session was returned. Confirm the email, then try again.",
+          }
         }
 
+        // 3) Rebuild cookies from scratch on the server (authoritative).
+        const persisted = await persistSessionCookies({
+          access_token: session.access_token,
+          refresh_token: session.refresh_token,
+        })
+
+        // 4) Align the browser client with the same tokens.
+        await supabase.auth.setSession({
+          access_token: session.access_token,
+          refresh_token: session.refresh_token,
+        })
+
         const { data } = await supabase.auth.getUser()
-        if (data.user) {
-          setUser(toAuthUserFromSupabase(data.user))
-        }
+        const nextUser = data.user
+          ? toAuthUserFromSupabase(data.user)
+          : persisted
+            ? { id: persisted.id, email: persisted.email ?? email }
+            : null
+        if (nextUser) setUser(nextUser)
         return {}
-      } catch {
-        return { error: "Unable to sign in. Please try again." }
+      } catch (err) {
+        return {
+          error:
+            err instanceof Error
+              ? err.message
+              : "Unable to sign in. Please try again.",
+        }
       }
     },
     [demoMode]
@@ -178,57 +258,57 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const supabase = createClient()
-        await supabase.auth.signOut({ scope: "local" })
+        try {
+          const existing = createClient()
+          await existing.auth.signOut({ scope: "global" })
+        } catch {
+          // ignore
+        }
+        clearBrowserSupabaseAuthCookies()
+        await purgeServerAuthCookies()
         clearBrowserSupabaseAuthCookies()
 
-        const { error } = await supabase.auth.signUp({
+        const supabase = createClient({ fresh: true })
+        const { data: signUpData, error } = await supabase.auth.signUp({
           email: normalizedEmail,
           password,
           options: { data: { full_name: fullName } },
         })
         if (error) return { error: error.message }
 
-        const { data: sessionData } = await supabase.auth.getSession()
-        if (sessionData.session) {
-          await supabase.auth.setSession({
-            access_token: sessionData.session.access_token,
-            refresh_token: sessionData.session.refresh_token,
+        if (signUpData.session?.access_token && signUpData.session.refresh_token) {
+          const persisted = await persistSessionCookies({
+            access_token: signUpData.session.access_token,
+            refresh_token: signUpData.session.refresh_token,
           })
-        }
-
-        const { data } = await supabase.auth.getUser()
-        if (data.user) {
+          await supabase.auth.setSession({
+            access_token: signUpData.session.access_token,
+            refresh_token: signUpData.session.refresh_token,
+          })
           setUser({
-            ...toAuthUserFromSupabase(data.user),
-            email: data.user.email ?? normalizedEmail,
-            fullName:
-              (data.user.user_metadata?.full_name as string | undefined) ??
-              fullName,
+            id: persisted?.id || signUpData.user?.id || "",
+            email: persisted?.email || normalizedEmail,
+            fullName,
+          })
+        } else if (signUpData.user) {
+          setUser({
+            ...toAuthUserFromSupabase(signUpData.user),
+            email: signUpData.user.email ?? normalizedEmail,
+            fullName,
           })
         }
         return {}
-      } catch {
-        return { error: "Unable to create account. Please try again." }
+      } catch (err) {
+        return {
+          error:
+            err instanceof Error
+              ? err.message
+              : "Unable to create account. Please try again.",
+        }
       }
     },
     [demoMode]
   )
-
-  const signOut = useCallback(async () => {
-    if (demoMode) {
-      clearDemoSession()
-      setUser(null)
-      return
-    }
-    try {
-      const supabase = createClient()
-      await supabase.auth.signOut({ scope: "global" })
-    } finally {
-      clearBrowserSupabaseAuthCookies()
-      setUser(null)
-    }
-  }, [demoMode])
 
   const value = useMemo(
     () => ({ user, loading, isDemo: demoMode, signIn, signUp, signOut }),

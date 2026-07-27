@@ -14,6 +14,7 @@ import {
 } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { PasswordInput } from "@/components/auth/password-input"
+import { useAuth } from "@/components/auth/auth-provider"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import type { MarketplaceId } from "@/lib/types"
 import { createClient } from "@/lib/supabase/client"
@@ -49,6 +50,7 @@ interface StatusPayload {
 
 export function MarketplaceConnectionsPanel() {
   const searchParams = useSearchParams()
+  const { user: authUser } = useAuth()
   const [status, setStatus] = useState<StatusPayload | null>(null)
   const [connections, setConnections] = useState<PublicConnection[]>([])
   const [loading, setLoading] = useState(true)
@@ -153,29 +155,69 @@ export function MarketplaceConnectionsPanel() {
 
   /**
    * OAuth start is a full document navigation — only cookies are sent.
-   * Re-persist the in-memory Supabase session into cookies first so the API
-   * route cannot see a stale prior account (e.g. leerankin53) while the UI
-   * shows the current user (leerankinmedia).
+   * Rebuild auth cookies from the current session tokens via /api/auth/session
+   * before navigating so a stale prior-account cookie cannot win.
    */
   async function startOAuth(marketplaceId: MarketplaceId) {
     setBusyId(marketplaceId)
     setError(null)
     try {
-      const supabase = createClient()
+      const supabase = createClient({ fresh: true })
       const { data: sessionData, error: sessionError } =
         await supabase.auth.getSession()
       if (sessionError) throw sessionError
-      const session = sessionData.session
+      let session = sessionData.session
       if (!session) {
         throw new Error("Sign in required to connect a marketplace.")
       }
 
-      const { error: refreshError } = await supabase.auth.refreshSession()
-      if (refreshError) {
-        await supabase.auth.setSession({
+      // If React auth UI is a different user than the cookie session, refuse
+      // to continue with the stale cookie — force a clean re-login.
+      if (
+        authUser?.id &&
+        session.user?.id &&
+        authUser.id !== session.user.id
+      ) {
+        throw new Error(
+          `Session cookie is still ${session.user.email || session.user.id}, but the app is signed in as ${authUser.email}. Sign out, then sign in again as ${authUser.email}.`
+        )
+      }
+
+      const { data: refreshed, error: refreshError } =
+        await supabase.auth.refreshSession()
+      if (!refreshError && refreshed.session) {
+        session = refreshed.session
+      }
+
+      const persistRes = await fetch("/api/auth/session", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           access_token: session.access_token,
           refresh_token: session.refresh_token,
-        })
+        }),
+      })
+      const persistJson = (await persistRes.json()) as {
+        ok?: boolean
+        error?: string
+        user?: { id: string; email: string | null }
+      }
+      if (!persistRes.ok || !persistJson.ok) {
+        throw new Error(
+          persistJson.error || "Could not rebuild auth session cookies."
+        )
+      }
+
+      if (
+        authUser?.email &&
+        persistJson.user?.email &&
+        authUser.email.toLowerCase() !== persistJson.user.email.toLowerCase()
+      ) {
+        throw new Error(
+          `Auth cookie rebuilt for ${persistJson.user.email}, but the app UI is ${authUser.email}. Sign out completely and sign in as ${authUser.email}.`
+        )
       }
 
       window.location.assign(

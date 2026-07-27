@@ -226,6 +226,7 @@ export function MarketplaceConnectionsPanel() {
         fail(
           "Opaque redirect (HTTP 0). OAuth start must return JSON authorizeUrl for fetch clients."
         )
+        return
       }
 
       if (!res.ok) {
@@ -234,6 +235,7 @@ export function MarketplaceConnectionsPanel() {
             (body?.code as string | undefined) ||
             `OAuth start failed (HTTP ${res.status})`
         )
+        return
       }
 
       const authorizeUrl =

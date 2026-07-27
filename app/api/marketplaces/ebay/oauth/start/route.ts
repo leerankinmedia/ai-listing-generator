@@ -76,10 +76,16 @@ export async function GET(request: NextRequest) {
 
   try {
     const host = requestHost(request)
+    const secFetchMode = request.headers.get("sec-fetch-mode")
+    // Host bounce is for top-level Connect navigations only. Credentialed
+    // fetch() (Compare button / Connect via XHR) must not 307 cross-host —
+    // browsers surface that as TypeError: Failed to fetch (CORS on redirect).
+    const isCredentialedFetch =
+      secFetchMode === "cors" || secFetchMode === "same-origin"
 
-    // Bounce off temporary deployment hosts so the state cookie is set on the
-    // canonical production host (must match RuName Auth Accepted URL).
     if (
+      !debug &&
+      !isCredentialedFetch &&
       !isLocalAppHost(host) &&
       !isCanonicalProductionHost(host) &&
       isVercelDeploymentHost(host)

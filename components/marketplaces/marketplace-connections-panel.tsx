@@ -228,39 +228,128 @@ export function MarketplaceConnectionsPanel() {
     }
   }
 
+  /** Fetch helper that never swallows network/redirect failures. */
+  async function fetchJsonDetailed(url: string): Promise<{
+    url: string
+    ok: boolean
+    status: number
+    body: unknown
+    error?: string
+  }> {
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "same-origin",
+        redirect: "manual",
+        headers: { "Cache-Control": "no-store" },
+      })
+
+      if (
+        res.status >= 301 &&
+        res.status <= 308
+      ) {
+        return {
+          url,
+          ok: false,
+          status: res.status,
+          body: null,
+          error: `Unexpected redirect (${res.status}) to ${res.headers.get("Location") || "(no Location)"}`,
+        }
+      }
+
+      const text = await res.text()
+      let body: unknown = text
+      try {
+        body = text ? JSON.parse(text) : null
+      } catch {
+        body = { raw: text.slice(0, 500) }
+      }
+
+      return {
+        url,
+        ok: res.ok,
+        status: res.status,
+        body,
+      }
+    } catch (err) {
+      return {
+        url,
+        ok: false,
+        status: 0,
+        body: null,
+        error: err instanceof Error ? err.message : "Failed to fetch",
+      }
+    }
+  }
+
   /** Same-cookie-jar comparison Billing vs OAuth (for Android / no DevTools). */
   async function compareBillingAndOAuthSession() {
     setError(null)
     setNotice(null)
     try {
-      const [billingRes, oauthRes] = await Promise.all([
-        fetch("/api/billing/status", {
-          method: "GET",
-          cache: "no-store",
-          credentials: "same-origin",
-          headers: { "Cache-Control": "no-store" },
-        }),
-        fetch("/api/marketplaces/ebay/oauth/start?debug=1", {
-          method: "GET",
-          cache: "no-store",
-          credentials: "same-origin",
-          headers: { "Cache-Control": "no-store" },
-        }),
-      ])
-      const billingJson = await billingRes.json()
-      const oauthJson = await oauthRes.json()
+      // Use dedicated compare endpoint (never redirects) + billing status.
+      const billing = await fetchJsonDetailed("/api/billing/status")
+      const oauth = await fetchJsonDetailed(
+        "/api/marketplaces/ebay/oauth/session-compare"
+      )
+
+      if (!billing.ok || !oauth.ok) {
+        const failing = !billing.ok ? billing : oauth
+        const bodyObj =
+          failing.body && typeof failing.body === "object"
+            ? (failing.body as Record<string, unknown>)
+            : { raw: failing.body }
+        throw new Error(
+          JSON.stringify(
+            {
+              failingEndpoint: failing.url,
+              httpStatus: failing.status,
+              fetchError: failing.error ?? null,
+              responseBody: bodyObj,
+              serverError:
+                (bodyObj.error as string | undefined) ||
+                (bodyObj.code as string | undefined) ||
+                failing.error ||
+                null,
+              billingProbe: {
+                url: billing.url,
+                status: billing.status,
+                ok: billing.ok,
+                error: billing.error ?? null,
+              },
+              oauthProbe: {
+                url: oauth.url,
+                status: oauth.status,
+                ok: oauth.ok,
+                error: oauth.error ?? null,
+              },
+            },
+            null,
+            2
+          )
+        )
+      }
+
+      const billingJson = billing.body as Record<string, unknown>
+      const oauthJson = oauth.body as Record<string, unknown>
+      const billingUser = billingJson.authenticatedUser as
+        | { id: string; email: string | null }
+        | undefined
+
       setNotice(
         JSON.stringify(
           {
-            billingAuthenticatedUser: billingJson.authenticatedUser ?? null,
+            billingAuthenticatedUser: billingUser ?? null,
             billingOwnerOverride: billingJson.ownerOverride ?? null,
             billingStatus: billingJson.status ?? null,
             oauthAuthenticatedEmail: oauthJson.authenticatedEmail ?? null,
             oauthAuthenticatedUserId: oauthJson.authenticatedUserId ?? null,
             oauthIsOwner: oauthJson.isOwner ?? null,
             oauthAuthSource: oauthJson.authSource ?? null,
+            oauthEndpoint: oauthJson.endpoint ?? null,
             sessionsMatch:
-              (billingJson.authenticatedUser?.email || null) ===
+              (billingUser?.email || null) ===
               (oauthJson.authenticatedEmail || null),
           },
           null,

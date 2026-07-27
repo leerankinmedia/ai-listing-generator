@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { exchangeWhatnotCode } from "@/lib/marketplaces/adapters/whatnot/oauth"
 import { PRODUCTION_APP_URL } from "@/lib/app-url"
-import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
-import { resolveIsPermanentOwner } from "@/lib/billing/owner-resolve"
+import { getEntitlement } from "@/lib/billing/entitlement"
 import {
   assertCookieMatchesQueryState,
   clearOAuthStateCookie,
@@ -27,11 +26,20 @@ export async function GET(request: NextRequest) {
   if (!user?.id) {
     return redirectWith("error", "Sign in required to connect a marketplace.")
   }
-  if (!(await resolveIsPermanentOwner(user))) {
-    const gate = await checkMarketplaceConnectionAccess(user)
-    if (!gate.ok) {
-      return redirectWith("error", gate.body.error)
-    }
+
+  const entitlement = await getEntitlement(user.id, {
+    email: user.email,
+    authUser: user,
+  })
+  const isOwner =
+    entitlement.ownerOverride === true || entitlement.status === "owner"
+  if (!isOwner && !entitlement.allowed) {
+    return redirectWith(
+      "error",
+      entitlement.status === "expired"
+        ? "Your free trial has expired. Subscribe on the Billing page to continue."
+        : "Start your 7-day free trial to unlock this feature."
+    )
   }
 
   const { searchParams } = request.nextUrl

@@ -1,10 +1,6 @@
 import "server-only"
 import { getEntitlement, type Entitlement } from "@/lib/billing/entitlement"
-import { authUserHasOwnerEmail, isOwnerUserId } from "@/lib/billing/owner"
-import {
-  resolveIsPermanentOwner,
-  type OwnerResolveUser,
-} from "@/lib/billing/owner-resolve"
+import type { OwnerResolveUser } from "@/lib/billing/owner-resolve"
 
 export interface SubscriptionAccessResult {
   allowed: boolean
@@ -21,63 +17,15 @@ export interface SubscriptionAccessResult {
   entitlement: Entitlement
 }
 
-function ownerAccessResult(): SubscriptionAccessResult {
-  return {
-    allowed: true,
-    reason: "owner",
-    status: "owner",
-    subscription: null,
-    displayPeriodEnd: null,
-    entitlement: {
-      allowed: true,
-      status: "owner",
-      statusLabel: "Founder • Owner",
-      displayPeriodEnd: null,
-      trialEnd: null,
-      reason: "owner",
-      adminOverride: true,
-      ownerOverride: true,
-      stripeSubscriptionId: null,
-      subscription: null,
-      debug: {
-        rawDatabaseStatus: null,
-        trialEnd: null,
-        stripeSubscriptionIdPresent: false,
-        stripeVerifiedStatus: null,
-        finalEntitlement: "owner",
-        decidingField: "owner_email",
-        summary:
-          "Permanent Owner account — bypasses subscription before trial enforcement.",
-      },
-    },
-  }
-}
-
 /**
- * Paid-tool guard.
- * Owner is resolved before any Stripe / subscription / trial IO.
+ * Paid-tool guard — same server-side source of truth as /api/billing/status.
  */
 export async function checkSubscriptionAccess(
   userId: string | null | undefined,
   email?: string | null,
   authUser?: OwnerResolveUser | null
 ): Promise<SubscriptionAccessResult> {
-  if (userId && isOwnerUserId(userId)) {
-    return ownerAccessResult()
-  }
-  if (authUserHasOwnerEmail(authUser ?? { id: userId || "", email })) {
-    return ownerAccessResult()
-  }
-  if (userId && (await resolveIsPermanentOwner(authUser ?? { id: userId, email }))) {
-    return ownerAccessResult()
-  }
-
   const entitlement = await getEntitlement(userId, { email, authUser })
-  // Belt-and-suspenders: never surface trial_expired for an Owner entitlement.
-  if (entitlement.ownerOverride || entitlement.status === "owner") {
-    return ownerAccessResult()
-  }
-
   return {
     allowed: entitlement.allowed,
     reason: entitlement.reason,
@@ -90,8 +38,7 @@ export async function checkSubscriptionAccess(
 
 /**
  * Marketplace connect/disconnect/OAuth guard.
- * Owner bypass is fully resolved before any subscription/trial enforcement.
- * This is the only gate marketplace OAuth start routes should use.
+ * Uses the exact same getEntitlement() path as Billing so Owner bypass cannot diverge.
  */
 export async function checkMarketplaceConnectionAccess(
   user: OwnerResolveUser | null
@@ -114,52 +61,66 @@ export async function checkMarketplaceConnectionAccess(
     }
   }
 
-  // Owner first — never run trial/subscription enforcement for this account.
-  if (await resolveIsPermanentOwner(user)) {
-    console.info("[billing/access] marketplace Owner bypass", {
+  // Identical to Billing: getEntitlement(user.id, { email, authUser }).
+  const entitlement = await getEntitlement(user.id, {
+    email: user.email,
+    authUser: user,
+  })
+
+  if (entitlement.ownerOverride || entitlement.status === "owner") {
+    console.info("[billing/access] marketplace Owner bypass via getEntitlement", {
       userId: user.id,
-      owner: true,
+      decidingField: entitlement.debug.decidingField,
       hasSessionEmail: Boolean(user.email),
     })
-    return { ok: true, access: ownerAccessResult() }
+    return {
+      ok: true,
+      access: {
+        allowed: true,
+        reason: "owner",
+        status: "owner",
+        subscription: null,
+        displayPeriodEnd: null,
+        entitlement,
+      },
+    }
   }
 
-  const access = await checkSubscriptionAccess(user.id, user.email, user)
-
-  // Final Owner guard — never return subscription_required / trial_expired to Owner.
-  if (
-    access.entitlement.ownerOverride ||
-    access.status === "owner" ||
-    access.reason === "owner"
-  ) {
-    return { ok: true, access: ownerAccessResult() }
-  }
-
-  if (!access.allowed) {
+  if (!entitlement.allowed) {
     console.info("[billing/access] marketplace access denied", {
       userId: user.id,
       hasSessionEmail: Boolean(user.email),
-      status: access.status,
-      reason: access.reason,
-      decidingField: access.entitlement.debug.decidingField,
+      status: entitlement.status,
+      reason: entitlement.reason,
+      decidingField: entitlement.debug.decidingField,
     })
     return {
       ok: false,
       status: 402,
       body: {
         error:
-          access.status === "expired"
+          entitlement.status === "expired"
             ? "Your free trial has expired. Subscribe on the Billing page to continue."
             : "Start your 7-day free trial to unlock this feature.",
         code:
-          access.status === "expired"
+          entitlement.status === "expired"
             ? "trial_expired"
             : "subscription_required",
       },
     }
   }
 
-  return { ok: true, access }
+  return {
+    ok: true,
+    access: {
+      allowed: entitlement.allowed,
+      reason: entitlement.reason,
+      status: entitlement.status,
+      subscription: entitlement.subscription,
+      displayPeriodEnd: entitlement.displayPeriodEnd,
+      entitlement,
+    },
+  }
 }
 
 export async function assertSubscriptionAccess(
@@ -168,11 +129,7 @@ export async function assertSubscriptionAccess(
   authUser?: OwnerResolveUser | null
 ) {
   const result = await checkSubscriptionAccess(userId, email, authUser)
-  if (
-    result.entitlement.ownerOverride ||
-    result.status === "owner" ||
-    result.reason === "owner"
-  ) {
+  if (result.entitlement.ownerOverride || result.status === "owner") {
     return result
   }
   if (!result.allowed) {

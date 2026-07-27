@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server"
 import { splitVintedToken } from "@/lib/marketplaces/adapters/vinted/client"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
-import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
-import { resolveIsPermanentOwner } from "@/lib/billing/owner-resolve"
+import { getEntitlement } from "@/lib/billing/entitlement"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import { saveConnection } from "@/lib/marketplaces/connections/store"
 import { getServerAuthUser } from "@/lib/supabase/index"
@@ -25,11 +24,27 @@ export async function POST(request: Request) {
         { status: 401 }
       )
     }
-    if (!(await resolveIsPermanentOwner(user))) {
-      const gate = await checkMarketplaceConnectionAccess(user)
-      if (!gate.ok) {
-        return NextResponse.json(gate.body, { status: gate.status })
-      }
+
+    const entitlement = await getEntitlement(user.id, {
+      email: user.email,
+      authUser: user,
+    })
+    const isOwner =
+      entitlement.ownerOverride === true || entitlement.status === "owner"
+    if (!isOwner && !entitlement.allowed) {
+      return NextResponse.json(
+        {
+          error:
+            entitlement.status === "expired"
+              ? "Your free trial has expired. Subscribe on the Billing page to continue."
+              : "Start your 7-day free trial to unlock this feature.",
+          code:
+            entitlement.status === "expired"
+              ? "trial_expired"
+              : "subscription_required",
+        },
+        { status: 402 }
+      )
     }
 
     if (!isConnectionsCryptoConfigured()) {

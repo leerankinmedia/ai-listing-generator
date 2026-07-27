@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { exchangeEbayCode } from "@/lib/marketplaces/adapters/ebay/oauth"
 import { ebayFetch } from "@/lib/marketplaces/adapters/ebay/client"
 import { PRODUCTION_APP_URL } from "@/lib/app-url"
-import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
-import { resolveIsPermanentOwner } from "@/lib/billing/owner-resolve"
+import { getEntitlement } from "@/lib/billing/entitlement"
 import {
   assertCookieMatchesQueryState,
   clearOAuthStateCookie,
@@ -105,12 +104,21 @@ export async function handleEbayOAuthCallback(request: NextRequest) {
   if (!user?.id) {
     return redirectWith("error", "Sign in required to connect a marketplace.")
   }
-  // Owner always completes token storage — never block on trial/subscription.
-  if (!(await resolveIsPermanentOwner(user))) {
-    const gate = await checkMarketplaceConnectionAccess(user)
-    if (!gate.ok) {
-      return redirectWith("error", gate.body.error)
-    }
+
+  // Same entitlement path as Billing / OAuth start — Owner always completes connect.
+  const entitlement = await getEntitlement(user.id, {
+    email: user.email,
+    authUser: user,
+  })
+  const isOwner =
+    entitlement.ownerOverride === true || entitlement.status === "owner"
+  if (!isOwner && !entitlement.allowed) {
+    return redirectWith(
+      "error",
+      entitlement.status === "expired"
+        ? "Your free trial has expired. Subscribe on the Billing page to continue."
+        : "Start your 7-day free trial to unlock this feature."
+    )
   }
 
   const error = params.get("error")

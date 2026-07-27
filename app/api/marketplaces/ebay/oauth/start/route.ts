@@ -5,15 +5,13 @@ import {
   isEbayConfigured,
 } from "@/lib/marketplaces/adapters/ebay/oauth"
 import {
-  PRODUCTION_APP_URL,
   PRODUCTION_HOST,
   isCanonicalProductionHost,
   isLocalAppHost,
   isVercelDeploymentHost,
   toCanonicalProductionUrl,
 } from "@/lib/app-url"
-import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
-import { resolveIsPermanentOwner } from "@/lib/billing/owner-resolve"
+import { getEntitlement } from "@/lib/billing/entitlement"
 import { isConnectionsCryptoConfigured } from "@/lib/marketplaces/connections/crypto"
 import {
   attachOAuthStateCookie,
@@ -29,6 +27,10 @@ function requestHost(request: NextRequest): string {
   return request.headers.get("host") || request.nextUrl.host
 }
 
+/**
+ * eBay Connect with OAuth — /api/marketplaces/ebay/oauth/start
+ * Access gate MUST match Billing: getEntitlement(user.id, { email, authUser }).
+ */
 export async function GET(request: NextRequest) {
   try {
     const host = requestHost(request)
@@ -66,17 +68,35 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Owner must always reach the eBay authorize redirect — resolve before any
-    // subscription/trial helper that could return trial_expired.
-    const isOwner = await resolveIsPermanentOwner(user)
-    if (!isOwner) {
-      const gate = await checkMarketplaceConnectionAccess(user)
-      if (!gate.ok) {
-        return NextResponse.json(gate.body, { status: gate.status })
-      }
-    } else {
-      console.info("[ebay/oauth] Owner bypass — skipping subscription gate", {
+    // Same server-side entitlement call as /api/billing/status (Owner bypass).
+    const entitlement = await getEntitlement(user.id, {
+      email: user.email,
+      authUser: user,
+    })
+
+    const isOwner =
+      entitlement.ownerOverride === true || entitlement.status === "owner"
+
+    if (!isOwner && !entitlement.allowed) {
+      return NextResponse.json(
+        {
+          error:
+            entitlement.status === "expired"
+              ? "Your free trial has expired. Subscribe on the Billing page to continue."
+              : "Start your 7-day free trial to unlock this feature.",
+          code:
+            entitlement.status === "expired"
+              ? "trial_expired"
+              : "subscription_required",
+        },
+        { status: 402 }
+      )
+    }
+
+    if (isOwner) {
+      console.info("[ebay/oauth] Owner bypass via getEntitlement (Billing parity)", {
         userId: user.id,
+        decidingField: entitlement.debug.decidingField,
         hasSessionEmail: Boolean(user.email),
       })
     }
@@ -131,6 +151,7 @@ export async function GET(request: NextRequest) {
       state_length: loc.searchParams.get("state")?.length ?? 0,
       param_names: Array.from(loc.searchParams.keys()),
       locationMatchesAuthorize: location === authorizeUrl,
+      ownerBypass: isOwner,
     })
 
     return response

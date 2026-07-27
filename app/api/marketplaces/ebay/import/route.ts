@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server"
-import { checkMarketplaceConnectionAccess } from "@/lib/billing/access"
-import { resolveIsPermanentOwner } from "@/lib/billing/owner-resolve"
+import { getEntitlement } from "@/lib/billing/entitlement"
 import {
   EBAY_IMPORT_PAGE_SIZE,
   importEbayOffersPage,
@@ -39,11 +38,28 @@ export async function POST(request: Request) {
         { status: 401 }
       )
     }
-    if (!(await resolveIsPermanentOwner(user))) {
-      const gate = await checkMarketplaceConnectionAccess(user)
-      if (!gate.ok) {
-        return NextResponse.json(gate.body, { status: gate.status })
-      }
+
+    // Same entitlement path as Billing / eBay OAuth start.
+    const entitlement = await getEntitlement(user.id, {
+      email: user.email,
+      authUser: user,
+    })
+    const isOwner =
+      entitlement.ownerOverride === true || entitlement.status === "owner"
+    if (!isOwner && !entitlement.allowed) {
+      return NextResponse.json(
+        {
+          error:
+            entitlement.status === "expired"
+              ? "Your free trial has expired. Subscribe on the Billing page to continue."
+              : "Start your 7-day free trial to unlock this feature.",
+          code:
+            entitlement.status === "expired"
+              ? "trial_expired"
+              : "subscription_required",
+        },
+        { status: 402 }
+      )
     }
 
     if (!isSupabaseConfigured()) {

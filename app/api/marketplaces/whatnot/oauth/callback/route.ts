@@ -3,9 +3,10 @@ import { exchangeWhatnotCode } from "@/lib/marketplaces/adapters/whatnot/oauth"
 import { PRODUCTION_APP_URL } from "@/lib/app-url"
 import { getEntitlement } from "@/lib/billing/entitlement"
 import {
-  assertCookieMatchesQueryState,
   clearOAuthStateCookie,
-  consumeOAuthStateRaw,
+  readOAuthStateCookie,
+  readOAuthStateCookieFromRequest,
+  resolveAndAssertOAuthState,
 } from "@/lib/marketplaces/oauth-state"
 import { saveConnection } from "@/lib/marketplaces/connections/store"
 import { getServerAuthUser } from "@/lib/supabase/index"
@@ -56,8 +57,10 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const cookieValue = await consumeOAuthStateRaw()
-    const parsed = assertCookieMatchesQueryState(cookieValue, state, "whatnot")
+    const cookieValue =
+      readOAuthStateCookieFromRequest(request) ||
+      (await readOAuthStateCookie())
+    const parsed = resolveAndAssertOAuthState(cookieValue, state, "whatnot")
     if (!state) state = parsed.nonce
 
     const tokens = await exchangeWhatnotCode(code)

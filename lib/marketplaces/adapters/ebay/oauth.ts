@@ -277,7 +277,7 @@ export function buildEbayAuthorizeUrl(state: string) {
 }
 
 export function ebayCallbackUrl() {
-  return `${PRODUCTION_APP_URL}/api/marketplaces/ebay/oauth/callback`
+  return `${PRODUCTION_APP_URL}/api/ebay/callback`
 }
 
 export async function exchangeEbayCode(code: string) {

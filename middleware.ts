@@ -13,10 +13,21 @@ const PUBLIC_AUTH_PREFIXES = [
   "/pricing",
   "/billing",
   "/checkout",
+  "/privacy",
+  "/ebay",
 ]
 
-const EBAY_OAUTH_CALLBACK = "/api/marketplaces/ebay/oauth/callback"
+/** Production Auth Accepted URL (and legacy path kept for compatibility). */
+const EBAY_OAUTH_CALLBACKS = [
+  "/api/ebay/callback",
+  "/api/marketplaces/ebay/oauth/callback",
+] as const
+const EBAY_OAUTH_CALLBACK = EBAY_OAUTH_CALLBACKS[0]
 const EBAY_OAUTH_START = "/api/marketplaces/ebay/oauth/start"
+
+function isEbayOAuthCallbackPath(pathname: string) {
+  return (EBAY_OAUTH_CALLBACKS as readonly string[]).includes(pathname)
+}
 
 function paramNamesOf(request: NextRequest): string[] {
   return Array.from(request.nextUrl.searchParams.keys())
@@ -80,7 +91,7 @@ export async function middleware(request: NextRequest) {
   const { pathname, searchParams } = request.nextUrl
 
   // Temporary safe diagnostics for the eBay OAuth round-trip.
-  if (pathname === EBAY_OAUTH_CALLBACK || pathname === EBAY_OAUTH_START) {
+  if (isEbayOAuthCallbackPath(pathname) || pathname === EBAY_OAUTH_START) {
     logEbayOAuthEntry(request)
   }
 
@@ -125,7 +136,7 @@ export async function middleware(request: NextRequest) {
 
   // eBay OAuth callback/start: never host-canonicalize here — pass through.
   // (Host bouncing previously risked dropping ?code=&state=.)
-  if (pathname === EBAY_OAUTH_CALLBACK || pathname === EBAY_OAUTH_START) {
+  if (isEbayOAuthCallbackPath(pathname) || pathname === EBAY_OAUTH_START) {
     return updateSession(request)
   }
 

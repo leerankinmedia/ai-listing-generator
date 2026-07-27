@@ -3,7 +3,7 @@ import { handleEbayOAuthCallback } from "@/lib/marketplaces/adapters/ebay/oauth-
 
 export const runtime = "nodejs"
 
-/** Legacy eBay Auth Accepted URL — same token-storage flow as /api/ebay/callback. */
+/** Production eBay Auth Accepted URL: /api/ebay/callback */
 export async function GET(request: NextRequest) {
   return handleEbayOAuthCallback(request)
 }

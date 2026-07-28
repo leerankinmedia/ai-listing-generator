@@ -7,8 +7,6 @@ import { NullableNumberInput } from "@/components/ui/nullable-number-input"
 import {
   EBAY_HANDLING_TIME_OPTIONS,
   EBAY_SHIPPING_SERVICE_OPTIONS,
-  handlingTimeLabel,
-  shippingServiceLabel,
   shippingWhoPaysLabel,
 } from "@/lib/seller/ebay-defaults"
 import {
@@ -24,15 +22,7 @@ import {
 import type { Listing } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-type EditKey =
-  | "handling"
-  | "shipping"
-  | "package"
-  | "returns"
-  | "offers"
-  | "payment"
-  | "promoted"
-  | null
+type EditKey = "returns" | "offers" | "payment" | "promoted" | null
 
 function patchSpecifics(
   listing: Listing,
@@ -98,6 +88,10 @@ function PrefRow({
   )
 }
 
+/**
+ * Single shipping + selling preferences block for Publish.
+ * Package fields stay visible and editable — never require leaving this page.
+ */
 export function SellingPreferencesPanel({
   listing,
   onChange,
@@ -115,8 +109,10 @@ export function SellingPreferencesPanel({
     listing.specifics.shippingService ||
     listing.specifics.extras?.shippingService ||
     "USPSGroundAdvantage"
-  const pkg = listing.specifics.shippingPackage
-  const packageMissing = missingShippingPackageFields(pkg)
+  const pkg = listing.specifics.shippingPackage || blankPackage()
+  const packageMissing = missingShippingPackageFields(
+    listing.specifics.shippingPackage
+  )
   const returnsAccepted = listing.specifics.returnsAccepted !== false
   const returnWindow = listing.specifics.returnWindowDays === 60 ? 60 : 30
   const returnPayer =
@@ -128,24 +124,6 @@ export function SellingPreferencesPanel({
     listing.specifics.promotedListings === "custom"
       ? listing.specifics.promotedListings
       : "off"
-
-  const packageSummary =
-    packageMissing.length === 0 && pkg
-      ? `${pkg.weightPounds ?? 0} lb ${pkg.weightOunces ?? 0} oz · ${pkg.lengthInches}×${pkg.widthInches}×${pkg.heightInches} in`
-      : packageMissing.length > 0
-        ? `Missing: ${packageMissing.join(", ")}`
-        : "Not set"
-
-  const shippingSummary = [
-    shippingModeLabel(mode),
-    shippingServiceLabel(service),
-    shippingWhoPaysLabel(mode),
-    mode === "flat" && listing.specifics.flatShippingAmount != null
-      ? `$${listing.specifics.flatShippingAmount.toFixed(2)}`
-      : null,
-  ]
-    .filter(Boolean)
-    .join(" · ")
 
   const returnsSummary = returnsAccepted
     ? `${returnWindow} days · ${returnPayer === "BUYER" ? "Buyer" : "Seller"} pays return shipping · Money back`
@@ -172,41 +150,44 @@ export function SellingPreferencesPanel({
         ? "Dynamic ad rate"
         : `Custom ${listing.specifics.promotedListingsPercent ?? "—"}%`
 
-  return (
-    <div className="space-y-3 rounded-xl border border-border bg-secondary/20 p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold">Selling preferences</h3>
-          <p className="text-xs text-muted-foreground">
-            Applied from your defaults — edit any row for this listing only.
-          </p>
-        </div>
-        {!defaultsReady && (
-          <Link
-            href="/dashboard/selling"
-            className="shrink-0 text-xs font-medium underline underline-offset-2"
-          >
-            Set defaults
-          </Link>
-        )}
-      </div>
+  function patchPackage(partial: Partial<ShippingPackage>) {
+    const current = listing.specifics.shippingPackage || blankPackage()
+    patchSpecifics(listing, onChange, {
+      shippingPackage: {
+        ...current,
+        ...partial,
+        packageType: current.packageType || DEFAULT_EBAY_PACKAGE_TYPE,
+      },
+    })
+  }
 
+  return (
+    <div className="space-y-4">
       {!defaultsReady && (
         <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
-          Set your selling defaults once so new listings fill these automatically.
+          Set your selling defaults once so these fields fill automatically.{" "}
+          <Link href="/dashboard/selling" className="underline underline-offset-2">
+            Open Selling Preferences
+          </Link>
         </p>
       )}
 
-      <div>
-        <PrefRow
-          label="Handling time"
-          value={handlingTimeLabel(listing.specifics.handlingTimeDays ?? 1)}
-          disabled={disabled}
-          onEdit={() => setEdit(edit === "handling" ? null : "handling")}
-        />
-        {edit === "handling" && (
-          <div className="pb-3">
+      <section className="space-y-3 rounded-xl border border-border bg-secondary/20 p-3">
+        <div>
+          <h3 className="text-sm font-semibold">Shipping package</h3>
+          <p className="text-xs text-muted-foreground">
+            Auto-filled from your defaults — edit here for this listing only.
+            {packageMissing.length > 0
+              ? ` Missing: ${packageMissing.join(", ")}.`
+              : ""}
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="pref-handling">Handling time</Label>
             <select
+              id="pref-handling"
               disabled={disabled}
               value={listing.specifics.handlingTimeDays ?? 1}
               onChange={(e) =>
@@ -214,7 +195,7 @@ export function SellingPreferencesPanel({
                   handlingTimeDays: Number(e.target.value),
                 })
               }
-              className="mt-1 flex h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm"
+              className="flex h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm"
             >
               {EBAY_HANDLING_TIME_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
@@ -223,43 +204,10 @@ export function SellingPreferencesPanel({
               ))}
             </select>
           </div>
-        )}
-
-        <PrefRow
-          label="Shipping service"
-          value={shippingSummary}
-          disabled={disabled}
-          onEdit={() => setEdit(edit === "shipping" ? null : "shipping")}
-        />
-        {edit === "shipping" && (
-          <div className="space-y-3 pb-3">
-            <div className="grid gap-2 sm:grid-cols-3">
-              {(["calculated", "flat", "free"] as EbayShippingMode[]).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() =>
-                    patchSpecifics(listing, onChange, {
-                      shippingMode: m,
-                      freeShippingConfirmed:
-                        m === "free"
-                          ? Boolean(listing.specifics.freeShippingConfirmed)
-                          : false,
-                    })
-                  }
-                  className={cn(
-                    "rounded-lg border px-2 py-2 text-left text-xs",
-                    mode === m
-                      ? "border-accent/50 bg-accent/10"
-                      : "border-border bg-card"
-                  )}
-                >
-                  {shippingModeLabel(m)}
-                </button>
-              ))}
-            </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="pref-service">Shipping service</Label>
             <select
+              id="pref-service"
               disabled={disabled}
               value={service}
               onChange={(e) =>
@@ -275,88 +223,147 @@ export function SellingPreferencesPanel({
                 </option>
               ))}
             </select>
-            {mode === "flat" && (
-              <div className="space-y-2">
-                <Label>Flat amount (USD)</Label>
-                <NullableNumberInput
-                  min={0}
-                  step="0.01"
-                  disabled={disabled}
-                  value={listing.specifics.flatShippingAmount ?? null}
-                  placeholder="e.g. 5.99"
-                  onValueChange={(n) =>
-                    patchSpecifics(listing, onChange, {
-                      flatShippingAmount: n == null ? undefined : n,
-                    })
-                  }
-                />
-              </div>
-            )}
-            {mode === "free" && (
-              <label className="flex items-start gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="mt-1"
-                  disabled={disabled}
-                  checked={Boolean(listing.specifics.freeShippingConfirmed)}
-                  onChange={(e) =>
-                    patchSpecifics(listing, onChange, {
-                      freeShippingConfirmed: e.target.checked,
-                    })
-                  }
-                />
-                <span>I confirm this listing should use free shipping.</span>
-              </label>
-            )}
           </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label>Shipping type</Label>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {(["calculated", "flat", "free"] as EbayShippingMode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                disabled={disabled}
+                onClick={() =>
+                  patchSpecifics(listing, onChange, {
+                    shippingMode: m,
+                    freeShippingConfirmed:
+                      m === "free"
+                        ? Boolean(listing.specifics.freeShippingConfirmed)
+                        : false,
+                  })
+                }
+                className={cn(
+                  "rounded-lg border px-2 py-2 text-left text-xs",
+                  mode === m
+                    ? "border-accent/50 bg-accent/10"
+                    : "border-border bg-card"
+                )}
+              >
+                <span className="font-medium">{shippingModeLabel(m)}</span>
+                <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                  {shippingWhoPaysLabel(m)}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {mode === "flat" && (
+          <div className="space-y-1.5">
+            <Label>Flat amount (USD)</Label>
+            <NullableNumberInput
+              min={0}
+              step="0.01"
+              disabled={disabled}
+              value={listing.specifics.flatShippingAmount ?? null}
+              placeholder="e.g. 5.99"
+              onValueChange={(n) =>
+                patchSpecifics(listing, onChange, {
+                  flatShippingAmount: n == null ? undefined : n,
+                })
+              }
+            />
+          </div>
+        )}
+        {mode === "free" && (
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              disabled={disabled}
+              checked={Boolean(listing.specifics.freeShippingConfirmed)}
+              onChange={(e) =>
+                patchSpecifics(listing, onChange, {
+                  freeShippingConfirmed: e.target.checked,
+                })
+              }
+            />
+            <span>I confirm this listing should use free shipping.</span>
+          </label>
         )}
 
-        <PrefRow
-          label="Package weight and dimensions"
-          value={packageSummary}
-          disabled={disabled}
-          onEdit={() => setEdit(edit === "package" ? null : "package")}
-        />
-        {edit === "package" && (
-          <div className="grid gap-3 pb-3 sm:grid-cols-2">
-            {(
-              [
-                ["weightPounds", "Pounds", true],
-                ["weightOunces", "Ounces (optional)", false],
-                ["lengthInches", "Length (in)", false],
-                ["widthInches", "Width (in)", false],
-                ["heightInches", "Height (in)", false],
-              ] as const
-            ).map(([key, label, integer]) => {
-              const current = listing.specifics.shippingPackage || blankPackage()
-              return (
-                <div key={key} className="space-y-1">
-                  <Label>{label}</Label>
-                  <NullableNumberInput
-                    integer={integer}
-                    min={0}
-                    step={integer ? "1" : "0.1"}
-                    disabled={disabled}
-                    value={current[key]}
-                    placeholder=""
-                    onValueChange={(n) => {
-                      const next = {
-                        ...(listing.specifics.shippingPackage || blankPackage()),
-                        [key]: n,
-                        packageType:
-                          listing.specifics.shippingPackage?.packageType ||
-                          DEFAULT_EBAY_PACKAGE_TYPE,
-                      }
-                      patchSpecifics(listing, onChange, {
-                        shippingPackage: next,
-                      })
-                    }}
-                  />
-                </div>
-              )
-            })}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="pref-lb">Weight pounds</Label>
+            <NullableNumberInput
+              id="pref-lb"
+              integer
+              min={0}
+              disabled={disabled}
+              value={pkg.weightPounds}
+              placeholder="e.g. 1"
+              onValueChange={(n) => patchPackage({ weightPounds: n })}
+            />
           </div>
-        )}
+          <div className="space-y-1.5">
+            <Label htmlFor="pref-oz">Weight ounces</Label>
+            <NullableNumberInput
+              id="pref-oz"
+              min={0}
+              step="0.1"
+              disabled={disabled}
+              value={pkg.weightOunces}
+              placeholder="e.g. 0"
+              onValueChange={(n) => patchPackage({ weightOunces: n })}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="pref-len">Length (in)</Label>
+            <NullableNumberInput
+              id="pref-len"
+              min={0}
+              step="0.1"
+              disabled={disabled}
+              value={pkg.lengthInches}
+              placeholder="e.g. 12"
+              onValueChange={(n) => patchPackage({ lengthInches: n })}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="pref-wid">Width (in)</Label>
+            <NullableNumberInput
+              id="pref-wid"
+              min={0}
+              step="0.1"
+              disabled={disabled}
+              value={pkg.widthInches}
+              placeholder="e.g. 9"
+              onValueChange={(n) => patchPackage({ widthInches: n })}
+            />
+          </div>
+          <div className="space-y-1.5 sm:col-span-2 sm:max-w-[50%]">
+            <Label htmlFor="pref-hei">Height (in)</Label>
+            <NullableNumberInput
+              id="pref-hei"
+              min={0}
+              step="0.1"
+              disabled={disabled}
+              value={pkg.heightInches}
+              placeholder="e.g. 1"
+              onValueChange={(n) => patchPackage({ heightInches: n })}
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="space-y-1 rounded-xl border border-border bg-secondary/20 p-3">
+        <div className="mb-1">
+          <h3 className="text-sm font-semibold">Selling preferences</h3>
+          <p className="text-xs text-muted-foreground">
+            Returns, offers, payment, and promoted listings for this item.
+          </p>
+        </div>
 
         <PrefRow
           label="Returns"
@@ -604,7 +611,7 @@ export function SellingPreferencesPanel({
             )}
           </div>
         )}
-      </div>
+      </section>
     </div>
   )
 }

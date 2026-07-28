@@ -718,13 +718,22 @@ export function matchExactEbayAspectValue(
     return matched.value
   }
 
-  // Brand: fuzzy match ≥95% similarity → auto-select exact eBay brand.
+  // Brand: fuzzy match ≥95% → exact eBay brand; otherwise keep detected custom brand.
   if (name === "brand") {
     for (const candidate of candidates) {
       const brand = matchBrandToEbayList(candidate, allowed)
       if (brand.value) return brand.value
     }
-    // Fall through to synonym / exact below for free-text edge cases.
+    for (const candidate of candidates) {
+      const v = (candidate || "").trim()
+      if (
+        v &&
+        !/^(unbranded|unknown|n\/?a|none|not\s*applicable)$/i.test(v)
+      ) {
+        return v
+      }
+    }
+    return undefined
   }
 
   if (allowed.length === 0) {

@@ -6,6 +6,7 @@ import {
 } from "@/lib/seller/ebay-defaults"
 import {
   getSellerPreferences,
+  SellerPreferencesError,
   upsertSellerPreferences,
 } from "@/lib/seller/seller-preferences-repo"
 import { getServerAuthUser } from "@/lib/supabase/index"
@@ -13,29 +14,52 @@ import { getServerAuthUser } from "@/lib/supabase/index"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
+function errorResponse(err: unknown) {
+  if (err instanceof SellerPreferencesError) {
+    return NextResponse.json(
+      {
+        error: err.message,
+        code: err.code,
+      },
+      { status: err.code === "table_missing" ? 503 : 500 }
+    )
+  }
+  return NextResponse.json(
+    {
+      error:
+        err instanceof Error ? err.message : "Could not save preferences.",
+    },
+    { status: 500 }
+  )
+}
+
 export async function GET() {
   const user = await getServerAuthUser()
   if (!user) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 })
   }
 
-  const row = await getSellerPreferences(user.id)
-  if (!row) {
-    return NextResponse.json({
-      setupCompleted: false,
-      defaults: null,
-      ready: false,
-      missing: ["seller defaults not configured"],
-    })
-  }
+  try {
+    const row = await getSellerPreferences(user.id)
+    if (!row) {
+      return NextResponse.json({
+        setupCompleted: false,
+        defaults: null,
+        ready: false,
+        missing: ["seller defaults not configured"],
+      })
+    }
 
-  const missing = missingEbaySellerDefaultFields(row.defaults)
-  return NextResponse.json({
-    setupCompleted: row.setupCompleted,
-    defaults: row.defaults,
-    ready: row.setupCompleted && missing.length === 0,
-    missing,
-  })
+    const missing = missingEbaySellerDefaultFields(row.defaults)
+    return NextResponse.json({
+      setupCompleted: row.setupCompleted,
+      defaults: row.defaults,
+      ready: row.setupCompleted && missing.length === 0,
+      missing,
+    })
+  } catch (err) {
+    return errorResponse(err)
+  }
 }
 
 export async function PUT(request: Request) {
@@ -72,12 +96,6 @@ export async function PUT(request: Request) {
       missing: missingEbaySellerDefaultFields(saved.defaults),
     })
   } catch (err) {
-    return NextResponse.json(
-      {
-        error:
-          err instanceof Error ? err.message : "Could not save preferences.",
-      },
-      { status: 500 }
-    )
+    return errorResponse(err)
   }
 }

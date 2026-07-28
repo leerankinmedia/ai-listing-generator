@@ -4,9 +4,11 @@ import {
   autoFillHighConfidenceAspects,
   classifyAspectField,
   formatAiEmployeeBanner,
+  resolveBrandAspectValue,
   resolveMustFillAspectValue,
   splitAspectFieldsForDisplay,
   summarizeAiEmployeeAspects,
+  validateAspectsAgainstOptions,
   type EbayAspectFormField,
 } from "@/lib/listings/ebay-aspect-fields"
 import {
@@ -75,6 +77,36 @@ describe("brand fuzzy matching", () => {
     ])
     assert.equal(hit.value, "Levi's")
     assert.ok(hit.score >= 0.95)
+  })
+
+  it("keeps custom brands like VEES when not in the eBay list", () => {
+    const brands = ["Nike", "Levi's", "Adidas", "Unbranded"]
+    assert.equal(resolveBrandAspectValue("VEES", brands), "VEES")
+    assert.equal(resolveBrandAspectValue("vees", brands), "vees")
+    assert.equal(resolveBrandAspectValue("Unbranded", brands), "")
+  })
+
+  it("auto-fills VEES and does not clear it during validation", () => {
+    const listing = baseListing({
+      specifics: { brand: "VEES" },
+      fieldConfidence: {
+        brand: { value: "VEES", confidence: 0.98 },
+      },
+    })
+    const fields: EbayAspectFormField[] = [
+      {
+        name: "Brand",
+        required: true,
+        allowedValues: ["Nike", "Levi's", "Unbranded"],
+      },
+    ]
+    const filled = autoFillHighConfidenceAspects(listing, fields)
+    assert.equal(filled.specifics.brand, "VEES")
+    assert.equal(filled.specifics.extras?.Brand, "VEES")
+    const validated = validateAspectsAgainstOptions(filled, fields)
+    assert.equal(validated.listing.specifics.brand, "VEES")
+    assert.deepEqual(validated.missingRequired, [])
+    assert.deepEqual(validated.cleared, [])
   })
 })
 

@@ -37,16 +37,25 @@ function computeMissing(
       if (!f.required) return false
       const raw = readAspectValue(listing, f.name)
       const options = f.allowedValues || []
-      const value =
-        options.length > 0
-          ? resolveSelectValue(
-              f.name,
-              raw,
-              options,
-              f.suggestedValue || f.value
-            )
-          : raw
-      return !value.trim()
+      if (options.length > 0) {
+        const value = resolveSelectValue(
+          f.name,
+          raw,
+          options,
+          f.suggestedValue || f.value
+        )
+        if (value.trim()) return false
+        // Brand may already hold a custom value not in the dropdown list.
+        if (
+          f.name.trim().toLowerCase() === "brand" &&
+          raw.trim() &&
+          !/^(unbranded|unknown|n\/?a)$/i.test(raw.trim())
+        ) {
+          return false
+        }
+        return true
+      }
+      return !raw.trim()
     })
     .map((f) => f.name)
 }
@@ -91,6 +100,8 @@ function AspectFieldEditor({
   const { field } = view
   const options = field.allowedValues || []
   const value = view.value
+  const isBrand = field.name.trim().toLowerCase() === "brand"
+  const brandListId = `ebay-brand-options-${field.name.replace(/\s+/g, "-")}`
 
   return (
     <div className="space-y-1.5">
@@ -98,7 +109,31 @@ function AspectFieldEditor({
         <Label htmlFor={`ebay-form-aspect-${field.name}`}>{field.name}</Label>
         <StatusBadge status={view.status} />
       </div>
-      {options.length > 0 ? (
+      {isBrand ? (
+        <>
+          <Input
+            id={`ebay-form-aspect-${field.name}`}
+            list={options.length > 0 ? brandListId : undefined}
+            value={value}
+            disabled={disabled}
+            placeholder="Brand from tag (custom values allowed)"
+            onChange={(e) =>
+              onChange(writeAspectValue(listing, field.name, e.target.value))
+            }
+          />
+          {options.length > 0 && (
+            <datalist id={brandListId}>
+              {options.map((opt) => (
+                <option key={opt} value={opt} />
+              ))}
+            </datalist>
+          )}
+          <p className="text-[11px] text-muted-foreground">
+            Type the brand from the tag. If it is not in eBay’s list, the custom
+            value is used.
+          </p>
+        </>
+      ) : options.length > 0 ? (
         <select
           id={`ebay-form-aspect-${field.name}`}
           value={value}
@@ -183,8 +218,9 @@ function AiEmployeeBanner({ summary }: { summary: AiEmployeeAspectSummary }) {
       <div>
         <p className="text-sm font-medium text-foreground">{text}</p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          Brand, Style, and Size Type auto-select when AI can match eBay options.
-          Size Type defaults to Regular.
+          Brand auto-fills from the tag — including custom brands not in eBay’s
+          list. Style and Size Type match when possible; Size Type defaults to
+          Regular.
         </p>
       </div>
     </div>

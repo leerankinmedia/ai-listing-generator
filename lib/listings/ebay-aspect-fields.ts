@@ -195,6 +195,32 @@ export function isExactOption(value: string, options: string[]): boolean {
   return options.some((o) => o.trim().toLowerCase() === key)
 }
 
+/** eBay accepts free-text Brand values when the exact brand is not in the list. */
+export function aspectAllowsCustomValue(aspectName: string): boolean {
+  return aspectName.trim().toLowerCase() === "brand"
+}
+
+/**
+ * Prefer eBay list match; otherwise keep the detected brand as a custom value.
+ * Never invent Unbranded / Unknown.
+ */
+export function resolveBrandAspectValue(
+  detected: string | undefined | null,
+  options: string[]
+): string {
+  const raw = (detected || "").trim()
+  if (!raw) return ""
+  if (/^(unbranded|unknown|n\/?a|none|not\s*applicable)$/i.test(raw)) {
+    return ""
+  }
+  if (options.length > 0) {
+    const matched = matchBrandToEbayList(raw, options)
+    if (matched.value) return matched.value
+  }
+  // Custom brand — preserve OCR/tag capitalization (e.g. VEES).
+  return raw
+}
+
 export function detectedValueForAspect(
   listing: Listing,
   aspectName: string
@@ -247,7 +273,12 @@ export function applyExactAspectsToListing(
     const value = field.value?.trim()
     if (!value) continue
     const options = optionsByName?.get(field.name.toLowerCase())
-    if (options && options.length > 0 && !isExactOption(value, options)) {
+    if (
+      options &&
+      options.length > 0 &&
+      !isExactOption(value, options) &&
+      !aspectAllowsCustomValue(field.name)
+    ) {
       continue
     }
 
@@ -323,11 +354,11 @@ export function resolveSelectValue(
     )
   }
 
-  // Brand: fuzzy ≥95% against eBay brand list.
+  // Brand: fuzzy match eBay list, else keep detected custom brand (e.g. VEES).
   if (nameKey === "brand") {
     for (const candidate of [detectedValue, rawValue, suggestedValue]) {
-      const brand = matchBrandToEbayList(candidate, options)
-      if (brand.value) return brand.value
+      const brand = resolveBrandAspectValue(candidate, options)
+      if (brand) return brand
     }
     return ""
   }
@@ -373,16 +404,10 @@ export function resolveMustFillAspectValue(
   const detected = detectedValueForAspect(listing, fieldName)
 
   if (nameKey === "brand") {
-    const brand = matchBrandToEbayList(
+    return resolveBrandAspectValue(
       detected || raw || listing.specifics.brand,
       options
     )
-    if (brand.value) return brand.value
-    // Free-text brand categories: keep detected brand when no list / open text.
-    if (options.length === 0) {
-      return (detected || raw || listing.specifics.brand || "").trim()
-    }
-    return ""
   }
 
   if (nameKey === "style") {
@@ -697,6 +722,10 @@ export function validateAspectsAgainstOptions(
       if (exact !== raw) {
         next = writeAspectValue(next, field.name, exact)
       }
+      continue
+    }
+    // Brand may be a custom value not in eBay's predefined list.
+    if (aspectAllowsCustomValue(field.name)) {
       continue
     }
     next = writeAspectValue(next, field.name, "")

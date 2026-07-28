@@ -18,10 +18,6 @@ import {
   type EbayPromotedListingsMode,
 } from "@/lib/seller/ebay-defaults"
 import {
-  readLocalEbaySellerDefaults,
-  writeLocalEbaySellerDefaults,
-} from "@/lib/seller/ebay-defaults-local"
-import {
   DEFAULT_EBAY_PACKAGE_TYPE,
   type ShippingPackage,
 } from "@/lib/listings/shipping-package"
@@ -54,18 +50,32 @@ export function EbaySellerSettingsForm() {
         const res = await fetch("/api/seller/ebay-defaults", {
           credentials: "same-origin",
         })
-        if (res.ok) {
-          const json = (await res.json()) as {
-            defaults?: unknown
-            setupCompleted?: boolean
-          }
-          if (mounted && json.defaults) {
-            setDefaults(normalizeEbaySellerDefaults(json.defaults))
-            return
-          }
+        const json = (await res.json()) as {
+          defaults?: unknown
+          setupCompleted?: boolean
+          error?: string
+          code?: string
         }
-        const local = readLocalEbaySellerDefaults()
-        if (mounted && local) setDefaults(local.defaults)
+        if (!res.ok) {
+          if (mounted) {
+            setError(
+              json.error ||
+                "Could not load selling preferences from Supabase."
+            )
+          }
+          return
+        }
+        if (mounted && json.defaults) {
+          setDefaults(normalizeEbaySellerDefaults(json.defaults))
+        }
+      } catch (err) {
+        if (mounted) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Could not load selling preferences."
+          )
+        }
       } finally {
         if (mounted) setLoading(false)
       }
@@ -96,7 +106,6 @@ export function EbaySellerSettingsForm() {
     setMessage(null)
     const missing = missingEbaySellerDefaultFields(defaults)
     try {
-      writeLocalEbaySellerDefaults(defaults, missing.length === 0)
       const res = await fetch("/api/seller/ebay-defaults", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -108,24 +117,30 @@ export function EbaySellerSettingsForm() {
       })
       const json = (await res.json()) as {
         error?: string
+        code?: string
         ready?: boolean
         missing?: string[]
+        defaults?: unknown
       }
-      if (!res.ok) throw new Error(json.error || "Save failed")
+      if (!res.ok) {
+        throw new Error(json.error || "Save failed")
+      }
+      // Re-read from the saved Supabase payload so refresh shows the same values.
+      if (json.defaults) {
+        setDefaults(normalizeEbaySellerDefaults(json.defaults))
+      }
       if (json.ready) {
-        setMessage("Defaults saved. New listings will use these automatically.")
+        setMessage("Defaults saved to your account. New listings will use these automatically.")
       } else {
         setMessage(
-          `Saved. Still need: ${(json.missing || missing).join(", ")}.`
+          `Saved to your account. Still need: ${(json.missing || missing).join(", ")}.`
         )
       }
     } catch (err) {
-      // Local save still helps offline / demo.
-      writeLocalEbaySellerDefaults(defaults, missing.length === 0)
       setError(
         err instanceof Error
-          ? `${err.message} (saved on this device for now.)`
-          : "Could not save."
+          ? err.message
+          : "Could not save selling preferences to Supabase."
       )
     } finally {
       setSaving(false)

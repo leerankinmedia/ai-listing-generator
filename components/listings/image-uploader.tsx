@@ -22,7 +22,10 @@ import { CSS } from "@dnd-kit/utilities"
 import { GripVertical, ImagePlus, Star, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
-import { createImageId, fileToCompressedDataUrl } from "@/lib/listings/images"
+import {
+  createListingImageFromFile,
+  removeListingImageOriginal,
+} from "@/lib/listings/images"
 import type { ListingImage } from "@/lib/types"
 
 interface ImageUploaderProps {
@@ -239,13 +242,14 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
       try {
         const next: ListingImage[] = []
         for (const [index, file] of selected.entries()) {
-          const url = await fileToCompressedDataUrl(file)
-          next.push({
-            id: createImageId(),
-            url,
-            sortOrder: ordered.length + index,
-            isPrimary: ordered.length === 0 && index === 0,
-          })
+          // Keep full-resolution originals for ListWise / eBay.
+          // Analysis creates separate temporary compressed copies later.
+          const image = await createListingImageFromFile(
+            file,
+            ordered.length + index,
+            ordered.length === 0 && index === 0
+          )
+          next.push(image)
         }
         onChange(normalizeImages([...ordered, ...next]))
         if (incoming.length > remaining) {
@@ -263,6 +267,7 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
   )
 
   function removeImage(id: string) {
+    removeListingImageOriginal(id)
     onChange(normalizeImages(ordered.filter((img) => img.id !== id)))
   }
 

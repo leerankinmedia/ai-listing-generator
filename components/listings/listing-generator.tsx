@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import { useAuth } from "@/components/auth/auth-provider"
 import { readApiJsonResponse } from "@/lib/api/read-json-response"
 import { uploadAnalyzeImagesIndividually } from "@/lib/listings/analyze-client"
+import { ensureDurableOriginalImageUrls } from "@/lib/listings/durable-images"
 import { createEmptyListing, withImages } from "@/lib/listings/local-db"
 import {
   mapDraftToListingFields,
@@ -55,7 +56,7 @@ export function ListingGenerator() {
       )
 
       const imageUrls = await uploadAnalyzeImagesIndividually({
-        dataUrls: ordered.map((image) => image.url),
+        images: ordered,
         onProgress: setProgress,
       })
 
@@ -141,13 +142,22 @@ export function ListingGenerator() {
           sortOrder: index,
           isPrimary: index === 0,
         }))
+
+      setProgress("Saving full-resolution originals…")
+      const durableImages = await ensureDurableOriginalImageUrls(
+        normalizedImages,
+        user.id,
+        setProgress
+      )
+      setImages(durableImages)
+
       const ready = listingIsReadyToPublish({
         ...listing,
-        images: normalizedImages,
+        images: durableImages,
       })
       const toSave: Listing = {
         ...listing,
-        images: normalizedImages,
+        images: durableImages,
         title: listing.title.trim(),
         status: ready ? status : "draft",
         updatedAt: new Date().toISOString(),
@@ -159,6 +169,7 @@ export function ListingGenerator() {
       router.push(`/dashboard/listings/${saved.id}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save listing")
+      setProgress(null)
       setSaving(false)
     }
   }

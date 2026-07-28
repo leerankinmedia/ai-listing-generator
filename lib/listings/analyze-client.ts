@@ -1,8 +1,10 @@
 /**
- * Client helper: upload each photo individually, then analyze by URL list.
+ * Client helper: build temporary analysis copies, upload them individually,
+ * then analyze by URL list. Full-resolution listing originals are untouched.
  */
 import { readApiJsonResponse } from "@/lib/api/read-json-response"
-import { compressDataUrlForAnalyzeUpload } from "@/lib/listings/images"
+import { createAnalyzeCopyFromListingImage } from "@/lib/listings/images"
+import type { ListingImage } from "@/lib/types"
 
 export type AnalyzeUploadResult = {
   url: string
@@ -14,51 +16,58 @@ export type AnalyzeUploadResult = {
 
 const UPLOAD_CONCURRENCY = 3
 
-async function uploadOneAnalyzeImage(input: {
-  dataUrl: string
+async function uploadOneAnalyzeCopy(input: {
+  image: ListingImage
   index: number
   total: number
   onProgress?: (label: string) => void
 }): Promise<AnalyzeUploadResult> {
   input.onProgress?.(
-    `Compressing photo ${input.index + 1} of ${input.total}…`
+    `Preparing analysis copy ${input.index + 1} of ${input.total}…`
   )
-  const { blob, bytes } = await compressDataUrlForAnalyzeUpload(input.dataUrl)
+
+  // Temporary compressed copy only — original listing photo is not modified.
+  const { blob, bytes } = await createAnalyzeCopyFromListingImage(input.image)
+
   input.onProgress?.(
-    `Uploading photo ${input.index + 1} of ${input.total} (${Math.round(bytes / 1024)}KB)…`
+    `Uploading analysis copy ${input.index + 1} of ${input.total} (${Math.round(bytes / 1024)}KB)…`
   )
 
   const formData = new FormData()
-  formData.append("image", blob, `photo-${input.index + 1}.jpg`)
+  formData.append("image", blob, `analyze-${input.index + 1}.jpg`)
   formData.append("index", String(input.index))
 
-  const response = await fetch("/api/media/analyze-upload", {
-    method: "POST",
-    body: formData,
-    credentials: "same-origin",
-  })
-  const parsed = await readApiJsonResponse<{
-    error?: string
-    url?: string
-    path?: string
-    bytes?: number
-    storage?: string
-    index?: number
-  }>(response)
-  if (!parsed.ok) {
-    throw new Error(
-      `Photo ${input.index + 1} upload failed: ${parsed.error}`
-    )
-  }
-  if (!parsed.data.url) {
-    throw new Error(`Photo ${input.index + 1} upload returned no URL.`)
-  }
-  return {
-    url: parsed.data.url,
-    path: parsed.data.path,
-    bytes: parsed.data.bytes,
-    storage: parsed.data.storage,
-    index: input.index,
+  try {
+    const response = await fetch("/api/media/analyze-upload", {
+      method: "POST",
+      body: formData,
+      credentials: "same-origin",
+    })
+    const parsed = await readApiJsonResponse<{
+      error?: string
+      url?: string
+      path?: string
+      bytes?: number
+      storage?: string
+      index?: number
+    }>(response)
+    if (!parsed.ok) {
+      throw new Error(
+        `Photo ${input.index + 1} analysis upload failed: ${parsed.error}`
+      )
+    }
+    if (!parsed.data.url) {
+      throw new Error(`Photo ${input.index + 1} analysis upload returned no URL.`)
+    }
+    return {
+      url: parsed.data.url,
+      path: parsed.data.path,
+      bytes: parsed.data.bytes ?? bytes,
+      storage: parsed.data.storage,
+      index: input.index,
+    }
+  } finally {
+    // Drop the temporary analysis blob reference ASAP (original stays in listing).
   }
 }
 
@@ -84,35 +93,47 @@ async function mapPool<T, R>(
 }
 
 /**
- * Upload every photo (never drop) via /api/media/analyze-upload.
- * Returns URLs in the original order for /api/listings/generate.
+ * Upload temporary analysis copies for every listing photo (never drops / never
+ * replaces originals). Returns analysis URLs in original order.
  */
 export async function uploadAnalyzeImagesIndividually(input: {
-  dataUrls: string[]
+  images: ListingImage[]
+  /** @deprecated use `images` — kept for transition */
+  dataUrls?: string[]
   onProgress?: (label: string) => void
 }): Promise<string[]> {
-  if (input.dataUrls.length === 0) {
+  const images =
+    input.images?.length > 0
+      ? input.images
+      : (input.dataUrls || []).map((url, index) => ({
+          id: `tmp-${index}`,
+          url,
+          sortOrder: index,
+          isPrimary: index === 0,
+        }))
+
+  if (images.length === 0) {
     throw new Error("Upload at least one product photo.")
   }
 
   let completed = 0
   const uploaded = await mapPool(
-    input.dataUrls,
+    images,
     UPLOAD_CONCURRENCY,
-    async (dataUrl, index) => {
-      const result = await uploadOneAnalyzeImage({
-        dataUrl,
+    async (image, index) => {
+      const result = await uploadOneAnalyzeCopy({
+        image,
         index,
-        total: input.dataUrls.length,
+        total: images.length,
         onProgress: (label) => {
           input.onProgress?.(
-            `${label} (${completed}/${input.dataUrls.length} done)`
+            `${label} (${completed}/${images.length} done)`
           )
         },
       })
       completed += 1
       input.onProgress?.(
-        `Uploaded ${completed} of ${input.dataUrls.length} photos…`
+        `Uploaded ${completed} of ${images.length} analysis copies…`
       )
       return result
     }

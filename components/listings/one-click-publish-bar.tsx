@@ -17,6 +17,8 @@ import {
   publishResultsIncludeSuccess,
 } from "@/lib/listings/publish-persist"
 import { persistListing } from "@/lib/listings/repository"
+import { ensureDurableOriginalImageUrls } from "@/lib/listings/durable-images"
+import { readApiJsonResponse } from "@/lib/api/read-json-response"
 import { useAuth } from "@/components/auth/auth-provider"
 import type { Listing, MarketplaceId, OneClickPublishResult } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -333,16 +335,37 @@ export function OneClickPublishBar({
     setError(null)
     setResults(null)
     try {
+      if (!user?.id) {
+        throw new Error("Sign in required to publish.")
+      }
+
+      // Upload full-resolution originals (not analysis copies) before eBay.
+      const durableImages = await ensureDurableOriginalImageUrls(
+        listing.images,
+        user.id
+      )
+      const listingForPublish: Listing = {
+        ...listing,
+        images: durableImages,
+        updatedAt: new Date().toISOString(),
+      }
+      onListingChange?.(listingForPublish)
+
       const response = await fetch("/api/listings/publish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          listing,
+          listing: listingForPublish,
           marketplaceIds: selected,
         }),
       })
-      const payload = await response.json()
-      if (!response.ok) throw new Error(payload.error || "Publish failed")
+      const parsed = await readApiJsonResponse<{
+        error?: string
+        results?: OneClickPublishResult[]
+        listing?: Listing
+      }>(response)
+      if (!parsed.ok) throw new Error(parsed.error || "Publish failed")
+      const payload = parsed.data
       const publishResults = payload.results as OneClickPublishResult[]
       setResults(publishResults)
 
@@ -351,7 +374,11 @@ export function OneClickPublishBar({
         const fromServer =
           payload.listing && typeof payload.listing === "object"
             ? (payload.listing as Listing)
-            : applyPublishResultsToListing(listing, publishResults, user.id)
+            : applyPublishResultsToListing(
+                listingForPublish,
+                publishResults,
+                user.id
+              )
         onListingChange?.(fromServer)
         try {
           const saved = await persistListing(fromServer)

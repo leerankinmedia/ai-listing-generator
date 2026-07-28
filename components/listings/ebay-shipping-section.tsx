@@ -1,6 +1,5 @@
 "use client"
 
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { NullableNumberInput } from "@/components/ui/nullable-number-input"
 import {
@@ -9,6 +8,11 @@ import {
   defaultEbayShippingMode,
   type EbayShippingMode,
 } from "@/lib/marketplaces/adapters/ebay/fulfillment-shipping"
+import {
+  EBAY_HANDLING_TIME_OPTIONS,
+  handlingTimeLabel,
+  shippingServiceLabel,
+} from "@/lib/seller/ebay-defaults"
 import type { Listing } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -45,11 +49,6 @@ export function EbayShippingModeFields({
   const mode = defaultEbayShippingMode(listing.specifics.shippingMode)
   const flatAmount = listing.specifics.flatShippingAmount
   const freeConfirmed = Boolean(listing.specifics.freeShippingConfirmed)
-  const handlingDays =
-    typeof listing.specifics.handlingTimeDays === "number" &&
-    listing.specifics.handlingTimeDays >= 0
-      ? listing.specifics.handlingTimeDays
-      : null
 
   return (
     <div className="space-y-4">
@@ -116,21 +115,29 @@ export function EbayShippingModeFields({
       )}
 
       <div className="space-y-2">
-        <Label htmlFor="handling-time-days">Handling time (business days)</Label>
-        <NullableNumberInput
+        <Label htmlFor="handling-time-days">Handling time</Label>
+        <select
           id="handling-time-days"
-          integer
-          min={0}
-          max={30}
           disabled={disabled}
-          value={handlingDays}
-          placeholder="e.g. 1"
-          onValueChange={(n) =>
+          value={
+            typeof listing.specifics.handlingTimeDays === "number" &&
+            Number.isFinite(listing.specifics.handlingTimeDays)
+              ? listing.specifics.handlingTimeDays
+              : 1
+          }
+          onChange={(e) =>
             patchSpecifics(listing, onChange, {
-              handlingTimeDays: n == null ? undefined : n,
+              handlingTimeDays: Number(e.target.value),
             })
           }
-        />
+          className="flex h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {EBAY_HANDLING_TIME_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
       </div>
 
       {mode === "free" && (
@@ -158,7 +165,7 @@ export function EbayShippingModeFields({
   )
 }
 
-/** Compact summary above Publish — options, weight, dimensions, handling only. */
+/** Compact summary — kept for non-publish surfaces; Publish uses Selling preferences only. */
 export function EbayShippingPublishSummary({ listing }: { listing: Listing }) {
   const mode = defaultEbayShippingMode(listing.specifics.shippingMode)
   const pkg = listing.specifics.shippingPackage
@@ -166,6 +173,10 @@ export function EbayShippingPublishSummary({ listing }: { listing: Listing }) {
     typeof listing.specifics.handlingTimeDays === "number"
       ? listing.specifics.handlingTimeDays
       : 1
+  const service =
+    listing.specifics.shippingService ||
+    listing.specifics.extras?.shippingService ||
+    null
   const weight =
     pkg != null
       ? `${pkg.weightPounds || 0} lb ${pkg.weightOunces || 0} oz`
@@ -185,10 +196,8 @@ export function EbayShippingPublishSummary({ listing }: { listing: Listing }) {
             ? ` · $${(listing.specifics.flatShippingAmount ?? 5.99).toFixed(2)}`
             : ""}
         </li>
-        <li>
-          Handling time:{" "}
-          {handlingDays === 1 ? "1 business day" : `${handlingDays} business days`}
-        </li>
+        <li>Service: {service ? shippingServiceLabel(service) : "Default"}</li>
+        <li>Handling: {handlingTimeLabel(handlingDays)}</li>
         <li>Weight: {weight}</li>
         <li>Dimensions: {dims}</li>
       </ul>

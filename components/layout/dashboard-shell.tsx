@@ -14,6 +14,7 @@ import {
   Settings,
   Store,
   Target,
+  Truck,
 } from "lucide-react"
 import { Logo } from "@/components/brand/logo"
 import { ThemeToggle } from "@/components/theme-toggle"
@@ -34,6 +35,7 @@ const navItems = [
   { href: "/dashboard/inventory", label: "Inventory", icon: Boxes },
   { href: "/dashboard/listings/new", label: "AI Generator", icon: Plus },
   { href: "/dashboard/connections", label: "Connections", icon: Store },
+  { href: "/dashboard/selling", label: "Selling", icon: Truck },
   { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
   { href: "/dashboard/bolo", label: "BOLO", icon: Eye },
   { href: "/dashboard#settings", label: "Account", icon: Settings },

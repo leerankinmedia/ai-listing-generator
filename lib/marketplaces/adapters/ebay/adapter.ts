@@ -23,6 +23,7 @@ import { ensureEbayMerchantLocationKey } from "@/lib/marketplaces/adapters/ebay/
 import { resolveEbayImageUrls } from "@/lib/marketplaces/adapters/ebay/media"
 import { isEbayConfigured, refreshEbayToken, ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
 import { ensureEbayBusinessPolicyIds } from "@/lib/marketplaces/adapters/ebay/policies"
+import { applyEbayPromotedListing } from "@/lib/marketplaces/adapters/ebay/promoted-listings"
 import { resolveEbayLeafCategoryId } from "@/lib/marketplaces/adapters/ebay/taxonomy"
 import type { MarketplaceAdapter, PublishResult } from "@/lib/marketplaces/adapters/types"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
@@ -147,17 +148,30 @@ export const ebayAdapter: MarketplaceAdapter = {
       freeShippingConfirmed: Boolean(listing.specifics.freeShippingConfirmed),
       flatShippingAmount: listing.specifics.flatShippingAmount,
       handlingTimeDays: listing.specifics.handlingTimeDays,
+      shippingServiceCode:
+        listing.specifics.shippingService ||
+        listing.specifics.extras?.shippingService ||
+        "USPSGroundAdvantage",
+      returnsAccepted: listing.specifics.returnsAccepted !== false,
+      returnWindowDays: listing.specifics.returnWindowDays === 60 ? 60 : 30,
+      returnShippingPaidBy:
+        listing.specifics.returnShippingPaidBy === "SELLER" ? "SELLER" : "BUYER",
+      requireImmediatePayment: Boolean(listing.specifics.requireImmediatePayment),
     })
     console.info("[ebay/shipping] publish using fulfillment policy", {
       shippingMode,
       freeShippingConfirmed: Boolean(listing.specifics.freeShippingConfirmed),
       handlingTimeDays: listing.specifics.handlingTimeDays ?? 1,
+      shippingService:
+        listing.specifics.shippingService || "USPSGroundAdvantage",
       policy: policies.fulfillmentSummary,
     })
 
     // 2) ENABLED inventory location with postalCode + country; persist verified key.
     const { merchantLocationKey, connection: withLocation } =
-      await ensureEbayMerchantLocationKey(auth.accessToken, auth)
+      await ensureEbayMerchantLocationKey(auth.accessToken, auth, {
+        postalCode: listing.specifics.extras?.itemLocationZip,
+      })
 
     const sourceUrls = [...listing.images]
       .sort((a, b) => {
@@ -338,9 +352,29 @@ export const ebayAdapter: MarketplaceAdapter = {
         : "https://www.ebay.com"
     const itemUrl = listingId ? `${site}/itm/${listingId}` : undefined
 
+    const promoMode =
+      listing.specifics.promotedListings === "dynamic" ||
+      listing.specifics.promotedListings === "custom"
+        ? listing.specifics.promotedListings
+        : "off"
+    const promotion = await applyEbayPromotedListing(
+      withLocation.accessToken,
+      listingId,
+      {
+        mode: promoMode,
+        percent: listing.specifics.promotedListingsPercent,
+      }
+    )
+
     return {
       ok: true,
       externalUrl: itemUrl,
+      promotion: {
+        status: promotion.status,
+        mode: promotion.mode,
+        percent: promotion.percent,
+        message: promotion.message,
+      },
       listingRef: {
         marketplaceId: "ebay",
         externalId: listingId || offerId,

@@ -35,11 +35,12 @@ type EbayInventoryLocationsResponse = {
  * Valid US warehouse address with country + postalCode (required for offers).
  * Street omitted — warehouse locations only need city/state/country or postal+country.
  */
-function sandboxWarehouseAddress() {
+function warehouseAddress(postalCode?: string | null) {
+  const zip = String(postalCode || "").replace(/\D/g, "").slice(0, 10)
   return {
     city: process.env["EBAY_LOCATION_CITY"] || "Toledo",
     stateOrProvince: process.env["EBAY_LOCATION_STATE"] || "OH",
-    postalCode: process.env["EBAY_LOCATION_POSTAL"] || "43604",
+    postalCode: zip || process.env["EBAY_LOCATION_POSTAL"] || "43604",
     country: process.env["EBAY_LOCATION_COUNTRY"] || "US",
   }
 }
@@ -151,9 +152,10 @@ async function enableInventoryLocation(
 
 async function createInventoryLocation(
   accessToken: string,
-  merchantLocationKey: string
+  merchantLocationKey: string,
+  postalCode?: string | null
 ) {
-  const address = sandboxWarehouseAddress()
+  const address = warehouseAddress(postalCode)
   logLocationSafe("create-location request address fields", {
     merchantLocationKey,
     hasPostalCode: Boolean(address.postalCode),
@@ -172,7 +174,7 @@ async function createInventoryLocation(
       method: "POST",
       step: "createLocation",
       body: JSON.stringify({
-        name: "ListWise Sandbox Warehouse",
+        name: "ListWise Warehouse",
         merchantLocationStatus: "ENABLED",
         locationTypes: ["WAREHOUSE"],
         location: {
@@ -284,14 +286,19 @@ async function persistLocationKey(
  */
 export async function ensureEbayMerchantLocationKey(
   accessToken: string,
-  connection: StoredMarketplaceConnection
+  connection: StoredMarketplaceConnection,
+  options?: { postalCode?: string | null }
 ): Promise<{ merchantLocationKey: string; connection: StoredMarketplaceConnection }> {
+  const zip = String(options?.postalCode || "")
+    .replace(/\D/g, "")
+    .slice(0, 10)
   const merchantLocationKey =
     process.env["EBAY_MERCHANT_LOCATION_KEY"]?.trim() ||
-    SANDBOX_MERCHANT_LOCATION_KEY
+    (zip.length >= 5 ? `listwise-${zip}` : SANDBOX_MERCHANT_LOCATION_KEY)
 
   logLocationSafe("ensure location via get/create (no list required)", {
     merchantLocationKey,
+    postalCodePresent: zip.length >= 5,
   })
 
   let verified = await verifyEnabledLocationKey(accessToken, merchantLocationKey)
@@ -301,7 +308,7 @@ export async function ensureEbayMerchantLocationKey(
       merchantLocationKey,
     })
     try {
-      await createInventoryLocation(accessToken, merchantLocationKey)
+      await createInventoryLocation(accessToken, merchantLocationKey, zip)
     } catch (err) {
       // Location may already exist (race / prior create) — verify again.
       verified = await verifyEnabledLocationKey(accessToken, merchantLocationKey)

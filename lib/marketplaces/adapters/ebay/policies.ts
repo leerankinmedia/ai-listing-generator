@@ -33,6 +33,16 @@ export type EnsureEbayPoliciesOptions = {
   flatShippingAmount?: number | null
   /** Handling time in business days (default 1). */
   handlingTimeDays?: number | null
+  /** eBay shipping service code (e.g. USPSGroundAdvantage). */
+  shippingServiceCode?: string | null
+  /** Domestic returns accepted. */
+  returnsAccepted?: boolean
+  /** Return window days (30 or 60). */
+  returnWindowDays?: number | null
+  /** Who pays return shipping. */
+  returnShippingPaidBy?: "BUYER" | "SELLER" | string | null
+  /** Require immediate payment on the payment policy. */
+  requireImmediatePayment?: boolean
 }
 
 export type EnsureEbayPoliciesResult = PolicyIds & {
@@ -118,23 +128,26 @@ async function createFulfillmentPolicyForMode(
   accessToken: string,
   mode: EbayShippingMode,
   flatAmount = 5.99,
-  handlingDays = 1
+  handlingDays = 1,
+  shippingServiceCode = "USPSGroundAdvantage"
 ): Promise<string> {
   const amount = Math.max(0.01, Number(flatAmount) || 5.99).toFixed(2)
   const days = Math.max(0, Math.min(30, Math.floor(handlingDays || 1)))
+  const service =
+    String(shippingServiceCode || "").trim() || "USPSGroundAdvantage"
   const name =
     mode === "calculated"
-      ? `ListWise Calculated Shipping (buyer pays) · ${days}d`
+      ? `ListWise Calculated · ${service} · ${days}d`
       : mode === "free"
-        ? `ListWise Free Shipping · ${days}d`
-        : `ListWise Flat Shipping $${amount} · ${days}d`
+        ? `ListWise Free · ${service} · ${days}d`
+        : `ListWise Flat $${amount} · ${service} · ${days}d`
 
   const shippingServices =
     mode === "calculated"
       ? [
           {
             sortOrder: 1,
-            shippingServiceCode: "USPSPriority",
+            shippingServiceCode: service,
             freeShipping: false,
             buyerResponsibleForShipping: true,
             buyerResponsibleForPickup: false,
@@ -144,7 +157,7 @@ async function createFulfillmentPolicyForMode(
         ? [
             {
               sortOrder: 1,
-              shippingServiceCode: "USPSPriority",
+              shippingServiceCode: service,
               freeShipping: true,
               buyerResponsibleForShipping: false,
               buyerResponsibleForPickup: false,
@@ -154,7 +167,7 @@ async function createFulfillmentPolicyForMode(
         : [
             {
               sortOrder: 1,
-              shippingServiceCode: "USPSPriority",
+              shippingServiceCode: service,
               freeShipping: false,
               buyerResponsibleForShipping: true,
               buyerResponsibleForPickup: false,
@@ -192,26 +205,32 @@ async function createFulfillmentPolicyForMode(
     fulfillmentPolicyId: payload.fulfillmentPolicyId,
     name,
     handlingDays: days,
+    shippingServiceCode: service,
   })
   return payload.fulfillmentPolicyId
 }
 
-async function createPaymentPolicy(accessToken: string) {
+async function createPaymentPolicy(
+  accessToken: string,
+  requireImmediatePayment: boolean
+) {
+  const name = requireImmediatePayment
+    ? "ListWise Payment · Immediate"
+    : "ListWise Payment"
   const payload = (await ebayFetch("/sell/account/v1/payment_policy", accessToken, {
     method: "POST",
     step: "createPaymentPolicy",
     body: JSON.stringify({
-      name: "ListWise Sandbox Payment",
+      name,
       marketplaceId: marketplaceId(),
       categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
-      // US managed payments: no PayPal recipient required.
-      immediatePay: false,
+      immediatePay: Boolean(requireImmediatePayment),
     }),
   })) as EbayPolicy
 
   if (!payload.paymentPolicyId) {
     throw new MarketplaceError(
-      "eBay did not return a paymentPolicyId after create.",
+      "Could not set up payment settings for this listing. Try publishing again.",
       "ebay_policy_create_failed",
       502
     )
@@ -219,24 +238,42 @@ async function createPaymentPolicy(accessToken: string) {
   return payload.paymentPolicyId
 }
 
-async function createReturnPolicy(accessToken: string) {
+async function createReturnPolicy(
+  accessToken: string,
+  options: {
+    returnsAccepted: boolean
+    returnWindowDays: number
+    returnShippingPaidBy: "BUYER" | "SELLER"
+  }
+) {
+  const accepted = options.returnsAccepted
+  const days = options.returnWindowDays === 60 ? 60 : 30
+  const payer = options.returnShippingPaidBy === "SELLER" ? "SELLER" : "BUYER"
+  const name = accepted
+    ? `ListWise Returns · ${days}d · ${payer}`
+    : "ListWise Returns · Not accepted"
+
+  const body: Record<string, unknown> = {
+    name,
+    marketplaceId: marketplaceId(),
+    categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
+    returnsAccepted: accepted,
+  }
+  if (accepted) {
+    body.returnPeriod = { value: days, unit: "DAY" }
+    body.refundMethod = "MONEY_BACK"
+    body.returnShippingCostPayer = payer
+  }
+
   const payload = (await ebayFetch("/sell/account/v1/return_policy", accessToken, {
     method: "POST",
     step: "createReturnPolicy",
-    body: JSON.stringify({
-      name: "ListWise Sandbox Returns",
-      marketplaceId: marketplaceId(),
-      categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
-      returnsAccepted: true,
-      returnPeriod: { value: 30, unit: "DAY" },
-      refundMethod: "MONEY_BACK",
-      returnShippingCostPayer: "BUYER",
-    }),
+    body: JSON.stringify(body),
   })) as EbayPolicy
 
   if (!payload.returnPolicyId) {
     throw new MarketplaceError(
-      "eBay did not return a returnPolicyId after create.",
+      "Could not set up return settings for this listing. Try publishing again.",
       "ebay_policy_create_failed",
       502
     )
@@ -248,7 +285,8 @@ function pickFulfillmentForMode(
   policies: EbayFulfillmentPolicyRaw[],
   mode: EbayShippingMode,
   flatAmount?: number | null,
-  handlingDays?: number | null
+  handlingDays?: number | null,
+  shippingServiceCode?: string | null
 ): EbayFulfillmentPolicyRaw | undefined {
   const matching = policies.filter(
     (p) => classifyFulfillmentShippingMode(p) === mode
@@ -263,7 +301,19 @@ function pickFulfillmentForMode(
     return summary?.handlingDays == null || summary.handlingDays === days
   })
 
-  const pool = withHandling.length > 0 ? withHandling : matching
+  let pool = withHandling.length > 0 ? withHandling : matching
+
+  const serviceWanted = String(shippingServiceCode || "").trim()
+  if (serviceWanted) {
+    const withService = pool.filter((p) => {
+      const summary = summarizeFulfillmentPolicy(p)
+      return (
+        !summary?.serviceCode ||
+        summary.serviceCode.toLowerCase() === serviceWanted.toLowerCase()
+      )
+    })
+    if (withService.length > 0) pool = withService
+  }
 
   if (mode === "flat" && flatAmount != null && Number.isFinite(flatAmount)) {
     const target = Number(flatAmount)
@@ -284,6 +334,55 @@ function pickFulfillmentForMode(
   return listwise || pool[0]
 }
 
+type EbayPaymentPolicyRaw = EbayPolicy & {
+  immediatePay?: boolean
+}
+
+type EbayReturnPolicyRaw = EbayPolicy & {
+  returnsAccepted?: boolean
+  returnPeriod?: { value?: number; unit?: string }
+  returnShippingCostPayer?: string
+  refundMethod?: string
+}
+
+function pickPaymentPolicy(
+  policies: EbayPaymentPolicyRaw[],
+  requireImmediatePayment: boolean
+): EbayPaymentPolicyRaw | undefined {
+  const matching = policies.filter(
+    (p) => Boolean(p.immediatePay) === requireImmediatePayment
+  )
+  const pool = matching.length > 0 ? matching : []
+  const listwise = pool.find((p) =>
+    (p.name || "").toLowerCase().includes("listwise")
+  )
+  return listwise || pool[0]
+}
+
+function pickReturnPolicy(
+  policies: EbayReturnPolicyRaw[],
+  options: {
+    returnsAccepted: boolean
+    returnWindowDays: number
+    returnShippingPaidBy: "BUYER" | "SELLER"
+  }
+): EbayReturnPolicyRaw | undefined {
+  const matching = policies.filter((p) => {
+    const accepted = p.returnsAccepted !== false
+    if (accepted !== options.returnsAccepted) return false
+    if (!options.returnsAccepted) return true
+    const days = p.returnPeriod?.value
+    if (days != null && days !== options.returnWindowDays) return false
+    const payer = (p.returnShippingCostPayer || "").toUpperCase()
+    if (payer && payer !== options.returnShippingPaidBy) return false
+    return true
+  })
+  const listwise = matching.find((p) =>
+    (p.name || "").toLowerCase().includes("listwise")
+  )
+  return listwise || matching[0]
+}
+
 /**
  * Resolve Business Policy IDs for the *connected seller*.
  * Shipping mode defaults to buyer-pays calculated — never silently uses free shipping.
@@ -298,8 +397,8 @@ export async function ensureEbayBusinessPolicyIds(
   const freeConfirmed = Boolean(options.freeShippingConfirmed)
 
   let fulfillment = await listEbayFulfillmentPolicies(accessToken)
-  let payment = await listPaymentPolicies(accessToken)
-  let returns = await listReturnPolicies(accessToken)
+  let payment = (await listPaymentPolicies(accessToken)) as EbayPaymentPolicyRaw[]
+  let returns = (await listReturnPolicies(accessToken)) as EbayReturnPolicyRaw[]
 
   logPolicies("listed seller policies", {
     fulfillmentCount: fulfillment.length,
@@ -336,6 +435,14 @@ export async function ensureEbayBusinessPolicyIds(
     Number.isFinite(options.handlingTimeDays)
       ? Math.max(0, Math.min(30, Math.floor(options.handlingTimeDays)))
       : 1
+  const shippingServiceCode =
+    String(options.shippingServiceCode || "").trim() || "USPSGroundAdvantage"
+  const returnsAccepted = options.returnsAccepted !== false
+  const returnWindowDays =
+    options.returnWindowDays === 60 ? 60 : 30
+  const returnShippingPaidBy =
+    options.returnShippingPaidBy === "SELLER" ? "SELLER" : "BUYER"
+  const requireImmediatePayment = Boolean(options.requireImmediatePayment)
 
   // Env fulfillment ID is only noted in logs; ListWise always picks/creates
   // from the seller's Calculated / Flat / Free choice automatically.
@@ -363,27 +470,37 @@ export async function ensureEbayBusinessPolicyIds(
     fulfillment,
     shippingMode,
     options.flatShippingAmount,
-    handlingDays
+    handlingDays,
+    shippingServiceCode
   )
+
+  // If an existing policy matches mode but not service/handling, create exact match.
+  if (selected) {
+    const summary = summarizeFulfillmentPolicy(selected)
+    const serviceMismatch =
+      Boolean(summary?.serviceCode) &&
+      summary!.serviceCode!.toLowerCase() !== shippingServiceCode.toLowerCase()
+    const handlingMismatch =
+      summary?.handlingDays != null && summary.handlingDays !== handlingDays
+    if (serviceMismatch || handlingMismatch) {
+      selected = undefined
+    }
+  }
 
   if (!selected) {
     const createdId = await createFulfillmentPolicyForMode(
       accessToken,
       shippingMode,
       options.flatShippingAmount ?? 5.99,
-      handlingDays
+      handlingDays,
+      shippingServiceCode
     )
     fulfillment = await listEbayFulfillmentPolicies(accessToken)
     selected =
       fulfillment.find((p) => p.fulfillmentPolicyId === createdId) ||
       ({
         fulfillmentPolicyId: createdId,
-        name:
-          shippingMode === "calculated"
-            ? `ListWise Calculated Shipping (buyer pays) · ${handlingDays}d`
-            : shippingMode === "free"
-              ? `ListWise Free Shipping · ${handlingDays}d`
-              : `ListWise Flat Shipping · ${handlingDays}d`,
+        name: `ListWise · ${shippingServiceCode} · ${handlingDays}d`,
         handlingTime: { value: handlingDays, unit: "DAY" },
         shippingOptions: [
           {
@@ -391,7 +508,7 @@ export async function ensureEbayBusinessPolicyIds(
             costType: shippingMode === "calculated" ? "CALCULATED" : "FLAT_RATE",
             shippingServices: [
               {
-                shippingServiceCode: "USPSPriority",
+                shippingServiceCode,
                 freeShipping: shippingMode === "free",
                 shippingCost:
                   shippingMode === "flat"
@@ -438,15 +555,44 @@ export async function ensureEbayBusinessPolicyIds(
     }
   }
 
-  let paymentPolicyId =
+  let paymentSelected =
     (envPayment &&
-      payment.find((p) => p.paymentPolicyId === envPayment)?.paymentPolicyId) ||
-    payment[0]?.paymentPolicyId
+      payment.find((p) => p.paymentPolicyId === envPayment)) ||
+    pickPaymentPolicy(payment, requireImmediatePayment)
 
-  let returnPolicyId =
-    (envReturn &&
-      returns.find((p) => p.returnPolicyId === envReturn)?.returnPolicyId) ||
-    returns[0]?.returnPolicyId
+  if (
+    paymentSelected &&
+    Boolean(paymentSelected.immediatePay) !== requireImmediatePayment
+  ) {
+    paymentSelected = undefined
+  }
+
+  let paymentPolicyId = paymentSelected?.paymentPolicyId
+  if (!paymentPolicyId) {
+    paymentPolicyId = await createPaymentPolicy(
+      accessToken,
+      requireImmediatePayment
+    )
+    payment = (await listPaymentPolicies(accessToken)) as EbayPaymentPolicyRaw[]
+  }
+
+  let returnSelected =
+    (envReturn && returns.find((p) => p.returnPolicyId === envReturn)) ||
+    pickReturnPolicy(returns, {
+      returnsAccepted,
+      returnWindowDays,
+      returnShippingPaidBy,
+    })
+
+  let returnPolicyId = returnSelected?.returnPolicyId
+  if (!returnPolicyId) {
+    returnPolicyId = await createReturnPolicy(accessToken, {
+      returnsAccepted,
+      returnWindowDays,
+      returnShippingPaidBy,
+    })
+    returns = (await listReturnPolicies(accessToken)) as EbayReturnPolicyRaw[]
+  }
 
   if (envPayment && paymentPolicyId !== envPayment) {
     logPolicies("env payment policy not owned by seller; ignoring", {
@@ -455,15 +601,6 @@ export async function ensureEbayBusinessPolicyIds(
   }
   if (envReturn && returnPolicyId !== envReturn) {
     logPolicies("env return policy not owned by seller; ignoring", { envReturn })
-  }
-
-  if (!paymentPolicyId) {
-    paymentPolicyId = await createPaymentPolicy(accessToken)
-    payment = await listPaymentPolicies(accessToken)
-  }
-  if (!returnPolicyId) {
-    returnPolicyId = await createReturnPolicy(accessToken)
-    returns = await listReturnPolicies(accessToken)
   }
 
   const ownedPayment = payment.find((p) => p.paymentPolicyId === paymentPolicyId)
@@ -484,7 +621,7 @@ export async function ensureEbayBusinessPolicyIds(
     !finalIds.returnPolicyId
   ) {
     throw new MarketplaceError(
-      "Connected eBay seller is missing Business Policies (payment/fulfillment/return).",
+      "Could not prepare shipping, payment, or return settings for this listing.",
       "ebay_policies_missing",
       400
     )
@@ -498,6 +635,10 @@ export async function ensureEbayBusinessPolicyIds(
     isFreeShipping: fulfillmentSummary.isFreeShipping,
     costSummary: fulfillmentSummary.costSummary,
     freeShippingConfirmed: freeConfirmed,
+    shippingServiceCode,
+    requireImmediatePayment,
+    returnsAccepted,
+    returnWindowDays,
   })
 
   return finalIds

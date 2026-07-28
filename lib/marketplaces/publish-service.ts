@@ -78,18 +78,24 @@ export async function publishListingOneClick(
       }
 
       const queued = published.listingRef.status === "ready"
+      const promo = published.promotion
+      let message = published.externalUrl
+        ? `Published: ${published.externalUrl}`
+        : queued
+          ? `Accepted by ${adapter.displayName} (async). Poll item status or webhooks for completion.`
+          : `Published to ${adapter.displayName}.`
+      if (promo && promo.status !== "off") {
+        message = `${message} ${promo.message}`
+      }
+
       results.push({
         marketplaceId,
         ok: true,
         status: queued ? "queued" : "published",
-        message: published.externalUrl
-          ? `Published: ${published.externalUrl}`
-          : queued
-            ? `Accepted by ${adapter.displayName} (async). Poll item status or webhooks for completion.`
-            : `Published to ${adapter.displayName}.`,
+        message,
         listingRef: published.listingRef,
-      })
-    } catch (error) {
+        promotion: promo,
+      })    } catch (error) {
       const message =
         error instanceof MarketplaceError
           ? error.message

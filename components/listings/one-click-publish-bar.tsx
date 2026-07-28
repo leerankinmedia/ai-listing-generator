@@ -12,11 +12,7 @@ import {
   applyPublishResultsToListing,
   publishResultsIncludeSuccess,
 } from "@/lib/listings/publish-persist"
-import {
-  EbayShippingModeFields,
-  EbayShippingPublishSummary,
-} from "@/components/listings/ebay-shipping-section"
-import { ShippingPackageFields } from "@/components/listings/shipping-package-fields"
+import { SellingPreferencesPanel } from "@/components/listings/selling-preferences-panel"
 import { PrePublishReviewCard } from "@/components/listings/pre-publish-review"
 import { ensureListingInventorySku } from "@/lib/listings/sku"
 import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
@@ -63,6 +59,7 @@ export function OneClickPublishBar({
   const [connections, setConnections] = useState<PublicConnection[]>([])
   const [selected, setSelected] = useState<MarketplaceId[]>([])
   const [loadingConnections, setLoadingConnections] = useState(true)
+  const [defaultsReady, setDefaultsReady] = useState<boolean | null>(null)
 
   const ebaySelected = selected.includes("ebay")
 
@@ -99,6 +96,27 @@ export function OneClickPublishBar({
     void loadConnections()
   }, [loadConnections])
 
+  useEffect(() => {
+    let mounted = true
+    void (async () => {
+      try {
+        const res = await fetch("/api/seller/ebay-defaults", {
+          credentials: "same-origin",
+        })
+        if (!res.ok) {
+          if (mounted) setDefaultsReady(false)
+          return
+        }
+        const json = (await res.json()) as { ready?: boolean }
+        if (mounted) setDefaultsReady(Boolean(json.ready))
+      } catch {
+        if (mounted) setDefaultsReady(false)
+      }
+    })()
+    return () => {
+      mounted = false
+    }
+  }, [])
   // Enrich title toward 80 chars when eBay is selected — never auto-fill SKU
   // unless account settings enable automatic SKU generation.
   useEffect(() => {
@@ -371,27 +389,13 @@ export function OneClickPublishBar({
       )}
 
       {ebaySelected && onListingChange && (
-        <div className="space-y-4 rounded-xl border border-border bg-secondary/20 p-3">
-          <div>
-            <h3 className="text-sm font-semibold">Shipping</h3>
-            <p className="text-xs text-muted-foreground">
-              Calculated, Flat, or Free — plus handling time, weight, and dimensions.
-              Numeric fields stay blank until you enter them.
-            </p>
-          </div>
-          <EbayShippingModeFields
+        <div className="space-y-4">
+          <SellingPreferencesPanel
             listing={listing}
             onChange={onListingChange}
             disabled={disabled || publishing}
-            compact
+            defaultsReady={defaultsReady === true}
           />
-          <ShippingPackageFields
-            listing={listing}
-            onChange={onListingChange}
-            disabled={disabled || publishing}
-            compact
-          />
-          <EbayShippingPublishSummary listing={listing} />
           <PrePublishReviewCard
             listing={listing}
             missingAspects={unresolved}

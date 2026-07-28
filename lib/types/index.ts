@@ -110,14 +110,28 @@ export interface ListingSpecifics {
    * ListWise maps this to the correct fulfillment policy automatically.
    */
   shippingMode?: "calculated" | "flat" | "free"
+  /** eBay shipping service code (e.g. USPSGroundAdvantage). */
+  shippingService?: string
   /** Flat rate amount in USD when shippingMode is flat. */
   flatShippingAmount?: number
-  /** Handling time in business days (default 1). */
+  /** Handling time in business days (eBay-supported values only). */
   handlingTimeDays?: number
   /** Required when shippingMode is free. */
   freeShippingConfirmed?: boolean
   /** When true, enable eBay Best Offer on the listing. */
   allowOffers?: boolean
+  /** Domestic returns accepted. */
+  returnsAccepted?: boolean
+  /** Return window in days (30 or 60). */
+  returnWindowDays?: 30 | 60
+  /** Who pays return shipping. */
+  returnShippingPaidBy?: "BUYER" | "SELLER"
+  /** Require immediate payment (managed payments / payment policy). */
+  requireImmediatePayment?: boolean
+  /** Promoted Listings: off, dynamic ad rate, or custom %. */
+  promotedListings?: "off" | "dynamic" | "custom"
+  /** Custom promoted listings ad rate (2–100). */
+  promotedListingsPercent?: number
 }
 
 export interface SoldCompsEstimate {
@@ -202,6 +216,13 @@ export interface OneClickPublishResult {
     name: string
     value: string
   }>
+  /** Promoted Listings outcome when requested (never claimed unless eBay confirmed). */
+  promotion?: {
+    status: "off" | "applied" | "skipped" | "failed"
+    mode?: "dynamic" | "custom"
+    percent?: number | null
+    message: string
+  }
 }
 
 export interface InventoryItem {

@@ -25,6 +25,9 @@ import {
   EbayShippingPublishSummary,
 } from "@/components/listings/ebay-shipping-section"
 import { ShippingPackageFields } from "@/components/listings/shipping-package-fields"
+import { PrePublishReviewCard } from "@/components/listings/pre-publish-review"
+import { ensureListingInventorySku, resolveListingSku } from "@/lib/listings/sku"
+import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
 import { persistListing } from "@/lib/listings/repository"
 import { ensureDurableOriginalImageUrls } from "@/lib/listings/durable-images"
 import { readApiJsonResponse } from "@/lib/api/read-json-response"
@@ -191,6 +194,11 @@ export function OneClickPublishBar({
   const [loadingConnections, setLoadingConnections] = useState(true)
 
   const ebaySelected = selected.includes("ebay")
+  const [aspectMeta, setAspectMeta] = useState<{
+    missing: string[]
+    filled: number
+    total: number
+  }>({ missing: [], filled: 0, total: 0 })
 
   const requiredFields = useMemo(() => {
     const fields = (results || []).flatMap((r) => r.requiredFields || [])
@@ -290,6 +298,107 @@ export function OneClickPublishBar({
     void loadConnections()
   }, [loadConnections])
 
+  // Prefetch eBay aspects + assign inventory SKU when eBay is selected.
+  useEffect(() => {
+    if (!ebaySelected || !onListingChange) return
+    let cancelled = false
+
+    const withSku = ensureListingInventorySku(listing)
+    const enrichedTitle = enrichEbayTitleTowardLimit(withSku.title, withSku)
+    const needsPatch =
+      resolveListingSku(listing) == null ||
+      enrichedTitle !== listing.title ||
+      withSku.specifics.extras?.sku !== listing.specifics.extras?.sku
+    if (needsPatch) {
+      onListingChange({
+        ...withSku,
+        title: enrichedTitle,
+        updatedAt: new Date().toISOString(),
+      })
+    }
+
+    const listingForPreview = {
+      ...withSku,
+      title: enrichedTitle,
+    }
+
+    void fetch("/api/marketplaces/ebay/aspects-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ listing: listingForPreview }),
+    })
+      .then(async (res) => {
+        if (!res.ok || cancelled) return
+        const json = (await res.json()) as {
+          requiredFields?: Array<{
+            name: string
+            allowedValues?: string[]
+            suggestedValue?: string
+          }>
+          resolvedFields?: Array<{ name: string; value: string }>
+          aspectFilledCount?: number
+          aspectTotalCount?: number
+        }
+        const optionsByName = new Map<string, string[]>()
+        for (const field of json.requiredFields || []) {
+          if (field.allowedValues?.length) {
+            optionsByName.set(field.name.toLowerCase(), field.allowedValues)
+          }
+        }
+        const resolved = json.resolvedFields || []
+        const suggested = (json.requiredFields || [])
+          .filter((f) => f.suggestedValue)
+          .map((f) => ({ name: f.name, value: f.suggestedValue! }))
+        const merged = [...resolved, ...suggested]
+        if (merged.length > 0 && onListingChange) {
+          const next = applyExactAspectsToListing(
+            listingForPreview,
+            merged,
+            optionsByName
+          )
+          // Only push when extras/specifics actually changed.
+          if (
+            JSON.stringify(next.specifics.extras || {}) !==
+            JSON.stringify(listing.specifics.extras || {})
+          ) {
+            onListingChange(next)
+          }
+        }
+        if (!cancelled) {
+          setAspectMeta({
+            missing: (json.requiredFields || []).map((f) => f.name),
+            filled: json.aspectFilledCount || 0,
+            total: json.aspectTotalCount || 0,
+          })
+          // Surface required aspect dropdowns without wiping prior publish results.
+          if ((json.requiredFields || []).length > 0) {
+            setResults((prev) => {
+              if (prev && prev.some((r) => r.ok)) return prev
+              return [
+                {
+                  marketplaceId: "ebay",
+                  ok: false,
+                  status: "error",
+                  message:
+                    "Review required eBay item specifics below, then publish.",
+                  requiredFields: json.requiredFields,
+                  resolvedFields: json.resolvedFields,
+                },
+              ]
+            })
+          }
+        }
+      })
+      .catch(() => {
+        /* preview is best-effort */
+      })
+
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per listing when eBay selected
+  }, [ebaySelected, listing.id])
+
   const connectedIds = useMemo(
     () => new Set(connections.map((c) => c.marketplaceId)),
     [connections]
@@ -365,13 +474,19 @@ export function OneClickPublishBar({
         }
       }
 
+      // Ensure seller-facing inventory SKU + enriched title before durable upload.
+      const prepared = ensureListingInventorySku({
+        ...listing,
+        title: enrichEbayTitleTowardLimit(listing.title, listing),
+      })
+
       // Upload full-resolution originals (not analysis copies) before eBay.
       const durableImages = await ensureDurableOriginalImageUrls(
-        listing.images,
+        prepared.images,
         user.id
       )
       const listingForPublish: Listing = {
-        ...listing,
+        ...prepared,
         images: durableImages,
         updatedAt: new Date().toISOString(),
       }
@@ -495,11 +610,17 @@ export function OneClickPublishBar({
             disabled={disabled || publishing}
           />
           <EbayShippingPublishSummary listing={listing} />
+          <PrePublishReviewCard
+            listing={listing}
+            missingAspects={aspectMeta.missing}
+            aspectFilledCount={aspectMeta.filled}
+            aspectTotalCount={aspectMeta.total}
+          />
         </div>
       )}
 
       {ebaySelected && !onListingChange && (
-        <EbayShippingPublishSummary listing={listing} />
+        <PrePublishReviewCard listing={listing} />
       )}
 
       <div className="flex justify-end">

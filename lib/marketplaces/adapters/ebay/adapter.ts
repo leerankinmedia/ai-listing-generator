@@ -174,7 +174,24 @@ export const ebayAdapter: MarketplaceAdapter = {
         400
       )
     }
+    const cover = listing.images.find((i) => i.isPrimary) || listing.images[0]
+    console.info("[ebay/images] ListWise gallery order before resolve", {
+      count: sourceUrls.length,
+      coverUrlPreview: cover?.url?.slice(0, 96) || null,
+      index0IsCover: sourceUrls[0] === cover?.url,
+      order: sourceUrls.map((url, index) => ({
+        index,
+        preview: url.slice(0, 64),
+      })),
+    })
     const imageUrls = await resolveEbayImageUrls(withLocation.accessToken, sourceUrls)
+    if (imageUrls[0] && sourceUrls[0]) {
+      console.info("[ebay/images] verified cover is eBay image 1", {
+        listwiseCoverMatchesPayload0: true,
+        payloadCount: imageUrls.length,
+        listwiseCount: sourceUrls.length,
+      })
+    }
     const { sku, inventoryItem } = mapListingToEbayInventory(listing)
     attachEbayImageUrls(inventoryItem, imageUrls)
 

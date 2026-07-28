@@ -2,6 +2,7 @@
 
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { NullableNumberInput } from "@/components/ui/nullable-number-input"
 import {
   shippingModeDescription,
   shippingModeLabel,
@@ -39,13 +40,13 @@ export function EbayShippingModeFields({
   disabled?: boolean
 }) {
   const mode = defaultEbayShippingMode(listing.specifics.shippingMode)
-  const flatAmount = listing.specifics.flatShippingAmount ?? 5.99
+  const flatAmount = listing.specifics.flatShippingAmount
   const freeConfirmed = Boolean(listing.specifics.freeShippingConfirmed)
   const handlingDays =
     typeof listing.specifics.handlingTimeDays === "number" &&
     listing.specifics.handlingTimeDays >= 0
       ? listing.specifics.handlingTimeDays
-      : 1
+      : null
 
   return (
     <div className="space-y-4">
@@ -93,16 +94,16 @@ export function EbayShippingModeFields({
       {mode === "flat" && (
         <div className="space-y-2">
           <Label htmlFor="flat-shipping-amount">Flat shipping amount (USD)</Label>
-          <Input
+          <NullableNumberInput
             id="flat-shipping-amount"
-            type="number"
-            min={0.01}
-            step={0.01}
+            min={0}
+            step="0.01"
             disabled={disabled}
-            value={flatAmount}
-            onChange={(e) =>
+            value={flatAmount ?? null}
+            placeholder="e.g. 5.99"
+            onValueChange={(n) =>
               patchSpecifics(listing, onChange, {
-                flatShippingAmount: Number(e.target.value) || 0,
+                flatShippingAmount: n == null ? undefined : n,
               })
             }
           />
@@ -111,20 +112,17 @@ export function EbayShippingModeFields({
 
       <div className="space-y-2">
         <Label htmlFor="handling-time-days">Handling time (business days)</Label>
-        <Input
+        <NullableNumberInput
           id="handling-time-days"
-          type="number"
+          integer
           min={0}
           max={30}
-          step={1}
           disabled={disabled}
           value={handlingDays}
-          onChange={(e) =>
+          placeholder="e.g. 1"
+          onValueChange={(n) =>
             patchSpecifics(listing, onChange, {
-              handlingTimeDays: Math.max(
-                0,
-                Math.min(30, Math.floor(Number(e.target.value) || 0))
-              ),
+              handlingTimeDays: n == null ? undefined : n,
             })
           }
         />

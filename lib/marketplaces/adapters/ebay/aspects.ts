@@ -149,6 +149,7 @@ function listingCandidatesForAspect(
         "Regular Size",
       ]
     case "type":
+    case "item type":
       return [
         fromExtras,
         listing.specifics.style,
@@ -157,8 +158,32 @@ function listingCandidatesForAspect(
       ]
     case "theme":
       return [fromExtras, listing.specifics.pattern, listing.specifics.style]
+    case "rise":
+      return [fromExtras, extras.Rise, extras.rise]
+    case "fit":
+      return [fromExtras, extras.Fit, extras.fit, listing.specifics.style]
+    case "fabric wash":
+    case "wash":
+      return [fromExtras, extras["Fabric Wash"], extras.Wash]
+    case "accents":
+      return [fromExtras, extras.Accents, listing.specifics.pattern]
+    case "features":
+      return [fromExtras, extras.Features]
+    case "closure":
+      return [fromExtras, extras.Closure]
+    case "vintage":
+      return [fromExtras, extras.Vintage, "No"]
+    case "fabric type":
+      return [fromExtras, extras["Fabric Type"], listing.specifics.material]
     default:
-      return [fromExtras, listing.specifics.extras?.[aspectName]]
+      return [
+        fromExtras,
+        listing.specifics.extras?.[aspectName],
+        // Fall back to any extras key that case-insensitively matches.
+        ...Object.entries(extras)
+          .filter(([k]) => k.toLowerCase() === nameKey)
+          .map(([, v]) => v),
+      ]
   }
 }
 

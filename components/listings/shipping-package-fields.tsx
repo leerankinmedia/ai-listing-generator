@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { NullableNumberInput } from "@/components/ui/nullable-number-input"
 import {
   DEFAULT_EBAY_PACKAGE_TYPE,
   missingShippingPackageFields,
@@ -118,87 +119,62 @@ export function ShippingPackageFields({
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="weight-pounds">Weight pounds</Label>
-          <Input
+          <NullableNumberInput
             id="weight-pounds"
-            type="number"
+            integer
             min={0}
-            step={1}
             disabled={disabled}
-            value={pkg?.weightPounds ?? ""}
-            placeholder="0"
-            onChange={(e) =>
-              patchPackage({
-                weightPounds: e.target.value === "" ? 0 : Number(e.target.value),
-              })
-            }
+            value={pkg ? pkg.weightPounds : null}
+            placeholder="e.g. 0"
+            onValueChange={(n) => patchPackage({ weightPounds: n ?? 0 })}
           />
         </div>
         <div className="space-y-2">
           <Label htmlFor="weight-ounces">Weight ounces</Label>
-          <Input
+          <NullableNumberInput
             id="weight-ounces"
-            type="number"
             min={0}
-            step={0.1}
+            step="0.1"
             disabled={disabled}
-            value={pkg?.weightOunces ?? ""}
-            placeholder="0"
-            onChange={(e) =>
-              patchPackage({
-                weightOunces: e.target.value === "" ? 0 : Number(e.target.value),
-              })
-            }
+            value={pkg ? pkg.weightOunces : null}
+            placeholder="e.g. 8"
+            onValueChange={(n) => patchPackage({ weightOunces: n ?? 0 })}
           />
         </div>
         <div className="space-y-2">
           <Label htmlFor="pkg-length">Length (in)</Label>
-          <Input
+          <NullableNumberInput
             id="pkg-length"
-            type="number"
             min={0}
-            step={0.1}
+            step="0.1"
             disabled={disabled}
-            value={pkg?.lengthInches ?? ""}
-            placeholder="12"
-            onChange={(e) =>
-              patchPackage({
-                lengthInches: e.target.value === "" ? 0 : Number(e.target.value),
-              })
-            }
+            value={pkg ? pkg.lengthInches : null}
+            placeholder="e.g. 12"
+            onValueChange={(n) => patchPackage({ lengthInches: n ?? 0 })}
           />
         </div>
         <div className="space-y-2">
           <Label htmlFor="pkg-width">Width (in)</Label>
-          <Input
+          <NullableNumberInput
             id="pkg-width"
-            type="number"
             min={0}
-            step={0.1}
+            step="0.1"
             disabled={disabled}
-            value={pkg?.widthInches ?? ""}
-            placeholder="9"
-            onChange={(e) =>
-              patchPackage({
-                widthInches: e.target.value === "" ? 0 : Number(e.target.value),
-              })
-            }
+            value={pkg ? pkg.widthInches : null}
+            placeholder="e.g. 9"
+            onValueChange={(n) => patchPackage({ widthInches: n ?? 0 })}
           />
         </div>
         <div className="space-y-2">
           <Label htmlFor="pkg-height">Height (in)</Label>
-          <Input
+          <NullableNumberInput
             id="pkg-height"
-            type="number"
             min={0}
-            step={0.1}
+            step="0.1"
             disabled={disabled}
-            value={pkg?.heightInches ?? ""}
-            placeholder="1"
-            onChange={(e) =>
-              patchPackage({
-                heightInches: e.target.value === "" ? 0 : Number(e.target.value),
-              })
-            }
+            value={pkg ? pkg.heightInches : null}
+            placeholder="e.g. 1"
+            onValueChange={(n) => patchPackage({ heightInches: n ?? 0 })}
           />
         </div>
       </div>

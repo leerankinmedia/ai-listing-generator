@@ -61,13 +61,33 @@ export async function ensureDurableOriginalImageUrls(
       `Saving original photo ${index + 1} of ${images.length} at full quality…`
     )
 
+    // Re-normalize EXIF orientation before durable upload so eBay never gets
+    // a sideways original even if the session blob was registered earlier.
+    let uploadBlob = original.blob
+    let contentType = original.contentType || "image/jpeg"
+    let fileName = original.fileName
+    try {
+      const { normalizeImageOrientation } = await import(
+        "@/lib/listings/image-orientation"
+      )
+      const oriented = await normalizeImageOrientation(
+        original.blob,
+        original.fileName
+      )
+      uploadBlob = oriented.blob
+      contentType = oriented.contentType
+      fileName = oriented.fileName
+    } catch {
+      /* keep original blob */
+    }
+
     const supabase = createClient()
-    const ext = extensionFor(original.contentType, original.fileName)
+    const ext = extensionFor(contentType, fileName)
     const path = `${userId}/originals/${image.id}.${ext}`
     const bucket = listingImagesBucket()
 
-    const { error } = await supabase.storage.from(bucket).upload(path, original.blob, {
-      contentType: original.contentType || "image/jpeg",
+    const { error } = await supabase.storage.from(bucket).upload(path, uploadBlob, {
+      contentType,
       upsert: true,
     })
     if (error) {

@@ -26,7 +26,8 @@ import {
   appendConditionNotesSection,
   sanitizeDetectedFlaws,
 } from "@/lib/listings/condition-details"
-import type { DetectedFieldKey, FieldConfidence } from "@/lib/types"
+import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
+import type { DetectedFieldKey, FieldConfidence, Listing } from "@/lib/types"
 
 type OpenAIClient = ReturnType<typeof createOpenAI>
 
@@ -124,14 +125,12 @@ Apparel eBay title rules (strict priority order — omit unknown parts, do not r
 4. Size
 5. Exact normalized search color (e.g. Gray — not shade compounds like Dark Gray/Charcoal)
 6. Item type / style (e.g. Graphic T-Shirt)
-7. One strong search keyword (e.g. Wrestling Tee)
-- Under 80 characters
-- No keyword stuffing or ALL CAPS
-- Do NOT put material percentages or commodity fabric callouts in the title
-  (e.g. never "100% Cotton", "Cotton Blend", "Polyester") unless the material itself
-  is a rare major selling feature (e.g. cashmere, leather, silk, wool coat).
-  Put everyday materials like 100% Cotton in the description and item specifics only.
-- Color accents (stitching, trim, logos) belong in description bullets — not the Color specific.
+7. Material when it is a strong search term (cashmere, leather, silk, wool) OR one strong search keyword
+- Use up to 80 characters when the attributes support it — do not leave valuable title space unused
+- Do not add filler words, keyword stuffing, or ALL CAPS
+- Do NOT put commodity fabric callouts like "100% Cotton" or "Cotton Blend" in the title
+  unless the material itself is a rare major selling feature (cashmere, leather, silk, wool coat)
+- Color accents (stitching, trim, logos) belong in description bullets — not the Color specific
 Example title shape:
 WWE WrestleMania Legends Men's XL Gray Graphic T-Shirt Wrestling Tee
 
@@ -593,6 +592,40 @@ Total photos in listing: ${totalImages}. Sample photos attached for visual conte
   })
   const copy = result.object
   copy.title.value = sanitizeApparelTitle(copy.title.value)
+  // Prefer filling toward 80 chars with real attributes when the model undershot.
+  {
+    const draftListing = {
+      id: "draft",
+      userId: "",
+      title: copy.title.value,
+      description: copy.description.value,
+      price: 0,
+      currency: "USD",
+      keywords: copy.keywords.value,
+      specifics: {
+        brand: fields.brand?.value,
+        size: fields.size?.value,
+        color: fields.color?.value,
+        material: fields.material?.value,
+        style: fields.style?.value,
+        pattern: fields.pattern?.value,
+        gender: fields.gender?.value,
+        category: copy.category.value,
+      },
+      fieldConfidence: {},
+      images: [],
+      status: "draft" as const,
+      marketplaceListings: [],
+      targetMarketplaces: [],
+      aiGenerated: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    } satisfies Listing
+    const enriched = enrichEbayTitleTowardLimit(copy.title.value, draftListing)
+    if (enriched.length > copy.title.value.length) {
+      copy.title.value = enriched
+    }
+  }
   copy.description.value = appendConditionNotesSection(
     copy.description.value,
     fields.flaws?.value,

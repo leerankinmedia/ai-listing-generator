@@ -115,6 +115,8 @@ export interface ListingSpecifics {
   handlingTimeDays?: number
   /** Required when shippingMode is free. */
   freeShippingConfirmed?: boolean
+  /** When true, enable eBay Best Offer on the listing. */
+  allowOffers?: boolean
 }
 
 export interface SoldCompsEstimate {

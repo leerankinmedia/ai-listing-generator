@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { MARKETPLACES } from "@/lib/marketplaces"
 import type { DetectedFieldKey, Listing, MarketplaceId } from "@/lib/types"
+import { EBAY_TITLE_MAX } from "@/lib/listings/ebay-title"
+import { resolveListingSku } from "@/lib/listings/sku"
 import { cn } from "@/lib/utils"
 
 interface ListingEditorFormProps {
@@ -121,9 +123,9 @@ export function ListingEditorForm({
             id="title"
             value={listing.title}
             disabled={disabled}
-            maxLength={120}
+            maxLength={EBAY_TITLE_MAX}
             onChange={(e) => {
-              const value = e.target.value
+              const value = e.target.value.slice(0, EBAY_TITLE_MAX)
               const prev = listing.fieldConfidence?.title
               update({
                 title: value,
@@ -138,10 +140,36 @@ export function ListingEditorForm({
             placeholder="Brand + item + key attributes"
           />
           <p className="text-xs text-muted-foreground">
-            {listing.title.length}/120
+            {listing.title.length}/{EBAY_TITLE_MAX}
             {listing.fieldConfidence?.title?.rationale
               ? ` · ${listing.fieldConfidence.title.rationale}`
               : ""}
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="inventory-sku">Inventory SKU</Label>
+          <Input
+            id="inventory-sku"
+            value={resolveListingSku(listing) || ""}
+            disabled={disabled}
+            placeholder="Assigned on publish if empty"
+            onChange={(e) => {
+              const sku = e.target.value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 50)
+              update({
+                specifics: {
+                  ...listing.specifics,
+                  extras: {
+                    ...(listing.specifics.extras || {}),
+                    sku,
+                  },
+                },
+              })
+            }}
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Used as the eBay Custom Label. Imported eBay SKUs are preserved; new listings use your
+            ListWise SKU sequence.
           </p>
         </div>
 
@@ -194,22 +222,9 @@ export function ListingEditorForm({
 
       <CompsPricingPanel
         comps={listing.comps}
-        price={listing.price}
+        listing={listing}
         disabled={disabled}
-        onPriceChange={(price) => {
-          const prev = listing.fieldConfidence?.price
-          update({
-            price,
-            fieldConfidence: {
-              ...listing.fieldConfidence,
-              price: {
-                value: String(price),
-                confidence: prev?.confidence ?? listing.comps?.confidence ?? 1,
-                rationale: prev?.rationale ?? "Edited manually",
-              },
-            },
-          })
-        }}
+        onListingChange={onChange}
       />
 
       <section className="space-y-4">

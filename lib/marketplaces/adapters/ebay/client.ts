@@ -14,6 +14,8 @@ import type { EbayPackageWeightAndSize } from "@/lib/marketplaces/adapters/ebay/
 import { ebayApiBase } from "@/lib/marketplaces/adapters/ebay/oauth"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { ebayConditionDescription } from "@/lib/listings/condition-details"
+import { pickPublishSku } from "@/lib/listings/sku"
+import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
 
 export type EbayFetchInit = RequestInit & {
   contentLanguage?: string
@@ -23,10 +25,19 @@ export type EbayFetchInit = RequestInit & {
   skip25001Retry?: boolean
 }
 
+function listingQuantity(listing: Listing): number {
+  const raw =
+    listing.specifics.extras?.quantity ||
+    listing.specifics.extras?.ebayQuantity ||
+    "1"
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 1) return 1
+  return Math.min(999999, Math.floor(n))
+}
+
 export function mapListingToEbayInventory(listing: Listing) {
-  const { sku } = sanitizeEbayInventorySku(
-    listing.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 50) || `LW${Date.now()}`
-  )
+  const { sku } = sanitizeEbayInventorySku(pickPublishSku(listing))
+  const title = enrichEbayTitleTowardLimit(listing.title, listing)
 
   const aspects: Record<string, string[]> = {}
   if (listing.specifics.brand) aspects.Brand = [listing.specifics.brand]
@@ -46,10 +57,22 @@ export function mapListingToEbayInventory(listing: Listing) {
   // Black extra override a gray-family detection.
   const detectedColor =
     listing.fieldConfidence?.color?.value || listing.specifics.color
+  const skipExtraKeys = new Set([
+    "sku",
+    "quantity",
+    "ebaysku",
+    "ebayoriginalsku",
+    "ebayquantity",
+    "ebaylistingid",
+    "ebayofferid",
+    "source",
+    "allowoffers",
+  ])
   for (const [key, value] of Object.entries(listing.specifics.extras || {})) {
     const trimmed = value?.trim()
     if (!key.trim() || !trimmed) continue
     const keyLower = key.toLowerCase()
+    if (skipExtraKeys.has(keyLower) || keyLower.startsWith("ebay")) continue
     const isColor = keyLower === "color" || keyLower === "colour"
     if (
       isColor &&
@@ -66,7 +89,7 @@ export function mapListingToEbayInventory(listing: Listing) {
     inventoryItem: {
       availability: {
         shipToLocationAvailability: {
-          quantity: 1,
+          quantity: listingQuantity(listing),
         },
       },
       condition: mapCondition(listing.specifics.condition),
@@ -76,7 +99,7 @@ export function mapListingToEbayInventory(listing: Listing) {
         listing.fieldConfidence?.flaws?.confidence
       ),
       product: {
-        title: listing.title.slice(0, 80),
+        title: title.slice(0, 80),
         description: listing.description,
         aspects,
         // Populated by adapter after EPS / Media API upload
@@ -161,18 +184,26 @@ export function mapListingToEbayOffer(
     )
   }
 
+  const qty = listingQuantity(listing)
+  const allowOffers =
+    listing.specifics.allowOffers === true ||
+    listing.specifics.extras?.allowOffers === "true"
+
   return {
     sku,
     marketplaceId,
     format: "FIXED_PRICE" as const,
     listingDuration: "GTC",
-    availableQuantity: 1,
+    availableQuantity: qty,
     categoryId: categoryId.trim(),
     listingDescription: listing.description,
     listingPolicies: {
       fulfillmentPolicyId: policies.fulfillmentPolicyId,
       paymentPolicyId: policies.paymentPolicyId,
       returnPolicyId: policies.returnPolicyId,
+      bestOfferTerms: {
+        bestOfferEnabled: allowOffers,
+      },
     },
     merchantLocationKey,
     pricingSummary: {

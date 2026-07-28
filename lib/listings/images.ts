@@ -176,7 +176,15 @@ export async function createListingImageFromFile(
     throw new Error("Please choose image files only.")
   }
   const id = createImageId()
-  const objectUrl = registerOriginalPhoto(id, file, file.name || "photo.jpg")
+  const { normalizeImageOrientation } = await import(
+    "@/lib/listings/image-orientation"
+  )
+  const oriented = await normalizeImageOrientation(file, file.name || "photo.jpg")
+  const objectUrl = registerOriginalPhoto(
+    id,
+    oriented.blob,
+    oriented.fileName
+  )
   return {
     id,
     url: objectUrl,

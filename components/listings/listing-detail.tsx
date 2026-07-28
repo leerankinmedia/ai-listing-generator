@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
-import { ArrowLeft, Loader2, Save, Trash2 } from "lucide-react"
+import { ArrowLeft, Loader2, Rocket, Save, Trash2 } from "lucide-react"
 import { ImageUploader } from "@/components/listings/image-uploader"
 import { ListingEditorForm } from "@/components/listings/listing-editor-form"
 import { OneClickPublishBar } from "@/components/listings/one-click-publish-bar"
@@ -12,6 +12,7 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { useAuth } from "@/components/auth/auth-provider"
 import { fetchListing, persistListing, removeListing } from "@/lib/listings/repository"
 import { listingIsReadyToPublish } from "@/lib/listings/publish"
+import { applyLastShippingPresetToListing } from "@/lib/listings/shipping-package"
 import type { Listing } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -63,7 +64,7 @@ export function ListingDetail({ listingId }: { listingId: string }) {
         if (!row || (user && row.userId !== user.id)) {
           setListing(null)
         } else {
-          setListing(normalizeListing(row))
+          setListing(applyLastShippingPresetToListing(normalizeListing(row)))
         }
       } finally {
         if (mounted) setLoading(false)
@@ -284,17 +285,21 @@ export function ListingDetail({ listingId }: { listingId: string }) {
           disabled={saving}
         >
           {saving ? <Loader2 className="animate-spin" /> : <Save />}
-          Save as draft
+          Draft
         </Button>
         <Button
           variant="accent"
           size="sm"
-          className="flex-1"
-          onClick={() => void handleSave("ready")}
+          className="min-w-[40%] flex-[1.4]"
+          onClick={() => {
+            document
+              .getElementById("listwise-publish")
+              ?.scrollIntoView({ behavior: "smooth", block: "start" })
+          }}
           disabled={saving}
         >
-          {saving ? <Loader2 className="animate-spin" /> : <Save />}
-          Save listing
+          <Rocket />
+          Publish
         </Button>
       </div>
       )}

@@ -18,7 +18,10 @@ export function CompsPricingPanel({
   disabled?: boolean
 }) {
   const price = listing.price
-  const quantity = Number(listing.specifics.extras?.quantity ?? 1)
+  const quantityRaw = Number(listing.specifics.extras?.quantity ?? 1)
+  const quantity =
+    Number.isFinite(quantityRaw) && quantityRaw > 0 ? quantityRaw : 1
+  // Default No — never leave both offer buttons inactive.
   const allowOffers = listing.specifics.allowOffers === true
 
   function patch(partial: Partial<Listing> & { specifics?: Listing["specifics"] }) {
@@ -108,8 +111,8 @@ export function CompsPricingPanel({
                 integer
                 min={1}
                 disabled={disabled}
-                value={Number.isFinite(quantity) && quantity > 0 ? quantity : null}
-                placeholder="e.g. 1"
+                value={quantity}
+                placeholder="1"
                 onValueChange={(n) =>
                   patch({
                     specifics: {
@@ -195,8 +198,8 @@ export function CompsPricingPanel({
                 integer
                 min={1}
                 disabled={disabled}
-                value={Number.isFinite(quantity) && quantity > 0 ? quantity : null}
-                placeholder="e.g. 1"
+                value={quantity}
+                placeholder="1"
                 onValueChange={(n) =>
                   patch({
                     specifics: {

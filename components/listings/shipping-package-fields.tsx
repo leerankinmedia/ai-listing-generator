@@ -1,14 +1,17 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { NullableNumberInput } from "@/components/ui/nullable-number-input"
 import {
   DEFAULT_EBAY_PACKAGE_TYPE,
+  getLastShippingPreset,
   missingShippingPackageFields,
   readShippingPresets,
+  rememberLastShippingPackage,
   saveShippingPreset,
+  shippingPackageIsComplete,
   type ShippingPackage,
   type ShippingPackagePreset,
 } from "@/lib/listings/shipping-package"
@@ -38,13 +41,16 @@ export function ShippingPackageFields({
   compact?: boolean
 }) {
   const pkg = listing.specifics.shippingPackage
-  const [presets, setPresets] = useState<ShippingPackagePreset[]>([])
+  const [presets, setPresets] = useState<ShippingPackagePreset[]>(() =>
+    typeof window !== "undefined" ? readShippingPresets() : []
+  )
+  const [lastPreset, setLastPreset] = useState<ShippingPackagePreset | null>(() =>
+    typeof window !== "undefined" ? getLastShippingPreset() : null
+  )
   const [presetName, setPresetName] = useState("")
+  const [savePresetOpen, setSavePresetOpen] = useState(false)
   const missing = missingShippingPackageFields(pkg)
-
-  useEffect(() => {
-    setPresets(readShippingPresets())
-  }, [])
+  const packageComplete = shippingPackageIsComplete(pkg)
 
   function patchPackage(partial: Partial<ShippingPackage>) {
     const current = pkg || blankPackage()
@@ -52,6 +58,10 @@ export function ShippingPackageFields({
       ...current,
       ...partial,
       packageType: current.packageType || DEFAULT_EBAY_PACKAGE_TYPE,
+    }
+    if (shippingPackageIsComplete(next)) {
+      rememberLastShippingPackage(next)
+      setLastPreset(getLastShippingPreset())
     }
     onChange({
       ...listing,
@@ -63,9 +73,7 @@ export function ShippingPackageFields({
     })
   }
 
-  function applyPreset(id: string) {
-    const preset = presets.find((p) => p.id === id)
-    if (!preset) return
+  function applyPreset(preset: ShippingPackagePreset) {
     patchPackage({
       weightPounds: preset.weightPounds,
       weightOunces: preset.weightOunces,
@@ -88,8 +96,11 @@ export function ShippingPackageFields({
       heightInches: current.heightInches ?? 0,
       packageType: current.packageType || DEFAULT_EBAY_PACKAGE_TYPE,
     })
+    rememberLastShippingPackage(updated[0])
     setPresets(updated)
+    setLastPreset(getLastShippingPreset())
     setPresetName("")
+    setSavePresetOpen(false)
   }
 
   return (
@@ -98,21 +109,37 @@ export function ShippingPackageFields({
         <div>
           <h3 className="text-sm font-semibold">Weight & dimensions</h3>
           <p className="text-xs text-muted-foreground">
-            Enter packed weight and size — ListWise does not invent these for AI or
-            imported clothing.
+            Enter packed weight and size — ListWise reuses your last package on the
+            next listing.
           </p>
         </div>
       )}
 
+      {!packageComplete && lastPreset && (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => applyPreset(lastPreset)}
+          className="flex h-11 w-full items-center justify-center rounded-lg border border-accent/40 bg-accent/10 px-4 text-sm font-medium hover:bg-accent/15 disabled:opacity-50"
+        >
+          Use last package ({lastPreset.weightPounds ?? 0} lb{" "}
+          {lastPreset.weightOunces ?? 0} oz · {lastPreset.lengthInches}×
+          {lastPreset.widthInches}×{lastPreset.heightInches} in)
+        </button>
+      )}
+
       {presets.length > 0 && (
         <div className="space-y-2">
-          <Label htmlFor="shipping-preset">Saved package preset</Label>
+          <Label htmlFor="shipping-preset">Other saved presets</Label>
           <select
             id="shipping-preset"
             disabled={disabled}
             defaultValue=""
             onChange={(e) => {
-              if (e.target.value) applyPreset(e.target.value)
+              if (e.target.value) {
+                const preset = presets.find((p) => p.id === e.target.value)
+                if (preset) applyPreset(preset)
+              }
               e.target.value = ""
             }}
             className="flex h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -142,14 +169,16 @@ export function ShippingPackageFields({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="weight-ounces">Weight ounces</Label>
+          <Label htmlFor="weight-ounces">
+            Weight ounces <span className="font-normal text-muted-foreground">(optional)</span>
+          </Label>
           <NullableNumberInput
             id="weight-ounces"
             min={0}
             step="0.1"
             disabled={disabled}
             value={pkg ? pkg.weightOunces : null}
-            placeholder="e.g. 8"
+            placeholder="0 if blank"
             onValueChange={(n) => patchPackage({ weightOunces: n })}
           />
         </div>
@@ -197,25 +226,37 @@ export function ShippingPackageFields({
         </p>
       )}
 
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-        <div className="flex-1 space-y-2">
-          <Label htmlFor="preset-name">Save as preset (optional)</Label>
-          <Input
-            id="preset-name"
-            disabled={disabled || missing.length > 0}
-            value={presetName}
-            placeholder="e.g. Soft poly mailer"
-            onChange={(e) => setPresetName(e.target.value)}
-          />
-        </div>
+      <div className="space-y-2">
         <button
           type="button"
           disabled={disabled || missing.length > 0}
-          onClick={handleSavePreset}
-          className="h-11 rounded-lg border border-border bg-card px-4 text-sm font-medium hover:bg-secondary disabled:opacity-50"
+          onClick={() => setSavePresetOpen((o) => !o)}
+          className="text-xs font-medium text-muted-foreground underline-offset-2 hover:underline disabled:opacity-50"
         >
-          Save preset
+          {savePresetOpen ? "Hide save preset" : "Save as named preset…"}
         </button>
+        {savePresetOpen && (
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <div className="flex-1 space-y-2">
+              <Label htmlFor="preset-name">Preset name</Label>
+              <Input
+                id="preset-name"
+                disabled={disabled || missing.length > 0}
+                value={presetName}
+                placeholder="e.g. Soft poly mailer"
+                onChange={(e) => setPresetName(e.target.value)}
+              />
+            </div>
+            <button
+              type="button"
+              disabled={disabled || missing.length > 0}
+              onClick={handleSavePreset}
+              className="h-11 rounded-lg border border-border bg-card px-4 text-sm font-medium hover:bg-secondary disabled:opacity-50"
+            >
+              Save preset
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

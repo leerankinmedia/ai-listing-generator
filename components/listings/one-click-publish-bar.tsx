@@ -18,6 +18,11 @@ import {
 } from "@/components/listings/ebay-shipping-section"
 import { ShippingPackageFields } from "@/components/listings/shipping-package-fields"
 import { PrePublishReviewCard } from "@/components/listings/pre-publish-review"
+import {
+  applyLastShippingPresetToListing,
+  rememberLastShippingPackage,
+  shippingPackageIsComplete,
+} from "@/lib/listings/shipping-package"
 import { ensureListingInventorySku } from "@/lib/listings/sku"
 import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
 import {
@@ -98,6 +103,15 @@ export function OneClickPublishBar({
   useEffect(() => {
     void loadConnections()
   }, [loadConnections])
+
+  // Auto-apply last package once — Vendoo/Nifty-style shipping defaults.
+  useEffect(() => {
+    if (!onListingChange) return
+    if (shippingPackageIsComplete(listing.specifics.shippingPackage)) return
+    const withPackage = applyLastShippingPresetToListing(listing)
+    if (withPackage !== listing) onListingChange(withPackage)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per listing id
+  }, [listing.id])
 
   // Enrich title toward 80 chars when eBay is selected — never auto-fill SKU
   // unless account settings enable automatic SKU generation.
@@ -292,6 +306,14 @@ export function OneClickPublishBar({
                 publishResults,
                 user.id
               )
+        if (
+          listingForPublish.specifics.shippingPackage &&
+          shippingPackageIsComplete(listingForPublish.specifics.shippingPackage)
+        ) {
+          rememberLastShippingPackage(
+            listingForPublish.specifics.shippingPackage
+          )
+        }
         onListingChange?.(fromServer)
         try {
           const saved = await persistListing(fromServer)
@@ -309,14 +331,22 @@ export function OneClickPublishBar({
 
   const available = MARKETPLACES.filter((m) => PHASE5_IDS.includes(m.id))
   const unresolved = aspectMeta?.missing || []
+  const connectedAvailable = available.filter((m) => connectedIds.has(m.id))
+  const showMarketplacePicker = connectedAvailable.length > 1
 
   return (
-    <section className="space-y-4 rounded-2xl border border-border bg-card/70 p-4 sm:p-5">
+    <section
+      id="listwise-publish"
+      className="scroll-mt-24 space-y-4 rounded-2xl border border-border bg-card/70 p-4 sm:p-5"
+    >
       <div>
         <h2 className="font-display text-lg font-semibold">Publish</h2>
         <p className="text-sm text-muted-foreground">
-          Select connected marketplaces, set shipping, and review the summary — edit
-          item specifics in the form above.{" "}
+          {showMarketplacePicker
+            ? "Select connected marketplaces, confirm shipping, then publish."
+            : connectedAvailable.length === 1
+              ? `Publishing to ${connectedAvailable[0].shortName}. Confirm shipping if needed, then publish.`
+              : "Connect a marketplace, set shipping, then publish."}{" "}
           <Link
             href="/dashboard/connections"
             className="underline underline-offset-2"
@@ -339,7 +369,7 @@ export function OneClickPublishBar({
           </Link>{" "}
           page first.
         </p>
-      ) : (
+      ) : showMarketplacePicker ? (
         <div className="flex flex-wrap gap-2">
           {available.map((m) => {
             const isConnected = connectedIds.has(m.id)
@@ -368,6 +398,13 @@ export function OneClickPublishBar({
             )
           })}
         </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Destination:{" "}
+          <span className="font-medium text-foreground">
+            {connectedAvailable[0]?.shortName}
+          </span>
+        </p>
       )}
 
       {ebaySelected && onListingChange && (
@@ -375,8 +412,8 @@ export function OneClickPublishBar({
           <div>
             <h3 className="text-sm font-semibold">Shipping</h3>
             <p className="text-xs text-muted-foreground">
-              Calculated, Flat, or Free — plus handling time, weight, and dimensions.
-              Numeric fields stay blank until you enter them.
+              Calculated shipping and 1-day handling are preselected. Weight and size
+              reuse your last package when available.
             </p>
           </div>
           <EbayShippingModeFields
@@ -419,6 +456,7 @@ export function OneClickPublishBar({
       <div className="flex justify-end">
         <Button
           variant="accent"
+          className="w-full sm:w-auto"
           disabled={
             disabled ||
             publishing ||

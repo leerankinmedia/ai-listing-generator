@@ -15,6 +15,7 @@ import { uploadAnalyzeImagesIndividually } from "@/lib/listings/analyze-client"
 import { ensureDurableOriginalImageUrls } from "@/lib/listings/durable-images"
 import { createEmptyListing, withImages } from "@/lib/listings/local-db"
 import { mapDraftToListingFields } from "@/lib/listings/map-draft"
+import { hydrateListingEbayAspects } from "@/lib/listings/hydrate-ebay-aspects"
 import { persistListing } from "@/lib/listings/repository"
 import { listingIsReadyToPublish } from "@/lib/listings/publish"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
@@ -157,12 +158,12 @@ export function ListingGenerator() {
       }
 
       const draft = payload.draft as GeneratedListingOutput
-      setProgressPercent(100)
-      setProgressMessage("Building your listing")
+      setProgressPercent(92)
+      setProgressMessage("Completing eBay item specifics")
 
       const mapped = mapDraftToListingFields(draft)
       const base = createEmptyListing(user.id)
-      const next = withImages(base, ordered, {
+      let next = withImages(base, ordered, {
         title: mapped.title,
         description: mapped.description,
         price: mapped.price,
@@ -185,11 +186,24 @@ export function ListingGenerator() {
         throw new Error("Mapped listing title was empty after AI analysis.")
       }
 
+      // AI employee: fill Taxonomy aspects before the seller sees the edit page.
+      const hydrated = await hydrateListingEbayAspects(next)
+      next = hydrated.listing
+      setProgressPercent(100)
+      setProgressMessage("Building your listing")
+
       if (payload.warnings?.length) {
         setNotice(payload.warnings.join(" "))
       } else if (payload.partial) {
         setNotice(
           "Partial analysis: some photos could not be read. Review the draft carefully."
+        )
+      } else if (hydrated.ok && hydrated.summary.total > 0) {
+        const n = hydrated.summary.needsAttention
+        setNotice(
+          n === 0
+            ? `AI completed ${hydrated.summary.completed}/${hydrated.summary.total} item specifics.`
+            : `AI completed ${hydrated.summary.completed}/${hydrated.summary.total} item specifics. Only ${n} need your attention.`
         )
       }
 
@@ -254,8 +268,8 @@ export function ListingGenerator() {
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {step === "upload"
-              ? `Upload 1–${MAX_LISTING_IMAGES} photos to create an editable listing draft.`
-              : "Edit any field — title, description, specifics, price, keywords, flaws — then save."}
+              ? `Upload 1–${MAX_LISTING_IMAGES} photos — AI fills the listing like an employee.`
+              : "Quick review: AI already filled most fields. Confirm anything marked Review, then publish."}
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -336,8 +350,8 @@ export function ListingGenerator() {
           <div className="rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-sm">
             <p className="font-medium text-foreground">{listing.title}</p>
             <p className="mt-1 text-muted-foreground">
-              Draft ready from your photos. Every field below is editable before
-              saving.
+              AI filled this listing from your photos. Confirm anything marked Review —
+              most clothing listings need under 10 seconds.
             </p>
           </div>
           {notice && (

@@ -213,8 +213,8 @@ export function ListingEditorForm({
         <div>
           <h2 className="font-display text-lg font-semibold">Item specifics</h2>
           <p className="text-sm text-muted-foreground">
-            High-confidence values auto-fill from your photos. You only review fields
-            AI couldn&apos;t determine — everything else folds under More item specifics.
+            Your AI employee already filled what it could from photos, OCR, title, and
+            description. Confirm Review items — everything else is ready.
           </p>
         </div>
 

@@ -2,10 +2,12 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
   ASPECT_AUTO_FILL_CONFIDENCE,
+  ASPECT_REVIEW_CONFIDENCE,
   autoFillHighConfidenceAspects,
   classifyAspectField,
-  countCompletedAspects,
+  formatAiEmployeeBanner,
   splitAspectFieldsForDisplay,
+  summarizeAiEmployeeAspects,
   validateAspectsAgainstOptions,
   type EbayAspectFormField,
 } from "@/lib/listings/ebay-aspect-fields"
@@ -37,13 +39,13 @@ function baseListing(partial: Partial<Listing> = {}): Listing {
       },
     },
     fieldConfidence: {
-      brand: { value: "Levi's", confidence: 0.95 },
-      style: { value: "straight-leg jeans", confidence: 0.94 },
-      color: { value: "Blue", confidence: 0.96 },
-      gender: { value: "Men", confidence: 0.93 },
-      size: { value: "32", confidence: 0.91 },
-      pattern: { value: "Solid", confidence: 0.92 },
-      material: { value: "Cotton", confidence: 0.9 },
+      brand: { value: "Levi's", confidence: 0.97 },
+      style: { value: "straight-leg jeans", confidence: 0.96 },
+      color: { value: "Blue", confidence: 0.98 },
+      gender: { value: "Men", confidence: 0.96 },
+      size: { value: "32", confidence: 0.97 },
+      pattern: { value: "Solid", confidence: 0.8 },
+      material: { value: "Cotton", confidence: 0.82 },
     },
     images: [],
     status: "draft",
@@ -56,56 +58,30 @@ function baseListing(partial: Partial<Listing> = {}): Listing {
   }
 }
 
-describe("splitAspectFieldsForDisplay", () => {
-  it("only surfaces required fields that need user input on the main page", () => {
-    const fields: EbayAspectFormField[] = [
-      { name: "Brand", required: true, value: "Levi's", allowedValues: ["Levi's", "Nike"] },
-      { name: "Size", required: true, value: "32" },
-      { name: "Style", required: false, value: "Straight", allowedValues: ["Straight", "Skinny"] },
-      { name: "Color", required: true, value: "Blue", allowedValues: ["Blue", "Black"] },
-      { name: "Department", required: true, value: "Men", allowedValues: ["Men", "Women"] },
-      { name: "Type", required: false, value: "Jeans" },
-      { name: "Pattern", required: false, value: "Solid" },
-      { name: "Material", required: false, value: "Cotton" },
-      { name: "Theme", required: true },
-      { name: "Vintage", required: false },
-    ]
-    const listing = baseListing()
-    const { primary, more, autoFilledCount } = splitAspectFieldsForDisplay(
-      fields,
-      listing
-    )
-    assert.equal(primary.length, 1)
-    assert.equal(primary[0]?.field.name, "Theme")
-    assert.ok(autoFilledCount >= 7)
-    assert.ok(more.every((v) => v.field.name !== "Vintage"))
-    assert.ok(more.some((v) => v.field.name === "Brand"))
-  })
-
-  it("hides empty optional dropdowns entirely", () => {
-    const fields: EbayAspectFormField[] = [
-      { name: "Brand", required: true, value: "Levi's" },
-      { name: "Inseam", required: false },
-      { name: "Season", required: false },
-    ]
-    const { primary, more, hiddenBlankOptional } = splitAspectFieldsForDisplay(
-      fields,
-      baseListing()
-    )
-    assert.equal(primary.length, 0)
-    assert.ok(!more.some((v) => v.field.name === "Inseam"))
-    assert.ok(hiddenBlankOptional >= 2)
+describe("confidence tiers", () => {
+  it("uses 95% auto-fill and 70% review thresholds", () => {
+    assert.equal(ASPECT_AUTO_FILL_CONFIDENCE, 0.95)
+    assert.equal(ASPECT_REVIEW_CONFIDENCE, 0.7)
   })
 })
 
-describe("classifyAspectField", () => {
-  it("marks filled values as auto_filled", () => {
+describe("classifyAspectField tiers", () => {
+  it("marks ≥95% filled values as auto_filled", () => {
     const view = classifyAspectField(
       { name: "Brand", required: true, value: "Levi's" },
       baseListing()
     )
     assert.equal(view.status, "auto_filled")
-    assert.equal(view.value, "Levi's")
+  })
+
+  it("marks 70–94% filled values as needs_review", () => {
+    const view = classifyAspectField(
+      { name: "Pattern", required: false, value: "Solid" },
+      baseListing()
+    )
+    assert.equal(view.status, "needs_review")
+    assert.ok((view.confidence || 0) >= 0.7)
+    assert.ok((view.confidence || 0) < 0.95)
   })
 
   it("marks empty required as needs_input", () => {
@@ -117,9 +93,30 @@ describe("classifyAspectField", () => {
   })
 })
 
+describe("splitAspectFieldsForDisplay", () => {
+  it("puts Review + blank required on the main page; auto-filled in More", () => {
+    const fields: EbayAspectFormField[] = [
+      { name: "Brand", required: true, value: "Levi's" },
+      { name: "Color", required: true, value: "Blue" },
+      { name: "Pattern", required: false, value: "Solid" },
+      { name: "Material", required: false, value: "Cotton" },
+      { name: "Theme", required: true },
+      { name: "Inseam", required: false },
+    ]
+    const { primary, more, autoFilledCount, reviewCount } =
+      splitAspectFieldsForDisplay(fields, baseListing())
+    assert.ok(primary.some((v) => v.field.name === "Theme"))
+    assert.ok(primary.some((v) => v.field.name === "Pattern"))
+    assert.ok(primary.some((v) => v.field.name === "Material"))
+    assert.ok(more.some((v) => v.field.name === "Brand"))
+    assert.ok(autoFilledCount >= 2)
+    assert.ok(reviewCount >= 2)
+    assert.ok(!more.some((v) => v.field.name === "Inseam"))
+  })
+})
+
 describe("autoFillHighConfidenceAspects", () => {
-  it("selects exact eBay options when confidence ≥ 90%", () => {
-    assert.ok(ASPECT_AUTO_FILL_CONFIDENCE >= 0.9)
+  it("auto-selects at ≥95%", () => {
     const listing = baseListing({
       specifics: {
         brand: "Levi's",
@@ -128,9 +125,9 @@ describe("autoFillHighConfidenceAspects", () => {
         extras: {},
       },
       fieldConfidence: {
-        brand: { value: "Levi's", confidence: 0.95 },
-        style: { value: "straight-leg jeans", confidence: 0.94 },
-        color: { value: "Blue", confidence: 0.96 },
+        brand: { value: "Levi's", confidence: 0.97 },
+        style: { value: "straight-leg jeans", confidence: 0.96 },
+        color: { value: "Blue", confidence: 0.98 },
       },
     })
     const fields: EbayAspectFormField[] = [
@@ -153,11 +150,30 @@ describe("autoFillHighConfidenceAspects", () => {
     const next = autoFillHighConfidenceAspects(listing, fields)
     assert.equal(next.specifics.extras?.Brand, "Levi's")
     assert.equal(next.specifics.extras?.Style, "Straight")
-    assert.equal(next.specifics.style, "Straight")
     assert.equal(next.specifics.extras?.Color, "Blue")
   })
 
-  it("does not auto-fill when confidence is below 90%", () => {
+  it("preselects at 70–94% for Review", () => {
+    const listing = baseListing({
+      specifics: { pattern: "Solid", extras: {} },
+      fieldConfidence: {
+        pattern: { value: "Solid", confidence: 0.8 },
+      },
+    })
+    const fields: EbayAspectFormField[] = [
+      {
+        name: "Pattern",
+        required: false,
+        allowedValues: ["Solid", "Striped", "Plaid"],
+      },
+    ]
+    const next = autoFillHighConfidenceAspects(listing, fields)
+    assert.equal(next.specifics.extras?.Pattern, "Solid")
+    const view = classifyAspectField(fields[0], next)
+    assert.equal(view.status, "needs_review")
+  })
+
+  it("leaves blank under 70%", () => {
     const listing = baseListing({
       specifics: { style: "maybe skinny", extras: {} },
       fieldConfidence: {
@@ -176,22 +192,24 @@ describe("autoFillHighConfidenceAspects", () => {
   })
 })
 
-describe("countCompletedAspects", () => {
-  it("reports completed of total for SEO collapse label", () => {
+describe("AI employee banner", () => {
+  it("formats completed / attention copy", () => {
     const fields: EbayAspectFormField[] = [
       { name: "Brand", required: true, value: "Levi's" },
-      { name: "Size", required: true, value: "32" },
-      { name: "Style", required: false, value: "Straight" },
-      { name: "Inseam", required: false },
+      { name: "Color", required: true, value: "Blue" },
+      { name: "Pattern", required: false, value: "Solid" },
+      { name: "Theme", required: true },
     ]
-    const counts = countCompletedAspects(fields, baseListing())
-    assert.ok(counts.completed >= 3)
-    assert.ok(counts.total >= 3)
+    const summary = summarizeAiEmployeeAspects(fields, baseListing())
+    const banner = formatAiEmployeeBanner(summary)
+    assert.match(banner, /AI completed \d+\/\d+ item specifics/)
+    assert.match(banner, /need your attention|Ready to publish/)
+    assert.ok(summary.needsAttention >= 1)
   })
 })
 
 describe("validateAspectsAgainstOptions", () => {
-  it("clears invalid selection values silently and keeps missing required", () => {
+  it("clears invalid selection values silently", () => {
     const listing = baseListing({
       specifics: {
         brand: "Levi's",
@@ -218,6 +236,5 @@ describe("validateAspectsAgainstOptions", () => {
     const result = validateAspectsAgainstOptions(listing, fields)
     assert.ok(result.cleared.includes("Style"))
     assert.ok(result.missingRequired.includes("Style"))
-    assert.ok(!result.missingRequired.includes("Color"))
   })
 })

@@ -1,22 +1,22 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Check, ChevronDown, ChevronRight } from "lucide-react"
+import { Check, ChevronDown, ChevronRight, Sparkles } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
-  applyExactAspectsToListing,
-  autoFillHighConfidenceAspects,
-  countCompletedAspects,
+  formatAiEmployeeBanner,
   readAspectValue,
   resolveSelectValue,
   splitAspectFieldsForDisplay,
+  summarizeAiEmployeeAspects,
   validateAspectsAgainstOptions,
   writeAspectValue,
   type AspectFieldView,
+  type AiEmployeeAspectSummary,
   type EbayAspectFormField,
 } from "@/lib/listings/ebay-aspect-fields"
-import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
+import { hydrateListingEbayAspects } from "@/lib/listings/hydrate-ebay-aspects"
 import type { Listing } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -24,6 +24,8 @@ type AspectsMeta = {
   missing: string[]
   filled: number
   total: number
+  needsAttention?: number
+  banner?: string
 }
 
 function computeMissing(
@@ -49,11 +51,7 @@ function computeMissing(
     .map((f) => f.name)
 }
 
-function StatusBadge({
-  status,
-}: {
-  status: AspectFieldView["status"]
-}) {
+function StatusBadge({ status }: { status: AspectFieldView["status"] }) {
   if (status === "auto_filled") {
     return (
       <span className="inline-flex items-center gap-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
@@ -62,7 +60,14 @@ function StatusBadge({
       </span>
     )
   }
-  if (status === "needs_input" || status === "needs_review") {
+  if (status === "needs_review") {
+    return (
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+        Review
+      </span>
+    )
+  }
+  if (status === "needs_input") {
     return (
       <span className="text-[11px] font-semibold uppercase tracking-wide text-destructive">
         Needs Review
@@ -72,7 +77,6 @@ function StatusBadge({
   return null
 }
 
-/** Editable control — only used when the seller must act. */
 function AspectFieldEditor({
   view,
   listing,
@@ -126,7 +130,6 @@ function AspectFieldEditor({
   )
 }
 
-/** Compact read-only row for auto-filled values inside More. */
 function AutoFilledRow({
   view,
   listing,
@@ -169,190 +172,150 @@ function AutoFilledRow({
   )
 }
 
+function AiEmployeeBanner({ summary }: { summary: AiEmployeeAspectSummary }) {
+  const text = formatAiEmployeeBanner(summary)
+  return (
+    <div
+      className="flex items-start gap-2.5 rounded-xl border border-accent/30 bg-accent/10 px-3.5 py-3"
+      role="status"
+    >
+      <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
+      <div>
+        <p className="text-sm font-medium text-foreground">{text}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          ≥95% auto-filled · 70–94% preselected for Review · under 70% left blank
+        </p>
+      </div>
+    </div>
+  )
+}
+
 /**
- * One-minute listing UX: only ask for required fields AI cannot determine.
- * High-confidence (≥90%) values auto-select exact eBay options and collapse.
+ * AI-employee item specifics: hydrate from Taxonomy, show attention-only fields.
  */
 export function EbayItemSpecificsFields({
   listing,
   onChange,
   disabled,
   onMetaChange,
+  /** When true, skip re-fetch (listing already hydrated before edit page). */
+  skipHydrate,
+  initialFields,
+  initialSummary,
 }: {
   listing: Listing
   onChange: (listing: Listing) => void
   disabled?: boolean
   onMetaChange?: (meta: AspectsMeta) => void
+  skipHydrate?: boolean
+  initialFields?: EbayAspectFormField[]
+  initialSummary?: AiEmployeeAspectSummary
 }) {
-  const [fields, setFields] = useState<EbayAspectFormField[]>([])
-  const [loading, setLoading] = useState(false)
+  const [fields, setFields] = useState<EbayAspectFormField[]>(
+    initialFields || []
+  )
+  const [summary, setSummary] = useState<AiEmployeeAspectSummary>(
+    initialSummary || {
+      completed: 0,
+      total: 0,
+      needsAttention: 0,
+      autoFilled: 0,
+      review: 0,
+    }
+  )
+  const [loading, setLoading] = useState(!initialFields?.length)
   const [error, setError] = useState<string | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
   const [editingNames, setEditingNames] = useState<Set<string>>(new Set())
-  const appliedKeyRef = useRef<string>("")
+  const hydratedIdRef = useRef<string>("")
   const onMetaChangeRef = useRef(onMetaChange)
   const onChangeRef = useRef(onChange)
   onMetaChangeRef.current = onMetaChange
   onChangeRef.current = onChange
 
   useEffect(() => {
+    if (skipHydrate && initialFields?.length) {
+      setFields(initialFields)
+      if (initialSummary) setSummary(initialSummary)
+      setLoading(false)
+      return
+    }
+
+    const hydrateKey = `${listing.id}:${listing.specifics.category || ""}`
+    if (hydratedIdRef.current === hydrateKey && fields.length > 0) return
+
     let cancelled = false
     setLoading(true)
     setError(null)
 
-    void fetch("/api/marketplaces/ebay/aspects-preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ listing }),
+    void hydrateListingEbayAspects(listing).then((result) => {
+      if (cancelled) return
+      hydratedIdRef.current = hydrateKey
+      setFields(result.formFields)
+      setSummary(result.summary)
+      setLoading(false)
+
+      if (!result.ok && result.skippedReason === "ebay_not_connected") {
+        setFields([])
+        onMetaChangeRef.current?.({ missing: [], filled: 0, total: 0 })
+        return
+      }
+      if (!result.ok && result.formFields.length === 0) {
+        setError("Could not load eBay item specifics.")
+        return
+      }
+
+      if (
+        JSON.stringify(result.listing.specifics) !==
+          JSON.stringify(listing.specifics) ||
+        result.listing.title !== listing.title
+      ) {
+        onChangeRef.current(result.listing)
+      }
+
+      onMetaChangeRef.current?.({
+        missing: result.summary.needsAttention
+          ? result.formFields
+              .filter((f) => {
+                if (!f.required) return false
+                return !readAspectValue(result.listing, f.name).trim()
+              })
+              .map((f) => f.name)
+          : [],
+        filled: result.summary.completed,
+        total: result.summary.total,
+        needsAttention: result.summary.needsAttention,
+        banner: formatAiEmployeeBanner(result.summary),
+      })
     })
-      .then(async (res) => {
-        if (cancelled) return
-        if (!res.ok) {
-          const json = (await res.json().catch(() => ({}))) as {
-            error?: string
-            code?: string
-          }
-          if (json.code === "ebay_not_connected") {
-            setFields([])
-            onMetaChangeRef.current?.({ missing: [], filled: 0, total: 0 })
-            return
-          }
-          setError(json.error || "Could not load eBay item specifics.")
-          return
-        }
-        const json = (await res.json()) as {
-          formFields?: EbayAspectFormField[]
-          resolvedFields?: Array<{ name: string; value: string }>
-          missingRequiredNames?: string[]
-          seoCompleted?: number
-          seoTotal?: number
-          suggestedTitle?: string
-        }
-        const formFields = json.formFields || []
-        setFields(formFields)
-
-        const optionsByName = new Map<string, string[]>()
-        for (const field of formFields) {
-          if (field.allowedValues?.length) {
-            optionsByName.set(field.name.toLowerCase(), field.allowedValues)
-          }
-        }
-
-        const fromResolved = json.resolvedFields || []
-        const fromSuggested = formFields
-          .filter((f) => f.suggestedValue || f.value)
-          .map((f) => ({
-            name: f.name,
-            value: (f.value || f.suggestedValue || "").trim(),
-          }))
-          .filter((f) => f.value)
-
-        const fromNormalized = formFields.flatMap((f) => {
-          const options = f.allowedValues || []
-          if (options.length === 0) return []
-          const raw = readAspectValue(listing, f.name)
-          const exact = resolveSelectValue(
-            f.name,
-            raw,
-            options,
-            f.suggestedValue || f.value
-          )
-          return exact ? [{ name: f.name, value: exact }] : []
-        })
-
-        const merged = [...fromResolved, ...fromSuggested, ...fromNormalized]
-        const applyKey = JSON.stringify(
-          merged.map((m) => `${m.name}=${m.value}`).sort()
-        )
-
-        let nextListing = listing
-        if (merged.length > 0 && applyKey !== appliedKeyRef.current) {
-          appliedKeyRef.current = applyKey
-          nextListing = applyExactAspectsToListing(
-            listing,
-            merged,
-            optionsByName
-          )
-        }
-
-        // ≥90% confidence → force exact eBay selection without user interaction.
-        nextListing = autoFillHighConfidenceAspects(nextListing, formFields)
-
-        const validated = validateAspectsAgainstOptions(nextListing, formFields)
-        nextListing = validated.listing
-
-        const suggested =
-          json.suggestedTitle ||
-          enrichEbayTitleTowardLimit(nextListing.title, nextListing)
-        if (
-          suggested &&
-          suggested !== nextListing.title &&
-          suggested.length <= 80
-        ) {
-          if (
-            (suggested.length >= 70 && suggested.length <= 80) ||
-            suggested.length > nextListing.title.length
-          ) {
-            nextListing = {
-              ...nextListing,
-              title: suggested,
-              updatedAt: new Date().toISOString(),
-            }
-          }
-        }
-
-        if (
-          JSON.stringify(nextListing.specifics) !==
-            JSON.stringify(listing.specifics) ||
-          nextListing.title !== listing.title
-        ) {
-          onChangeRef.current(nextListing)
-        }
-
-        const counts = countCompletedAspects(formFields, nextListing)
-        const missing =
-          validated.missingRequired.length > 0
-            ? validated.missingRequired
-            : json.missingRequiredNames ||
-              computeMissing(formFields, nextListing)
-
-        onMetaChangeRef.current?.({
-          missing,
-          filled: counts.completed || json.seoCompleted || 0,
-          total: counts.total || json.seoTotal || formFields.length,
-        })
-      })
-      .catch(() => {
-        if (!cancelled) setError("Could not load eBay item specifics.")
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
 
     return () => {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listing.id, listing.specifics.category])
+  }, [listing.id, listing.specifics.category, skipHydrate])
 
   useEffect(() => {
     if (fields.length === 0) return
+    const nextSummary = summarizeAiEmployeeAspects(fields, listing)
+    setSummary(nextSummary)
     const validated = validateAspectsAgainstOptions(listing, fields)
-    const counts = countCompletedAspects(fields, listing)
     onMetaChangeRef.current?.({
       missing:
         validated.missingRequired.length > 0
           ? validated.missingRequired
           : computeMissing(fields, listing),
-      filled: counts.completed,
-      total: counts.total,
+      filled: nextSummary.completed,
+      total: nextSummary.total,
+      needsAttention: nextSummary.needsAttention,
+      banner: formatAiEmployeeBanner(nextSummary),
     })
   }, [listing, fields])
 
   if (loading && fields.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        Matching eBay item specifics…
+        AI is completing eBay item specifics…
       </p>
     )
   }
@@ -373,14 +336,15 @@ export function EbayItemSpecificsFields({
     fields,
     listing
   )
-  const counts = countCompletedAspects(fields, listing)
 
   return (
     <div className="space-y-4">
+      <AiEmployeeBanner summary={summary} />
+
       {primary.length > 0 ? (
         <div className="space-y-3">
           <p className="text-xs text-muted-foreground">
-            Only fields AI couldn&apos;t determine with high confidence:
+            Quick review — confirm or fix these, then publish:
           </p>
           <div className="grid gap-4 sm:grid-cols-2">
             {primary.map((view) => (
@@ -396,7 +360,7 @@ export function EbayItemSpecificsFields({
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
-          All required item specifics were auto-filled from your photos.
+          Nothing needs your attention — AI filled every required specific.
         </p>
       )}
 
@@ -416,7 +380,7 @@ export function EbayItemSpecificsFields({
               <div>
                 <p className="text-sm font-semibold">More item specifics</p>
                 <p className="text-xs text-muted-foreground">
-                  {counts.completed} of {counts.total} completed
+                  {summary.completed} of {summary.total} completed
                   {autoFilledCount > 0
                     ? ` · ${autoFilledCount} auto-filled`
                     : ""}
@@ -428,11 +392,7 @@ export function EbayItemSpecificsFields({
             </span>
           </button>
           {moreOpen && (
-            <div
-              className={cn(
-                "grid gap-2 border-t border-border p-3 sm:grid-cols-2"
-              )}
-            >
+            <div className={cn("grid gap-2 border-t border-border p-3 sm:grid-cols-2")}>
               {more.map((view) =>
                 view.status === "auto_filled" ? (
                   <AutoFilledRow

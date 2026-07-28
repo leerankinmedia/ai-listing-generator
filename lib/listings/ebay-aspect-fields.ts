@@ -1,6 +1,10 @@
 /**
- * Shared helpers for eBay item-specific fields in the listing editor / publish UI.
- * High-confidence AI auto-fill + compact one-minute listing UX.
+ * Shared helpers for eBay item-specific fields — AI-employee autofill UX.
+ *
+ * Confidence tiers:
+ * - ≥95%: auto-select exact eBay value (no user interaction)
+ * - 70–94%: preselect most likely value + show Review
+ * - <70%: leave blank
  */
 
 import {
@@ -20,8 +24,10 @@ const KNOWN_SPECIFIC_KEYS = new Set([
   "gender",
 ])
 
-/** Auto-select eBay values without user interaction at this confidence. */
-export const ASPECT_AUTO_FILL_CONFIDENCE = 0.9
+/** Auto-select without user interaction. */
+export const ASPECT_AUTO_FILL_CONFIDENCE = 0.95
+/** Preselect + Review badge. Below this → leave blank. */
+export const ASPECT_REVIEW_CONFIDENCE = 0.7
 
 export type EbayAspectFormField = {
   name: string
@@ -29,14 +35,13 @@ export type EbayAspectFormField = {
   allowedValues?: string[]
   suggestedValue?: string
   value?: string
-  /** @deprecated Primary visibility is derived from needs-input state. */
   primary?: boolean
 }
 
 export type AspectFieldStatus =
   | "auto_filled"
-  | "needs_input"
   | "needs_review"
+  | "needs_input"
   | "optional_blank"
 
 export type AspectFieldView = {
@@ -46,35 +51,42 @@ export type AspectFieldView = {
   confidence?: number
 }
 
+export type AiEmployeeAspectSummary = {
+  completed: number
+  total: number
+  needsAttention: number
+  autoFilled: number
+  review: number
+}
+
 /**
- * High-search clothing specifics — populate when confidently known.
+ * Clothing / SEO specifics the AI employee should try to complete.
  */
 export const EBAY_SEO_ASPECT_PRIORITY = [
   "Brand",
   "Size Type",
   "Size",
   "Style",
+  "Pattern",
+  "Material",
+  "Fabric Type",
   "Color",
   "Department",
   "Type",
-  "Pattern",
-  "Material",
-  "Fabric Wash",
-  "Waist Size",
-  "Fit",
   "Features",
-  "Inseam",
-  "Rise",
-  "Fabric Type",
   "Closure",
-  "Vintage",
+  "Rise",
+  "Fit",
   "Theme",
   "Season",
   "Pocket Type",
   "Country of Origin",
+  "Fabric Wash",
+  "Waist Size",
+  "Inseam",
+  "Vintage",
 ] as const
 
-/** @deprecated Visibility is based on needs-input, not a fixed primary list. */
 export const EBAY_PRIMARY_VISIBLE_ASPECTS = [
   "Brand",
   "Size Type",
@@ -96,7 +108,6 @@ export const EBAY_MEASUREMENT_ASPECTS = new Set([
   "neck size",
 ])
 
-/** @deprecated Use EBAY_SEO_ASPECT_PRIORITY */
 export const EBAY_FORM_ASPECT_PRIORITY = [...EBAY_SEO_ASPECT_PRIORITY]
 
 export function isMeasurementAspect(name: string): boolean {
@@ -113,7 +124,6 @@ export function isSeoPriorityAspect(name: string): boolean {
   return EBAY_SEO_ASPECT_PRIORITY.some((n) => n.toLowerCase() === key)
 }
 
-/** Map Taxonomy aspect names onto listing.fieldConfidence keys. */
 export function confidenceForListingAspect(
   listing: Listing,
   aspectName: string
@@ -128,18 +138,36 @@ export function confidenceForListingAspect(
     name === "style" ||
     name === "fit" ||
     name === "type" ||
-    name === "item type"
+    name === "item type" ||
+    name === "features" ||
+    name === "closure" ||
+    name === "rise"
   ) {
     return fc.style?.confidence
   }
   if (name === "pattern" || name === "theme") return fc.pattern?.confidence
   if (name === "department" || name === "gender") return fc.gender?.confidence
   if (name === "size type") return fc.size?.confidence
+  if (name === "season" || name === "pocket type") return fc.style?.confidence
+  if (name === "country of origin") return fc.brand?.confidence
+  if (name === "fabric wash") return fc.material?.confidence
   return undefined
 }
 
 export function isAutoFillConfidence(confidence: number | undefined): boolean {
   return typeof confidence === "number" && confidence >= ASPECT_AUTO_FILL_CONFIDENCE
+}
+
+export function isReviewConfidence(confidence: number | undefined): boolean {
+  return (
+    typeof confidence === "number" &&
+    confidence >= ASPECT_REVIEW_CONFIDENCE &&
+    confidence < ASPECT_AUTO_FILL_CONFIDENCE
+  )
+}
+
+export function isBlankConfidence(confidence: number | undefined): boolean {
+  return confidence == null || confidence < ASPECT_REVIEW_CONFIDENCE
 }
 
 export function mapAspectToListingField(
@@ -173,7 +201,15 @@ export function detectedValueForAspect(
   if (name === "material" || name === "fabric type") {
     return fc.material?.value || listing.specifics.material
   }
-  if (name === "style" || name === "fit" || name === "type" || name === "item type") {
+  if (
+    name === "style" ||
+    name === "fit" ||
+    name === "type" ||
+    name === "item type" ||
+    name === "features" ||
+    name === "closure" ||
+    name === "rise"
+  ) {
     return fc.style?.value || listing.specifics.style
   }
   if (name === "pattern" || name === "theme") {
@@ -186,7 +222,6 @@ export function detectedValueForAspect(
   return undefined
 }
 
-/** Apply exact eBay values into listing state without overwriting manual exact picks. */
 export function applyExactAspectsToListing(
   listing: Listing,
   fields: Array<{ name: string; value: string }>,
@@ -236,7 +271,7 @@ export function applyExactAspectsToListing(
         options.length > 0 &&
         isExactOption(current, options)
       ) {
-        // Preserve manual exact selection on the known field.
+        // Preserve manual exact selection.
       } else if (current !== value) {
         specifics = { ...specifics, [target]: value }
         changed = true
@@ -352,8 +387,8 @@ export function resolveAspectFieldValue(
 }
 
 /**
- * Classify each aspect for the one-minute listing UI.
- * Auto-filled (≥90% + exact eBay match, or already resolved) never needs a main-page dropdown.
+ * Classify for AI-employee UI.
+ * ≥95% filled → auto_filled · 70–94% filled → needs_review · empty required → needs_input
  */
 export function classifyAspectField(
   field: EbayAspectFormField,
@@ -364,32 +399,30 @@ export function classifyAspectField(
   const empty = !value.trim()
 
   if (!empty) {
-    return {
-      field,
-      value,
-      status: "auto_filled",
-      confidence,
+    if (isAutoFillConfidence(confidence)) {
+      return { field, value, status: "auto_filled", confidence }
     }
+    if (isReviewConfidence(confidence)) {
+      return { field, value, status: "needs_review", confidence }
+    }
+    // Filled without Vision confidence (exact Taxonomy match / manual) → treat as done.
+    if (confidence == null) {
+      return { field, value, status: "auto_filled", confidence }
+    }
+    // Confidence known but <70% yet somehow filled — still ask for review.
+    return { field, value, status: "needs_review", confidence }
   }
 
   if (field.required) {
-    // Required + empty: seller must provide input (AI uncertain / no exact match).
-    return {
-      field,
-      value: "",
-      status: "needs_input",
-      confidence,
-    }
+    return { field, value: "", status: "needs_input", confidence }
   }
 
-  // Optional + empty — hide from UI (no empty dropdowns).
   return { field, value: "", status: "optional_blank", confidence }
 }
 
 /**
- * Main page: only required fields that genuinely need user input.
- * Everything else (auto-filled + optional) goes under More item specifics.
- * Empty optional fields are omitted entirely (no empty dropdowns).
+ * Main page: only fields that need attention (Review or blank required).
+ * Auto-filled (≥95%) collapse under More. Blank optionals are hidden.
  */
 export function splitAspectFieldsForDisplay(
   fields: EbayAspectFormField[],
@@ -398,18 +431,19 @@ export function splitAspectFieldsForDisplay(
   primary: AspectFieldView[]
   more: AspectFieldView[]
   autoFilledCount: number
+  reviewCount: number
   hiddenBlankOptional: number
 } {
   const primary: AspectFieldView[] = []
   const more: AspectFieldView[] = []
   let autoFilledCount = 0
+  let reviewCount = 0
   let hiddenBlankOptional = 0
 
   for (const field of fields) {
     const view = classifyAspectField(field, listing)
 
     if (view.status === "optional_blank") {
-      // Never show empty optional dropdowns.
       hiddenBlankOptional += 1
       continue
     }
@@ -420,44 +454,77 @@ export function splitAspectFieldsForDisplay(
       continue
     }
 
-    // needs_input / needs_review on required → main page.
-    // Optional needs_review (rare) → more with badge, editable when expanded.
-    if (field.required && (view.status === "needs_input" || view.status === "needs_review")) {
+    if (view.status === "needs_review") {
+      reviewCount += 1
       primary.push(view)
-    } else {
-      more.push(view)
+      continue
+    }
+
+    // needs_input (required blank)
+    primary.push(view)
+  }
+
+  return {
+    primary,
+    more,
+    autoFilledCount,
+    reviewCount,
+    hiddenBlankOptional,
+  }
+}
+
+export function summarizeAiEmployeeAspects(
+  fields: EbayAspectFormField[],
+  listing: Listing
+): AiEmployeeAspectSummary {
+  let completed = 0
+  let total = 0
+  let autoFilled = 0
+  let review = 0
+  let needsAttention = 0
+
+  for (const field of fields) {
+    const view = classifyAspectField(field, listing)
+    if (view.status === "optional_blank") continue
+    total += 1
+    if (view.value.trim()) completed += 1
+    if (view.status === "auto_filled") autoFilled += 1
+    if (view.status === "needs_review") {
+      review += 1
+      needsAttention += 1
+    }
+    if (view.status === "needs_input") needsAttention += 1
+  }
+
+  if (total === 0) {
+    const filled = fields.filter((f) =>
+      resolveAspectFieldValue(f, listing).trim()
+    ).length
+    return {
+      completed: filled,
+      total: fields.length,
+      needsAttention: 0,
+      autoFilled: filled,
+      review: 0,
     }
   }
 
-  return { primary, more, autoFilledCount, hiddenBlankOptional }
+  return { completed, total, needsAttention, autoFilled, review }
 }
 
 export function countCompletedAspects(
   fields: EbayAspectFormField[],
   listing: Listing
 ): { completed: number; total: number } {
-  let completed = 0
-  let total = 0
-  for (const field of fields) {
-    const view = classifyAspectField(field, listing)
-    // Don't count hidden blank optionals toward the total sellers care about.
-    if (view.status === "optional_blank") continue
-    total += 1
-    if (view.value.trim()) completed += 1
-  }
-  // If everything is blank optional, fall back to full field count for the label.
-  if (total === 0) {
-    return {
-      completed: fields.filter((f) => resolveAspectFieldValue(f, listing).trim())
-        .length,
-      total: fields.length,
-    }
-  }
-  return { completed, total }
+  const s = summarizeAiEmployeeAspects(fields, listing)
+  return { completed: s.completed, total: s.total }
 }
 
 /**
- * When confidence ≥ 90% and an exact eBay option exists, force-apply it.
+ * AI employee fill:
+ * - ≥95%: apply exact eBay value
+ * - 70–94%: preselect most likely exact value (Review later)
+ * - <70%: leave blank (do not invent)
  */
 export function autoFillHighConfidenceAspects(
   listing: Listing,
@@ -468,15 +535,36 @@ export function autoFillHighConfidenceAspects(
 
   for (const field of fields) {
     const confidence = confidenceForListingAspect(listing, field.name)
-    if (!isAutoFillConfidence(confidence)) continue
+    // Below review threshold — leave blank even if a fuzzy guess exists.
+    if (isBlankConfidence(confidence) && confidence != null) continue
+
     const options = field.allowedValues || []
     const detected = detectedValueForAspect(listing, field.name)
     const raw = readAspectValue(listing, field.name)
+
+    // No Vision confidence: only keep values already exact on the listing / server.
+    if (confidence == null) {
+      if (options.length === 0) {
+        const free = (raw || field.value || "").trim()
+        if (free) toApply.push({ name: field.name, value: free })
+      } else if (raw && isExactOption(raw, options)) {
+        const exact =
+          options.find((o) => o.toLowerCase() === raw.toLowerCase()) || raw
+        toApply.push({ name: field.name, value: exact })
+      } else if (field.value && isExactOption(field.value, options)) {
+        toApply.push({ name: field.name, value: field.value })
+      }
+      if (options.length) optionsByName.set(field.name.toLowerCase(), options)
+      continue
+    }
+
+    // ≥70%: try exact eBay match (fuzzy allowed at ≥95%).
     if (options.length === 0) {
       const free = (raw || detected || field.suggestedValue || field.value || "").trim()
       if (free) toApply.push({ name: field.name, value: free })
       continue
     }
+
     const exact = resolveSelectValue(
       field.name,
       raw,
@@ -491,9 +579,6 @@ export function autoFillHighConfidenceAspects(
   return applyExactAspectsToListing(listing, toApply, optionsByName)
 }
 
-/**
- * Silently drop values that are not exact eBay options (selection lists).
- */
 export function validateAspectsAgainstOptions(
   listing: Listing,
   fields: EbayAspectFormField[]
@@ -524,4 +609,14 @@ export function validateAspectsAgainstOptions(
   }
 
   return { listing: next, missingRequired, cleared }
+}
+
+export function formatAiEmployeeBanner(summary: AiEmployeeAspectSummary): string {
+  if (summary.total === 0) {
+    return "AI is matching eBay item specifics…"
+  }
+  if (summary.needsAttention === 0) {
+    return `AI completed ${summary.completed}/${summary.total} item specifics. Ready to publish.`
+  }
+  return `AI completed ${summary.completed}/${summary.total} item specifics. Only ${summary.needsAttention} need your attention.`
 }

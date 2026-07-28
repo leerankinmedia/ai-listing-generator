@@ -1,10 +1,9 @@
 "use client"
 
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { ConfidenceMeter } from "@/components/listings/confidence-meter"
 import { CompsPricingPanel } from "@/components/listings/comps-pricing-panel"
-import { ShippingPackageFields } from "@/components/listings/shipping-package-fields"
-import { EbayShippingModeFields } from "@/components/listings/ebay-shipping-section"
+import { EbayItemSpecificsFields } from "@/components/listings/ebay-item-specifics-fields"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -18,6 +17,11 @@ interface ListingEditorFormProps {
   listing: Listing
   onChange: (listing: Listing) => void
   disabled?: boolean
+  onAspectMetaChange?: (meta: {
+    missing: string[]
+    filled: number
+    total: number
+  }) => void
 }
 
 const CONDITIONS = [
@@ -53,7 +57,10 @@ export function ListingEditorForm({
   listing,
   onChange,
   disabled,
+  onAspectMetaChange,
 }: ListingEditorFormProps) {
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [hasEbayAspects, setHasEbayAspects] = useState(false)
   const keywordsText = useMemo(
     () => (listing.keywords ?? []).join(", "),
     [listing.keywords]
@@ -108,7 +115,8 @@ export function ListingEditorForm({
         <div>
           <h2 className="font-display text-lg font-semibold">Listing details</h2>
           <p className="text-sm text-muted-foreground">
-            Edit title, description, price, and item details before saving. Confidence shows Vision certainty.
+            Edit title, description, price, and item details before saving. Confidence
+            shows Vision certainty.
           </p>
         </div>
 
@@ -144,32 +152,6 @@ export function ListingEditorForm({
             {listing.fieldConfidence?.title?.rationale
               ? ` · ${listing.fieldConfidence.title.rationale}`
               : ""}
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="inventory-sku">Inventory SKU</Label>
-          <Input
-            id="inventory-sku"
-            value={resolveListingSku(listing) || ""}
-            disabled={disabled}
-            placeholder="Assigned on publish if empty"
-            onChange={(e) => {
-              const sku = e.target.value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 50)
-              update({
-                specifics: {
-                  ...listing.specifics,
-                  extras: {
-                    ...(listing.specifics.extras || {}),
-                    sku,
-                  },
-                },
-              })
-            }}
-          />
-          <p className="text-[11px] text-muted-foreground">
-            Used as the eBay Custom Label. Imported eBay SKUs are preserved; new listings use your
-            ListWise SKU sequence.
           </p>
         </div>
 
@@ -229,44 +211,61 @@ export function ListingEditorForm({
 
       <section className="space-y-4">
         <div>
-          <h2 className="font-display text-lg font-semibold">Detected attributes</h2>
+          <h2 className="font-display text-lg font-semibold">Item specifics</h2>
           <p className="text-sm text-muted-foreground">
-            Vision detections across every uploaded photo, with confidence per field.
+            Brand, Size, Color, Material, Pattern, Department, Type, Style, and other
+            required eBay attributes for this category. Missing required fields show a
+            red Required label before you reach Publish.
           </p>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          {(
-            [
-              ["brand", "Brand"],
-              ["size", "Size"],
-              ["color", "Color"],
-              ["material", "Material"],
-              ["style", "Style"],
-              ["pattern", "Pattern"],
-              ["gender", "Gender"],
-            ] as const
-          ).map(([key, label]) => (
-            <div key={key} className="space-y-2">
-              <FieldHeader
-                label={label}
-                htmlFor={key}
-                fieldKey={key}
-                listing={listing}
-              />
-              <Input
-                id={key}
-                value={listing.specifics[key] ?? ""}
-                disabled={disabled}
-                onChange={(e) => updateSpecific(key, e.target.value, key)}
-              />
-              {listing.fieldConfidence?.[key]?.rationale && (
-                <p className="text-[11px] text-muted-foreground">
-                  {listing.fieldConfidence[key]?.rationale}
-                </p>
-              )}
-            </div>
-          ))}
 
+        <EbayItemSpecificsFields
+          listing={listing}
+          onChange={onChange}
+          disabled={disabled}
+          onMetaChange={(meta) => {
+            setHasEbayAspects(meta.total > 0 || meta.missing.length > 0)
+            onAspectMetaChange?.(meta)
+          }}
+        />
+
+        {!hasEbayAspects && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            {(
+              [
+                ["brand", "Brand"],
+                ["size", "Size"],
+                ["color", "Color"],
+                ["material", "Material"],
+                ["style", "Style"],
+                ["pattern", "Pattern"],
+                ["gender", "Department"],
+              ] as const
+            ).map(([key, label]) => (
+              <div key={key} className="space-y-2">
+                <FieldHeader
+                  label={label}
+                  htmlFor={`detected-${key}`}
+                  fieldKey={key}
+                  listing={listing}
+                />
+                <Input
+                  id={`detected-${key}`}
+                  value={listing.specifics[key] ?? ""}
+                  disabled={disabled}
+                  onChange={(e) => updateSpecific(key, e.target.value, key)}
+                />
+                {listing.fieldConfidence?.[key]?.rationale && (
+                  <p className="text-[11px] text-muted-foreground">
+                    {listing.fieldConfidence[key]?.rationale}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <FieldHeader
               label="Condition"
@@ -308,26 +307,6 @@ export function ListingEditorForm({
             placeholder="Stains, wear, repairs, missing parts…"
           />
         </div>
-      </section>
-
-      <section className="space-y-6">
-        <div>
-          <h2 className="font-display text-lg font-semibold">Shipping</h2>
-          <p className="text-sm text-muted-foreground">
-            Choose who pays before publishing to eBay. Package weight is required for
-            calculated shipping and is never invented by AI.
-          </p>
-        </div>
-        <EbayShippingModeFields
-          listing={listing}
-          onChange={onChange}
-          disabled={disabled}
-        />
-        <ShippingPackageFields
-          listing={listing}
-          onChange={onChange}
-          disabled={disabled}
-        />
       </section>
 
       <section className="space-y-3">
@@ -409,6 +388,52 @@ export function ListingEditorForm({
             )
           })}
         </div>
+      </section>
+
+      <section className="space-y-3 rounded-xl border border-border bg-secondary/20 p-4">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between text-left"
+          onClick={() => setAdvancedOpen((o) => !o)}
+        >
+          <div>
+            <h2 className="font-display text-lg font-semibold">Advanced</h2>
+            <p className="text-sm text-muted-foreground">
+              Optional inventory SKU and other seller preferences.
+            </p>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {advancedOpen ? "Hide" : "Show"}
+          </span>
+        </button>
+
+        {advancedOpen && (
+          <div className="space-y-2 pt-2">
+            <Label htmlFor="inventory-sku">Inventory SKU (optional)</Label>
+            <Input
+              id="inventory-sku"
+              value={resolveListingSku(listing) || ""}
+              disabled={disabled}
+              placeholder="Leave blank unless you want a custom label"
+              onChange={(e) => {
+                const sku = e.target.value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 50)
+                update({
+                  specifics: {
+                    ...listing.specifics,
+                    extras: {
+                      ...(listing.specifics.extras || {}),
+                      sku,
+                    },
+                  },
+                })
+              }}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Used as the eBay Custom Label. Enable automatic ListWise SKUs in Account
+              settings if you want LW00001-style codes assigned for you.
+            </p>
+          </div>
+        )}
       </section>
     </div>
   )

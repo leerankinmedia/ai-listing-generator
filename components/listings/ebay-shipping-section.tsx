@@ -34,10 +34,13 @@ export function EbayShippingModeFields({
   listing,
   onChange,
   disabled,
+  compact,
 }: {
   listing: Listing
   onChange: (listing: Listing) => void
   disabled?: boolean
+  /** Hide the section heading when nested under Publish shipping. */
+  compact?: boolean
 }) {
   const mode = defaultEbayShippingMode(listing.specifics.shippingMode)
   const flatAmount = listing.specifics.flatShippingAmount
@@ -50,13 +53,15 @@ export function EbayShippingModeFields({
 
   return (
     <div className="space-y-4">
-      <div>
-        <h3 className="text-sm font-semibold">Shipping</h3>
-        <p className="text-xs text-muted-foreground">
-          Choose Calculated, Flat, or Free. ListWise applies the right eBay shipping
-          settings automatically.
-        </p>
-      </div>
+      {!compact && (
+        <div>
+          <h3 className="text-sm font-semibold">Shipping</h3>
+          <p className="text-xs text-muted-foreground">
+            Choose Calculated, Flat, or Free. ListWise applies the right eBay shipping
+            settings automatically.
+          </p>
+        </div>
+      )}
 
       <div className="grid gap-2 sm:grid-cols-3">
         {MODES.map((value) => {

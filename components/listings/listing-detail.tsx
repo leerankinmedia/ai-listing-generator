@@ -48,6 +48,11 @@ export function ListingDetail({ listingId }: { listingId: string }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [aspectMeta, setAspectMeta] = useState<{
+    missing: string[]
+    filled: number
+    total: number
+  }>({ missing: [], filled: 0, total: 0 })
 
   useEffect(() => {
     let mounted = true
@@ -235,6 +240,7 @@ export function ListingDetail({ listingId }: { listingId: string }) {
         listing={listing}
         onChange={setListing}
         disabled={saving || readOnly}
+        onAspectMetaChange={setAspectMeta}
       />
       {readOnly ? (
         <div className="rounded-2xl border border-border bg-card/70 p-4 sm:p-5">
@@ -253,6 +259,7 @@ export function ListingDetail({ listingId }: { listingId: string }) {
         <OneClickPublishBar
           listing={listing}
           disabled={saving}
+          aspectMeta={aspectMeta}
           onListingChange={setListing}
         />
       )}

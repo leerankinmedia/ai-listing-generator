@@ -41,13 +41,13 @@ describe("matchExactEbayAspectValue color primary", () => {
     assert.equal(value, "Cotton")
   })
 
-  it("normalizes department mens → Men when allowed", () => {
+  it("maps straight-leg jeans → Straight when that option exists", () => {
     const value = matchExactEbayAspectValue(
-      "Department",
-      ["Mens"],
-      ["Men", "Women", "Unisex"],
+      "Style",
+      ["straight-leg jeans"],
+      ["Skinny", "Straight", "Bootcut", "Relaxed"],
       { selectionOnly: true, highConfidence: true }
     )
-    assert.equal(value, "Men")
+    assert.equal(value, "Straight")
   })
 })

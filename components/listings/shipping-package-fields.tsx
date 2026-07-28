@@ -14,23 +14,28 @@ import {
 } from "@/lib/listings/shipping-package"
 import type { Listing } from "@/lib/types"
 
-const EMPTY_PACKAGE: ShippingPackage = {
-  weightPounds: 0,
-  weightOunces: 0,
-  lengthInches: 0,
-  widthInches: 0,
-  heightInches: 0,
-  packageType: DEFAULT_EBAY_PACKAGE_TYPE,
+function blankPackage(): ShippingPackage {
+  return {
+    weightPounds: null,
+    weightOunces: null,
+    lengthInches: null,
+    widthInches: null,
+    heightInches: null,
+    packageType: DEFAULT_EBAY_PACKAGE_TYPE,
+  }
 }
 
 export function ShippingPackageFields({
   listing,
   onChange,
   disabled,
+  compact,
 }: {
   listing: Listing
   onChange: (listing: Listing) => void
   disabled?: boolean
+  /** Hide the section heading when nested under Publish shipping. */
+  compact?: boolean
 }) {
   const pkg = listing.specifics.shippingPackage
   const [presets, setPresets] = useState<ShippingPackagePreset[]>([])
@@ -42,7 +47,7 @@ export function ShippingPackageFields({
   }, [])
 
   function patchPackage(partial: Partial<ShippingPackage>) {
-    const current = pkg || EMPTY_PACKAGE
+    const current = pkg || blankPackage()
     const next: ShippingPackage = {
       ...current,
       ...partial,
@@ -76,6 +81,11 @@ export function ShippingPackageFields({
     if (!current || missingShippingPackageFields(current).length > 0) return
     const updated = saveShippingPreset(presetName || "Clothing package", {
       ...current,
+      weightPounds: current.weightPounds ?? 0,
+      weightOunces: current.weightOunces ?? 0,
+      lengthInches: current.lengthInches ?? 0,
+      widthInches: current.widthInches ?? 0,
+      heightInches: current.heightInches ?? 0,
       packageType: current.packageType || DEFAULT_EBAY_PACKAGE_TYPE,
     })
     setPresets(updated)
@@ -84,13 +94,15 @@ export function ShippingPackageFields({
 
   return (
     <div className="space-y-4">
-      <div>
-        <h3 className="text-sm font-semibold">Weight & dimensions</h3>
-        <p className="text-xs text-muted-foreground">
-          Enter packed weight and size — ListWise does not invent these for AI or imported
-          clothing.
-        </p>
-      </div>
+      {!compact && (
+        <div>
+          <h3 className="text-sm font-semibold">Weight & dimensions</h3>
+          <p className="text-xs text-muted-foreground">
+            Enter packed weight and size — ListWise does not invent these for AI or
+            imported clothing.
+          </p>
+        </div>
+      )}
 
       {presets.length > 0 && (
         <div className="space-y-2">
@@ -108,8 +120,8 @@ export function ShippingPackageFields({
             <option value="">Choose a saved preset…</option>
             {presets.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name} ({p.weightPounds} lb {p.weightOunces} oz · {p.lengthInches}×
-                {p.widthInches}×{p.heightInches} in)
+                {p.name} ({p.weightPounds ?? 0} lb {p.weightOunces ?? 0} oz ·{" "}
+                {p.lengthInches}×{p.widthInches}×{p.heightInches} in)
               </option>
             ))}
           </select>
@@ -125,8 +137,8 @@ export function ShippingPackageFields({
             min={0}
             disabled={disabled}
             value={pkg ? pkg.weightPounds : null}
-            placeholder="e.g. 0"
-            onValueChange={(n) => patchPackage({ weightPounds: n ?? 0 })}
+            placeholder="e.g. 1"
+            onValueChange={(n) => patchPackage({ weightPounds: n })}
           />
         </div>
         <div className="space-y-2">
@@ -138,7 +150,7 @@ export function ShippingPackageFields({
             disabled={disabled}
             value={pkg ? pkg.weightOunces : null}
             placeholder="e.g. 8"
-            onValueChange={(n) => patchPackage({ weightOunces: n ?? 0 })}
+            onValueChange={(n) => patchPackage({ weightOunces: n })}
           />
         </div>
         <div className="space-y-2">
@@ -150,7 +162,7 @@ export function ShippingPackageFields({
             disabled={disabled}
             value={pkg ? pkg.lengthInches : null}
             placeholder="e.g. 12"
-            onValueChange={(n) => patchPackage({ lengthInches: n ?? 0 })}
+            onValueChange={(n) => patchPackage({ lengthInches: n })}
           />
         </div>
         <div className="space-y-2">
@@ -162,7 +174,7 @@ export function ShippingPackageFields({
             disabled={disabled}
             value={pkg ? pkg.widthInches : null}
             placeholder="e.g. 9"
-            onValueChange={(n) => patchPackage({ widthInches: n ?? 0 })}
+            onValueChange={(n) => patchPackage({ widthInches: n })}
           />
         </div>
         <div className="space-y-2">
@@ -174,7 +186,7 @@ export function ShippingPackageFields({
             disabled={disabled}
             value={pkg ? pkg.heightInches : null}
             placeholder="e.g. 1"
-            onValueChange={(n) => patchPackage({ heightInches: n ?? 0 })}
+            onValueChange={(n) => patchPackage({ heightInches: n })}
           />
         </div>
       </div>
@@ -187,7 +199,7 @@ export function ShippingPackageFields({
 
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
         <div className="flex-1 space-y-2">
-          <Label htmlFor="preset-name">Save as preset</Label>
+          <Label htmlFor="preset-name">Save as preset (optional)</Label>
           <Input
             id="preset-name"
             disabled={disabled || missing.length > 0}

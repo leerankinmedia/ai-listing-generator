@@ -4,48 +4,31 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { Loader2, Rocket } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import {
-  colorIsBlackFamily,
-  colorIsGrayFamily,
-  matchExactEbayAspectValue,
-} from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
-import { MARKETPLACES } from "@/lib/marketplaces"
-import {
-  applyPublishResultsToListing,
-  publishResultsIncludeSuccess,
-} from "@/lib/listings/publish-persist"
 import {
   ebayFreeShippingBlockMessage,
   ebayShippingPackageBlockMessage,
 } from "@/lib/listings/publish"
+import {
+  applyPublishResultsToListing,
+  publishResultsIncludeSuccess,
+} from "@/lib/listings/publish-persist"
 import {
   EbayShippingModeFields,
   EbayShippingPublishSummary,
 } from "@/components/listings/ebay-shipping-section"
 import { ShippingPackageFields } from "@/components/listings/shipping-package-fields"
 import { PrePublishReviewCard } from "@/components/listings/pre-publish-review"
-import { ensureListingInventorySku, resolveListingSku } from "@/lib/listings/sku"
+import { ensureListingInventorySku } from "@/lib/listings/sku"
 import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
 import { persistListing } from "@/lib/listings/repository"
 import { ensureDurableOriginalImageUrls } from "@/lib/listings/durable-images"
 import { readApiJsonResponse } from "@/lib/api/read-json-response"
 import { useAuth } from "@/components/auth/auth-provider"
+import { MARKETPLACES } from "@/lib/marketplaces"
 import type { Listing, MarketplaceId, OneClickPublishResult } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const PHASE5_IDS: MarketplaceId[] = ["ebay", "vinted", "whatnot"]
-
-const KNOWN_SPECIFIC_KEYS = new Set([
-  "brand",
-  "size",
-  "color",
-  "material",
-  "style",
-  "pattern",
-  "gender",
-])
 
 interface PublicConnection {
   marketplaceId: MarketplaceId
@@ -53,137 +36,21 @@ interface PublicConnection {
   accountLabel?: string | null
 }
 
-function mapAspectToListingField(
-  aspectName: string
-): keyof Listing["specifics"] | "extras" {
-  const key = aspectName.trim().toLowerCase()
-  if (KNOWN_SPECIFIC_KEYS.has(key)) return key as keyof Listing["specifics"]
-  if (key === "department") return "gender"
-  if (key === "colour") return "color"
-  return "extras"
-}
-
-function isExactOption(value: string, options: string[]): boolean {
-  const key = value.trim().toLowerCase()
-  return options.some((o) => o.trim().toLowerCase() === key)
-}
-
-/** Apply exact eBay values into listing state without overwriting manual exact picks. */
-function applyExactAspectsToListing(
-  listing: Listing,
-  fields: Array<{ name: string; value: string }>,
-  optionsByName?: Map<string, string[]>
-): Listing {
-  if (fields.length === 0) return listing
-
-  let specifics = { ...listing.specifics }
-  let extras = { ...(listing.specifics.extras || {}) }
-  let changed = false
-
-  for (const field of fields) {
-    const value = field.value?.trim()
-    if (!value) continue
-    const options = optionsByName?.get(field.name.toLowerCase())
-    if (options && options.length > 0 && !isExactOption(value, options)) {
-      continue
-    }
-
-    const target = mapAspectToListingField(field.name)
-    // Always keep exact eBay value in extras under the Taxonomy aspect name
-    // (this is what publish reads first for Size Type / Type / Theme / etc.).
-    const existingExtra = extras[field.name]?.trim()
-    const aspectKey = field.name.trim().toLowerCase()
-    const isColorAspect = aspectKey === "color" || aspectKey === "colour"
-    const detectedColor =
-      listing.fieldConfidence?.color?.value || listing.specifics.color
-    const staleBlackExtra =
-      isColorAspect &&
-      colorIsGrayFamily(detectedColor) &&
-      colorIsBlackFamily(existingExtra)
-    if (
-      existingExtra &&
-      isExactOption(existingExtra, options || [existingExtra]) &&
-      !staleBlackExtra
-    ) {
-      // Preserve manual exact selection.
-    } else if (existingExtra !== value) {
-      extras = { ...extras, [field.name]: value }
-      changed = true
-    }
-
-    // Color: keep AI-detected wording in specifics.color (e.g. Dark Gray/Charcoal).
-    // Only the eBay aspect dropdown value lives in extras.Color (= Gray).
-    if (target !== "extras" && !isColorAspect) {
-      const current = (specifics[target] as string | undefined)?.trim()
-      if (
-        current &&
-        options &&
-        options.length > 0 &&
-        isExactOption(current, options)
-      ) {
-        // Preserve manual exact selection on the known field.
-      } else if (current !== value) {
-        specifics = { ...specifics, [target]: value }
-        changed = true
-      }
-    }
-  }
-
-  if (!changed) return listing
-  return {
-    ...listing,
-    specifics: { ...specifics, extras },
-    updatedAt: new Date().toISOString(),
-  }
-}
-
-function resolveSelectValue(
-  fieldName: string,
-  rawValue: string,
-  options: string[],
-  suggestedValue?: string,
-  detectedValue?: string
-): string {
-  if (options.length === 0) return rawValue
-  const nameKey = fieldName.trim().toLowerCase()
-  const isColor = nameKey === "color" || nameKey === "colour"
-  // Gray-family detections must map via synonym logic (→ Gray), never keep a
-  // stale exact "Black" that happens to be on the allowed list.
-  const preferNormalize =
-    isColor &&
-    (colorIsGrayFamily(detectedValue) || colorIsGrayFamily(rawValue))
-
-  if (rawValue && isExactOption(rawValue, options) && !preferNormalize) {
-    return (
-      options.find((o) => o.toLowerCase() === rawValue.toLowerCase()) || rawValue
-    )
-  }
-  if (suggestedValue && isExactOption(suggestedValue, options) && !preferNormalize) {
-    return (
-      options.find((o) => o.toLowerCase() === suggestedValue.toLowerCase()) ||
-      suggestedValue
-    )
-  }
-  const matched = matchExactEbayAspectValue(
-    fieldName,
-    [detectedValue, rawValue, suggestedValue],
-    options,
-    {
-      selectionOnly: true,
-      highConfidence: true,
-    }
-  )
-  return matched || ""
-}
-
 export function OneClickPublishBar({
   listing,
   disabled,
   onListingChange,
+  aspectMeta,
 }: {
   listing: Listing
   disabled?: boolean
   onListingChange?: (listing: Listing) => void
+  /** Missing/filled specifics from the main editor — summary only here. */
+  aspectMeta?: {
+    missing: string[]
+    filled: number
+    total: number
+  }
 }) {
   const { user } = useAuth()
   const [publishing, setPublishing] = useState(false)
@@ -194,76 +61,6 @@ export function OneClickPublishBar({
   const [loadingConnections, setLoadingConnections] = useState(true)
 
   const ebaySelected = selected.includes("ebay")
-  const [aspectMeta, setAspectMeta] = useState<{
-    missing: string[]
-    filled: number
-    total: number
-  }>({ missing: [], filled: 0, total: 0 })
-
-  const requiredFields = useMemo(() => {
-    const fields = (results || []).flatMap((r) => r.requiredFields || [])
-    const seen = new Set<string>()
-    return fields.filter((f) => {
-      const key = f.name.toLowerCase()
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-  }, [results])
-
-  const resolvedFields = useMemo(() => {
-    const fields = (results || []).flatMap((r) => r.resolvedFields || [])
-    const byName = new Map<string, { name: string; value: string }>()
-    for (const f of fields) {
-      if (!f.name || !f.value) continue
-      byName.set(f.name.toLowerCase(), f)
-    }
-    return [...byName.values()]
-  }, [results])
-
-  // Sync exact eBay values into listing state (publish payload source of truth).
-  useEffect(() => {
-    if (!onListingChange || !results) return
-
-    const optionsByName = new Map<string, string[]>()
-    for (const field of requiredFields) {
-      if (field.allowedValues?.length) {
-        optionsByName.set(field.name.toLowerCase(), field.allowedValues)
-      }
-    }
-
-    const fromResolved = resolvedFields
-    const fromSuggested = requiredFields
-      .filter((f) => f.suggestedValue)
-      .map((f) => ({ name: f.name, value: f.suggestedValue! }))
-
-    // Also preselect normalized matches of current AI wording for missing dropdowns.
-    const fromNormalized = requiredFields.flatMap((f) => {
-      const options = f.allowedValues || []
-      if (options.length === 0) return []
-      const target = mapAspectToListingField(f.name)
-      const raw =
-        target === "extras"
-          ? listing.specifics.extras?.[f.name] || ""
-          : ((listing.specifics[target] as string | undefined) ?? "")
-      const detected =
-        target === "color" ? listing.fieldConfidence?.color?.value : undefined
-      const exact = resolveSelectValue(
-        f.name,
-        raw,
-        options,
-        f.suggestedValue,
-        detected
-      )
-      return exact ? [{ name: f.name, value: exact }] : []
-    })
-
-    const merged = [...fromResolved, ...fromSuggested, ...fromNormalized]
-    if (merged.length === 0) return
-    const next = applyExactAspectsToListing(listing, merged, optionsByName)
-    if (next !== listing) onListingChange(next)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-apply when publish results change
-  }, [results, onListingChange])
 
   const loadConnections = useCallback(async () => {
     setLoadingConnections(true)
@@ -298,103 +95,21 @@ export function OneClickPublishBar({
     void loadConnections()
   }, [loadConnections])
 
-  // Prefetch eBay aspects + assign inventory SKU when eBay is selected.
+  // Enrich title toward 80 chars when eBay is selected — never auto-fill SKU
+  // unless account settings enable automatic SKU generation.
   useEffect(() => {
     if (!ebaySelected || !onListingChange) return
-    let cancelled = false
-
     const withSku = ensureListingInventorySku(listing)
     const enrichedTitle = enrichEbayTitleTowardLimit(withSku.title, withSku)
-    const needsPatch =
-      resolveListingSku(listing) == null ||
+    if (
       enrichedTitle !== listing.title ||
       withSku.specifics.extras?.sku !== listing.specifics.extras?.sku
-    if (needsPatch) {
+    ) {
       onListingChange({
         ...withSku,
         title: enrichedTitle,
         updatedAt: new Date().toISOString(),
       })
-    }
-
-    const listingForPreview = {
-      ...withSku,
-      title: enrichedTitle,
-    }
-
-    void fetch("/api/marketplaces/ebay/aspects-preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ listing: listingForPreview }),
-    })
-      .then(async (res) => {
-        if (!res.ok || cancelled) return
-        const json = (await res.json()) as {
-          requiredFields?: Array<{
-            name: string
-            allowedValues?: string[]
-            suggestedValue?: string
-          }>
-          resolvedFields?: Array<{ name: string; value: string }>
-          aspectFilledCount?: number
-          aspectTotalCount?: number
-        }
-        const optionsByName = new Map<string, string[]>()
-        for (const field of json.requiredFields || []) {
-          if (field.allowedValues?.length) {
-            optionsByName.set(field.name.toLowerCase(), field.allowedValues)
-          }
-        }
-        const resolved = json.resolvedFields || []
-        const suggested = (json.requiredFields || [])
-          .filter((f) => f.suggestedValue)
-          .map((f) => ({ name: f.name, value: f.suggestedValue! }))
-        const merged = [...resolved, ...suggested]
-        if (merged.length > 0 && onListingChange) {
-          const next = applyExactAspectsToListing(
-            listingForPreview,
-            merged,
-            optionsByName
-          )
-          // Only push when extras/specifics actually changed.
-          if (
-            JSON.stringify(next.specifics.extras || {}) !==
-            JSON.stringify(listing.specifics.extras || {})
-          ) {
-            onListingChange(next)
-          }
-        }
-        if (!cancelled) {
-          setAspectMeta({
-            missing: (json.requiredFields || []).map((f) => f.name),
-            filled: json.aspectFilledCount || 0,
-            total: json.aspectTotalCount || 0,
-          })
-          // Surface required aspect dropdowns without wiping prior publish results.
-          if ((json.requiredFields || []).length > 0) {
-            setResults((prev) => {
-              if (prev && prev.some((r) => r.ok)) return prev
-              return [
-                {
-                  marketplaceId: "ebay",
-                  ok: false,
-                  status: "error",
-                  message:
-                    "Review required eBay item specifics below, then publish.",
-                  requiredFields: json.requiredFields,
-                  resolvedFields: json.resolvedFields,
-                },
-              ]
-            })
-          }
-        }
-      })
-      .catch(() => {
-        /* preview is best-effort */
-      })
-
-    return () => {
-      cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per listing when eBay selected
   }, [ebaySelected, listing.id])
@@ -409,45 +124,6 @@ export function OneClickPublishBar({
     setSelected((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     )
-  }
-
-  function readAspectValue(name: string) {
-    // Prefer Taxonomy-named extras (exact eBay value) when present.
-    const fromExtras = listing.specifics.extras?.[name]
-    if (fromExtras?.trim()) return fromExtras
-    const target = mapAspectToListingField(name)
-    if (target === "extras") return ""
-    return (listing.specifics[target] as string | undefined) ?? ""
-  }
-
-  function writeAspectValue(name: string, value: string) {
-    if (!onListingChange) return
-    // Manual selection always wins — store exact eBay option under extras.
-    // Color keeps AI-detected specifics.color untouched (Dark Gray/Charcoal).
-    const target = mapAspectToListingField(name)
-    const aspectKey = name.trim().toLowerCase()
-    const isColorAspect = aspectKey === "color" || aspectKey === "colour"
-    const extras = {
-      ...(listing.specifics.extras || {}),
-      [name]: value,
-    }
-    if (target === "extras" || isColorAspect) {
-      onListingChange({
-        ...listing,
-        specifics: { ...listing.specifics, extras },
-        updatedAt: new Date().toISOString(),
-      })
-      return
-    }
-    onListingChange({
-      ...listing,
-      specifics: {
-        ...listing.specifics,
-        [target]: value,
-        extras,
-      },
-      updatedAt: new Date().toISOString(),
-    })
   }
 
   async function handlePublish() {
@@ -472,15 +148,21 @@ export function OneClickPublishBar({
           setPublishing(false)
           return
         }
+        if (aspectMeta?.missing && aspectMeta.missing.length > 0) {
+          setError(
+            `Complete required item specifics in the form above: ${aspectMeta.missing.join(", ")}.`
+          )
+          setPublishing(false)
+          return
+        }
       }
 
-      // Ensure seller-facing inventory SKU + enriched title before durable upload.
+      // Assign inventory SKU only when automatic SKU generation is enabled.
       const prepared = ensureListingInventorySku({
         ...listing,
         title: enrichEbayTitleTowardLimit(listing.title, listing),
       })
 
-      // Upload full-resolution originals (not analysis copies) before eBay.
       const durableImages = await ensureDurableOriginalImageUrls(
         prepared.images,
         user.id
@@ -510,7 +192,6 @@ export function OneClickPublishBar({
       const publishResults = payload.results as OneClickPublishResult[]
       setResults(publishResults)
 
-      // Keep Listings page in sync: status listed + eBay id/url (no duplicates).
       if (publishResultsIncludeSuccess(publishResults) && user) {
         const fromServer =
           payload.listing && typeof payload.listing === "object"
@@ -536,14 +217,15 @@ export function OneClickPublishBar({
   }
 
   const available = MARKETPLACES.filter((m) => PHASE5_IDS.includes(m.id))
+  const unresolved = aspectMeta?.missing || []
 
   return (
     <section className="space-y-4 rounded-2xl border border-border bg-card/70 p-4 sm:p-5">
       <div>
         <h2 className="font-display text-lg font-semibold">Publish</h2>
         <p className="text-sm text-muted-foreground">
-          Select connected marketplaces and publish this listing through their
-          live APIs.{" "}
+          Select connected marketplaces, set shipping, and review the summary — edit
+          item specifics in the form above.{" "}
           <Link
             href="/dashboard/connections"
             className="underline underline-offset-2"
@@ -599,28 +281,48 @@ export function OneClickPublishBar({
 
       {ebaySelected && onListingChange && (
         <div className="space-y-4 rounded-xl border border-border bg-secondary/20 p-3">
+          <div>
+            <h3 className="text-sm font-semibold">Shipping</h3>
+            <p className="text-xs text-muted-foreground">
+              Calculated, Flat, or Free — plus handling time, weight, and dimensions.
+              Numeric fields stay blank until you enter them.
+            </p>
+          </div>
           <EbayShippingModeFields
             listing={listing}
             onChange={onListingChange}
             disabled={disabled || publishing}
+            compact
           />
           <ShippingPackageFields
             listing={listing}
             onChange={onListingChange}
             disabled={disabled || publishing}
+            compact
           />
           <EbayShippingPublishSummary listing={listing} />
           <PrePublishReviewCard
             listing={listing}
-            missingAspects={aspectMeta.missing}
-            aspectFilledCount={aspectMeta.filled}
-            aspectTotalCount={aspectMeta.total}
+            missingAspects={unresolved}
+            aspectFilledCount={aspectMeta?.filled}
+            aspectTotalCount={aspectMeta?.total}
           />
+          {unresolved.length > 0 && (
+            <p className="text-sm text-destructive" role="status">
+              Unresolved requirements — fix in Item specifics above:{" "}
+              {unresolved.join(", ")}.
+            </p>
+          )}
         </div>
       )}
 
       {ebaySelected && !onListingChange && (
-        <PrePublishReviewCard listing={listing} />
+        <PrePublishReviewCard
+          listing={listing}
+          missingAspects={unresolved}
+          aspectFilledCount={aspectMeta?.filled}
+          aspectTotalCount={aspectMeta?.total}
+        />
       )}
 
       <div className="flex justify-end">
@@ -665,72 +367,6 @@ export function OneClickPublishBar({
             </li>
           ))}
         </ul>
-      )}
-
-      {requiredFields.length > 0 && onListingChange && (
-        <div className="space-y-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
-          <div>
-            <h3 className="text-sm font-semibold">Required eBay item specifics</h3>
-            <p className="text-xs text-muted-foreground">
-              Values must match eBay&apos;s exact options for this category. Preselected
-              matches use those exact values — then publish again.
-            </p>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            {requiredFields.map((field) => {
-              const options = field.allowedValues || []
-              const raw = readAspectValue(field.name)
-              const nameKey = field.name.trim().toLowerCase()
-              const detected =
-                nameKey === "color" || nameKey === "colour"
-                  ? listing.fieldConfidence?.color?.value
-                  : undefined
-              const value =
-                options.length > 0
-                  ? resolveSelectValue(
-                      field.name,
-                      raw,
-                      options,
-                      field.suggestedValue,
-                      detected
-                    )
-                  : raw
-              return (
-                <div key={field.name} className="space-y-1.5">
-                  <Label htmlFor={`ebay-aspect-${field.name}`}>
-                    {field.name}
-                    <span className="text-destructive"> *</span>
-                  </Label>
-                  {options.length > 0 ? (
-                    <select
-                      id={`ebay-aspect-${field.name}`}
-                      value={value}
-                      disabled={disabled || publishing}
-                      onChange={(e) => writeAspectValue(field.name, e.target.value)}
-                      className="flex h-10 w-full rounded-lg border border-input bg-card px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      <option value="">Select {field.name}</option>
-                      {options.map((opt) => (
-                        <option key={opt} value={opt}>
-                          {opt}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <Input
-                      id={`ebay-aspect-${field.name}`}
-                      value={value}
-                      disabled={disabled || publishing}
-                      onChange={(e) => writeAspectValue(field.name, e.target.value)}
-                      placeholder={`Enter ${field.name}`}
-                      required
-                    />
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </div>
       )}
     </section>
   )

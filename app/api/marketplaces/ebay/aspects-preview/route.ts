@@ -6,14 +6,26 @@ import {
 } from "@/lib/marketplaces/adapters/ebay/aspects"
 import { mapListingToEbayInventory } from "@/lib/marketplaces/adapters/ebay/client"
 import { resolveEbayLeafCategoryId } from "@/lib/marketplaces/adapters/ebay/taxonomy"
+import {
+  EBAY_FORM_ASPECT_PRIORITY,
+  type EbayAspectFormField,
+} from "@/lib/listings/ebay-aspect-fields"
 import { getServerAuthUser } from "@/lib/supabase/index"
 import type { Listing } from "@/lib/types"
 
 export const runtime = "nodejs"
 
+function allowedValues(aspect: {
+  aspectValues?: Array<{ localizedValue?: string }>
+}): string[] {
+  return (aspect.aspectValues || [])
+    .map((v) => v.localizedValue?.trim())
+    .filter((v): v is string => Boolean(v))
+}
+
 /**
  * Prefetch eBay category aspects and return exact mapped values for the listing.
- * Used by the Publish UI to prefill specifics before the seller hits Publish.
+ * Used by the listing editor to show required item specifics before Publish.
  */
 export async function POST(request: Request) {
   try {
@@ -58,11 +70,70 @@ export async function POST(request: Request) {
         .map(([k]) => k.toLowerCase())
     )
 
+    const priorityKeys = new Set(
+      EBAY_FORM_ASPECT_PRIORITY.map((n) => n.toLowerCase())
+    )
+    const formFieldsByKey = new Map<string, EbayAspectFormField>()
+
+    for (const aspect of taxonomyAspects) {
+      const name = aspect.localizedAspectName?.trim()
+      if (!name) continue
+      const key = name.toLowerCase()
+      const required = Boolean(aspect.aspectConstraint?.aspectRequired)
+      const isPriority = priorityKeys.has(key)
+      if (!required && !isPriority) continue
+
+      const allowed = allowedValues(aspect)
+      const resolved = applied.aspects[name]?.[0]?.trim()
+      const missingEntry = applied.missingRequired.find(
+        (f) => f.name.toLowerCase() === key
+      )
+      formFieldsByKey.set(key, {
+        name,
+        required,
+        allowedValues: allowed.length > 0 ? allowed.slice(0, 80) : undefined,
+        suggestedValue: missingEntry?.suggestedValue,
+        value: resolved || undefined,
+      })
+    }
+
+    // Ensure every still-missing required field is present even if taxonomy miss.
+    for (const missing of applied.missingRequired) {
+      const key = missing.name.toLowerCase()
+      if (formFieldsByKey.has(key)) continue
+      formFieldsByKey.set(key, {
+        name: missing.name,
+        required: true,
+        allowedValues: missing.allowedValues,
+        suggestedValue: missing.suggestedValue,
+      })
+    }
+
+    const formFields = [...formFieldsByKey.values()].sort((a, b) => {
+      const ai = EBAY_FORM_ASPECT_PRIORITY.findIndex(
+        (n) => n.toLowerCase() === a.name.toLowerCase()
+      )
+      const bi = EBAY_FORM_ASPECT_PRIORITY.findIndex(
+        (n) => n.toLowerCase() === b.name.toLowerCase()
+      )
+      const aRank = ai === -1 ? 1000 : ai
+      const bRank = bi === -1 ? 1000 : bi
+      if (aRank !== bRank) return aRank - bRank
+      if (a.required !== b.required) return a.required ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+
+    const missingNames = formFields
+      .filter((f) => f.required && !f.value?.trim())
+      .map((f) => f.name)
+
     return NextResponse.json({
       categoryId,
+      formFields,
       requiredFields: applied.missingRequired,
       resolvedFields: applied.resolvedFields,
       filledRequired: applied.filledRequired,
+      missingRequiredNames: missingNames,
       aspectFilledCount: filledNames.size,
       aspectTotalCount: relevant.length,
       aspectsPreview: Object.fromEntries(

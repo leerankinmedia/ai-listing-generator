@@ -12,12 +12,15 @@ export type SkuSettings = {
   prefix: string
   nextNumber: number
   pad: number
+  /** When true, auto-assign the next ListWise SKU (LW00001…) on publish. Default false. */
+  autoGenerate: boolean
 }
 
 export const DEFAULT_SKU_SETTINGS: SkuSettings = {
   prefix: "LW",
   nextNumber: 1,
   pad: 5,
+  autoGenerate: false,
 }
 
 export function readSkuSettings(): SkuSettings {
@@ -32,6 +35,7 @@ export function readSkuSettings(): SkuSettings {
         .slice(0, 10) || "LW",
       nextNumber: Math.max(1, Math.floor(Number(parsed.nextNumber) || 1)),
       pad: Math.min(8, Math.max(3, Math.floor(Number(parsed.pad) || 5))),
+      autoGenerate: Boolean(parsed.autoGenerate),
     }
   } catch {
     return { ...DEFAULT_SKU_SETTINGS }
@@ -84,10 +88,15 @@ export function resolveListingSku(listing: Listing): string | null {
 }
 
 /**
- * Ensure listing.specifics.extras.sku is set to a seller-facing inventory SKU.
- * Imported listings keep their eBay SKU; new listings get the next ListWise SKU.
+ * Ensure listing.specifics.extras.sku is set when appropriate.
+ * Imported listings keep their eBay SKU.
+ * New listings only get the next ListWise SKU when autoGenerate is enabled
+ * in account settings — otherwise SKU stays optional/empty.
  */
-export function ensureListingInventorySku(listing: Listing): Listing {
+export function ensureListingInventorySku(
+  listing: Listing,
+  opts?: { forceAllocate?: boolean }
+): Listing {
   const existing = resolveListingSku(listing)
   if (existing) {
     const extras = { ...(listing.specifics.extras || {}) }
@@ -99,6 +108,14 @@ export function ensureListingInventorySku(listing: Listing): Listing {
         updatedAt: new Date().toISOString(),
       }
     }
+    return listing
+  }
+
+  const settings =
+    typeof window !== "undefined" ? readSkuSettings() : DEFAULT_SKU_SETTINGS
+  const shouldAllocate =
+    opts?.forceAllocate === true || settings.autoGenerate === true
+  if (!shouldAllocate) {
     return listing
   }
 

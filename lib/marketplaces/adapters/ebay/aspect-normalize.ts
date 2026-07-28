@@ -126,6 +126,25 @@ const STYLE_SYNONYMS: Record<string, string[]> = {
   streetwear: ["streetwear", "street wear"],
   outdoor: ["outdoor", "outdoors", "hiking"],
   basic: ["basic", "essential"],
+  // Jeans / pants styles — map AI wording onto exact eBay options (e.g. Straight).
+  straight: [
+    "straight",
+    "straight leg",
+    "straight-leg",
+    "straightleg",
+    "straight leg jeans",
+    "straight-leg jeans",
+    "straight fit",
+  ],
+  skinny: ["skinny", "skinny leg", "skinny fit", "skinny jeans"],
+  slim: ["slim", "slim fit", "slim leg", "slim jeans"],
+  bootcut: ["bootcut", "boot cut", "boot-cut", "bootcut jeans"],
+  flared: ["flared", "flare", "bell bottom", "bell bottoms"],
+  relaxed: ["relaxed", "relaxed fit", "relaxed leg"],
+  tapered: ["tapered", "taper", "tapered leg"],
+  boyfriend: ["boyfriend", "boyfriend fit"],
+  mom: ["mom", "mom jeans", "mom fit"],
+  wide: ["wide", "wide leg", "wide-leg"],
 }
 
 const TYPE_SYNONYMS: Record<string, string[]> = {
@@ -298,6 +317,16 @@ function expandCandidates(
     addCanonical(PATTERN_LOOKUP.get(collapsed))
   } else if (name === "style") {
     addCanonical(STYLE_LOOKUP.get(collapsed))
+    // "straight-leg jeans" → strip garment words, then match Straight.
+    const stripped = collapsed
+      .replace(/[-_/]+/g, " ")
+      .replace(/\b(jeans?|pants?|trousers|denim|fit)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+    if (stripped) addCanonical(STYLE_LOOKUP.get(stripped))
+    for (const word of collapsed.split(/[\s/_-]+/).filter(Boolean)) {
+      addCanonical(STYLE_LOOKUP.get(word))
+    }
   } else if (name === "type" || name === "item type") {
     addCanonical(TYPE_LOOKUP.get(collapsed))
     for (const word of collapsed.split(" ").filter(Boolean)) {

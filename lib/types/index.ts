@@ -78,11 +78,12 @@ export interface ListingImage {
 
 /** Seller-entered eBay package dims/weight — never AI-invented. */
 export interface ListingShippingPackage {
-  weightPounds: number
-  weightOunces: number
-  lengthInches: number
-  widthInches: number
-  heightInches: number
+  /** Blank until the seller enters a value (do not default to 0 in the form). */
+  weightPounds: number | null
+  weightOunces: number | null
+  lengthInches: number | null
+  widthInches: number | null
+  heightInches: number | null
   packageType: string
 }
 

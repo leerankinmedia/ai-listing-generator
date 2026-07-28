@@ -71,6 +71,11 @@ export function ListingGenerator() {
   const [sellerNotes, setSellerNotes] = useState("")
   const [progressPercent, setProgressPercent] = useState(0)
   const [progressMessage, setProgressMessage] = useState(ROTATING_MESSAGES[0])
+  const [aspectMeta, setAspectMeta] = useState<{
+    missing: string[]
+    filled: number
+    total: number
+  }>({ missing: [], filled: 0, total: 0 })
 
   useEffect(() => {
     if (!generating) return
@@ -356,10 +361,12 @@ export function ListingGenerator() {
             listing={{ ...listing, images }}
             onChange={setListing}
             disabled={saving}
+            onAspectMetaChange={setAspectMeta}
           />
           <OneClickPublishBar
             listing={{ ...listing, images }}
             disabled={saving}
+            aspectMeta={aspectMeta}
             onListingChange={(next) => {
               setListing(next)
               setImages(next.images)

@@ -33,6 +33,12 @@ import {
   LIFETIME_FOUNDER_ACCESS,
   isOwnerBillingStatus,
 } from "@/lib/billing/owner"
+import {
+  DEFAULT_SKU_SETTINGS,
+  readSkuSettings,
+  writeSkuSettings,
+  type SkuSettings,
+} from "@/lib/listings/sku"
 import { cn } from "@/lib/utils"
 
 type PublicConnection = {
@@ -46,6 +52,7 @@ export function DashboardOverview() {
   const { status: billing } = useBillingStatus(Boolean(user))
   const [listings, setListings] = useState<Listing[]>([])
   const [connectedIds, setConnectedIds] = useState<MarketplaceId[]>([])
+  const [skuSettings, setSkuSettings] = useState<SkuSettings>(DEFAULT_SKU_SETTINGS)
   const displayName =
     user?.fullName?.trim() ||
     user?.email?.split("@")[0] ||
@@ -95,6 +102,16 @@ export function DashboardOverview() {
       mounted = false
     }
   }, [user])
+
+  useEffect(() => {
+    setSkuSettings(readSkuSettings())
+  }, [])
+
+  function patchSkuSettings(partial: Partial<SkuSettings>) {
+    const next = { ...skuSettings, ...partial }
+    setSkuSettings(next)
+    writeSkuSettings(next)
+  }
 
   const activeCount = countActiveListings(listings)
   const connectedCount = countConnectedShops(connectedIds)
@@ -250,7 +267,7 @@ export function DashboardOverview() {
 
       <section
         id="settings"
-        className="scroll-mt-24 rounded-xl border border-border bg-card/80 p-4 sm:p-5"
+        className="scroll-mt-24 space-y-4 rounded-xl border border-border bg-card/80 p-4 sm:p-5"
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
@@ -288,6 +305,25 @@ export function DashboardOverview() {
           >
             {isOwner ? "View access" : "Manage billing"}
           </Link>
+        </div>
+
+        <div className="rounded-lg border border-border bg-secondary/30 p-3">
+          <p className="text-sm font-semibold">Inventory SKU</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            SKU is optional. Turn this on only if you want ListWise to assign the next
+            code (LW00001, LW00002…) automatically when you publish.
+          </p>
+          <label className="mt-3 flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={skuSettings.autoGenerate}
+              onChange={(e) =>
+                patchSkuSettings({ autoGenerate: e.target.checked })
+              }
+            />
+            <span>Automatically generate ListWise inventory SKUs</span>
+          </label>
         </div>
       </section>
     </div>

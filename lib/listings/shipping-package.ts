@@ -19,13 +19,13 @@ export const EBAY_PACKAGE_TYPES = [
 export type EbayPackageTypeValue = (typeof EBAY_PACKAGE_TYPES)[number]["value"]
 
 export interface ShippingPackage {
-  /** Whole pounds (0+). Combined with ounces must be > 0. */
-  weightPounds: number
-  /** Extra ounces (0–15 preferred; values ≥16 are normalized). */
-  weightOunces: number
-  lengthInches: number
-  widthInches: number
-  heightInches: number
+  /** Whole pounds (0+). Combined with ounces must be > 0. Null = blank / unset. */
+  weightPounds: number | null
+  /** Extra ounces (0–15 preferred; values ≥16 are normalized). Null = blank. */
+  weightOunces: number | null
+  lengthInches: number | null
+  widthInches: number | null
+  heightInches: number | null
   packageType: EbayPackageTypeValue | string
 }
 

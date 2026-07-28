@@ -53,6 +53,10 @@ describe("SKU resolution", () => {
     )
   })
 
+  it("defaults autoGenerate to false", () => {
+    assert.equal(DEFAULT_SKU_SETTINGS.autoGenerate, false)
+  })
+
   it("never returns a raw UUID from pickPublishSku", () => {
     const listing = baseListing({ specifics: {} })
     const sku = pickPublishSku(listing)

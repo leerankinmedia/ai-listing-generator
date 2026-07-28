@@ -25,7 +25,7 @@ export function PrePublishReviewCard({
     [...listing.images].sort(
       (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
     )[0]
-  const sku = resolveListingSku(listing) || "Will assign on publish"
+  const sku = resolveListingSku(listing) || "Optional"
   const qty = Number(listing.specifics.extras?.quantity ?? 1)
   const mode = defaultEbayShippingMode(listing.specifics.shippingMode)
   const pkg = listing.specifics.shippingPackage

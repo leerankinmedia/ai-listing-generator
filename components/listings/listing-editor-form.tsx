@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react"
 import { ConfidenceMeter } from "@/components/listings/confidence-meter"
+import { ConfirmIdentityBox } from "@/components/listings/confirm-identity-box"
 import { CompsPricingPanel } from "@/components/listings/comps-pricing-panel"
 import { EbayItemSpecificsFields } from "@/components/listings/ebay-item-specifics-fields"
 import { Input } from "@/components/ui/input"
@@ -217,6 +218,12 @@ export function ListingEditorForm({
             description. Confirm Review items — everything else is ready.
           </p>
         </div>
+
+        <ConfirmIdentityBox
+          listing={listing}
+          onChange={onChange}
+          disabled={disabled}
+        />
 
         <EbayItemSpecificsFields
           listing={listing}

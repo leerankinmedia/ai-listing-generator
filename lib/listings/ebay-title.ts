@@ -1,6 +1,7 @@
 /**
  * Build / extend eBay titles toward 70–80 characters using known attributes.
- * No filler keywords — only real Brand, Department, Size, Color, Style, Type, Material.
+ * Priority: Brand → Character → Department → Pattern/Color → Type → Size.
+ * No filler keywords — only real searchable attributes.
  */
 
 import { splitPrimaryColorAndDetails } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
@@ -35,15 +36,29 @@ function primaryColor(raw: string): string {
   return split.primaryLabel || raw.split(/[/,|]/)[0]?.trim() || raw
 }
 
+function shortType(type: string): string {
+  // Compress verbose AI item types for title space.
+  return type
+    .replace(/\bwomen'?s\b/gi, "")
+    .replace(/\bmen'?s\b/gi, "")
+    .replace(/\bbutton-?front\b/gi, "Button")
+    .replace(/\bshirt\/blouse\b/gi, "Shirt")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
 function enoughSeoKeywords(listing: Listing): boolean {
   const s = listing.specifics
   const extras = s.extras || {}
   const signals = [
     s.brand,
+    extras.Character || listing.fieldConfidence?.character?.value,
     s.gender || extras.Department,
     s.size,
     extras.Color || extras.Colour || s.color,
     s.style || extras.Type || extras.type,
+    s.pattern,
   ].filter((v) => cleanPart(v) && !isUnknown(cleanPart(v)))
   return signals.length >= 3
 }
@@ -51,21 +66,38 @@ function enoughSeoKeywords(listing: Listing): boolean {
 /**
  * Assemble a search-optimized title from listing attributes, targeting 70–80 chars
  * when enough accurate keywords are available. Never adds irrelevant filler.
+ *
+ * Example shape:
+ * Vintage Looney Tunes Tweety Bird Women's Gingham Sleeveless Button Shirt 22W
  */
 export function buildEbayOptimizedTitle(listing: Listing): string {
   const s = listing.specifics
   const extras = s.extras || {}
   const brand = cleanPart(s.brand)
+  const character = cleanPart(
+    extras.Character ||
+      extras.character ||
+      listing.fieldConfidence?.character?.value
+  )
   const dept = cleanPart(s.gender || extras.Department || extras.department)
   const size = cleanPart(s.size || extras.Size)
   const colorRaw = cleanPart(extras.Color || extras.Colour || s.color)
   const color = colorRaw && !isUnknown(colorRaw) ? primaryColor(colorRaw) : ""
   const style = cleanPart(s.style || extras.Style)
-  const type = cleanPart(extras.Type || extras.type || extras["Item Type"])
+  const type = cleanPart(
+    extras.Type ||
+      extras.type ||
+      extras["Item Type"] ||
+      listing.fieldConfidence?.itemType?.value
+  )
   const material = cleanPart(s.material || extras.Material)
   const pattern = cleanPart(s.pattern || extras.Pattern)
   const fit = cleanPart(extras.Fit)
   const sizeType = cleanPart(extras["Size Type"])
+  const vintage = cleanPart(extras.Vintage)
+  const isVintage =
+    /^yes$/i.test(vintage) ||
+    /\bvintage\b/i.test(`${listing.title} ${listing.description}`)
 
   const parts: string[] = []
   const push = (part: string) => {
@@ -74,15 +106,54 @@ export function buildEbayOptimizedTitle(listing: Listing): string {
     if (next.length <= EBAY_TITLE_MAX) parts.push(part)
   }
 
+  if (isVintage) push("Vintage")
   push(brand && !isUnknown(brand) ? brand : "")
+  if (
+    character &&
+    !isUnknown(character) &&
+    !parts.some((p) => p.toLowerCase().includes(character.toLowerCase()))
+  ) {
+    push(character)
+  }
   if (dept && !isUnknown(dept)) push(titleCaseDept(dept))
   if (sizeType && !/^regular$/i.test(sizeType)) push(sizeType)
-  push(size)
-  push(color)
+
+  // Prefer searchable pattern (gingham) over plain color when both compete for space.
+  const patternSearchable =
+    pattern && !isUnknown(pattern) && !/^solid$/i.test(pattern)
+  if (patternSearchable) {
+    let patLabel = pattern
+    if (/gingham/i.test(pattern)) patLabel = "Gingham"
+    else if (/\bchecks?\b/i.test(pattern)) patLabel = "Check"
+    else if (/\bstripes?\b|\bstriped\b/i.test(pattern)) patLabel = "Striped"
+    else if (/\bfloral\b/i.test(pattern)) patLabel = "Floral"
+    else {
+      patLabel = pattern.replace(/\b\w/g, (c) => c.toUpperCase())
+      if (patLabel.includes(" ")) patLabel = patLabel.split(/\s+/)[0]
+    }
+    push(patLabel)
+  } else {
+    push(color)
+  }
 
   // Prefer type then style; avoid duplicating similar tokens.
-  if (type && !isUnknown(type)) push(type)
-  else if (style && !isUnknown(style)) push(style)
+  if (type && !isUnknown(type)) {
+    const shortened = shortType(type)
+    // Push meaningful tokens from type that are not already present.
+    for (const token of shortened.split(/\s+/)) {
+      if (!token || isUnknown(token)) continue
+      if (parts.some((p) => p.toLowerCase() === token.toLowerCase())) continue
+      if (
+        dept &&
+        titleCaseDept(dept).toLowerCase().includes(token.toLowerCase())
+      ) {
+        continue
+      }
+      push(token)
+    }
+  } else if (style && !isUnknown(style)) {
+    push(shortType(style))
+  }
 
   if (
     parts.join(" ").length < 60 &&
@@ -98,7 +169,13 @@ export function buildEbayOptimizedTitle(listing: Listing): string {
     type &&
     !parts.some((p) => p.toLowerCase() === style.toLowerCase())
   ) {
-    push(style)
+    const styleShort = shortType(style)
+    if (
+      styleShort &&
+      !parts.some((p) => styleShort.toLowerCase().includes(p.toLowerCase()))
+    ) {
+      push(styleShort.split(/\s+/)[0])
+    }
   }
 
   if (parts.join(" ").length < 70) {
@@ -111,14 +188,9 @@ export function buildEbayOptimizedTitle(listing: Listing): string {
       push(material)
     }
   }
-  if (
-    parts.join(" ").length < 75 &&
-    pattern &&
-    !isUnknown(pattern) &&
-    !/^solid$/i.test(pattern)
-  ) {
-    push(pattern)
-  }
+
+  // Size near the end (common eBay apparel pattern).
+  push(size)
 
   let title = parts.join(" ").replace(/\s+/g, " ").trim()
   if (!title) title = cleanPart(listing.title).slice(0, EBAY_TITLE_MAX)
@@ -171,13 +243,16 @@ export function enrichEbayTitleTowardLimit(
   const extras = listing.specifics.extras || {}
   const candidates = [
     listing.specifics.brand,
+    extras.Character || listing.fieldConfidence?.character?.value,
     listing.specifics.gender ? titleCaseDept(listing.specifics.gender) : "",
+    listing.specifics.pattern && !/^solid$/i.test(listing.specifics.pattern)
+      ? listing.specifics.pattern
+      : "",
+    extras.Type || extras.type || listing.fieldConfidence?.itemType?.value,
+    listing.specifics.style,
     listing.specifics.size,
     primaryColor(extras.Color || listing.specifics.color || ""),
-    extras.Type || extras.type,
-    listing.specifics.style,
     extras.Fit,
-    listing.specifics.pattern,
   ]
     .map(cleanPart)
     .filter((p) => p && !isUnknown(p))

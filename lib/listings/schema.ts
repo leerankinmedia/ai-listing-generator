@@ -39,21 +39,60 @@ export const confidentStringSchema = z.object({
     .describe("Brief evidence from the photo(s)"),
 })
 
+export const photoKindEnum = z.enum([
+  "garment",
+  "tag",
+  "label",
+  "graphic",
+  "detail",
+  "other",
+])
+
 /** Per-image attribute detection */
 export const imageDetectionSchema = z.object({
-  brand: confidentStringSchema,
-  category: confidentStringSchema.describe(
-    "Marketplace category path, e.g. Women > Shoes > Sneakers"
+  photoKind: photoKindEnum.describe(
+    "What this photo primarily shows: garment overview, care/brand tag, sewn-in label, close-up of graphic/embroidery/logo/character, construction detail, or other"
   ),
-  size: confidentStringSchema,
+  brand: confidentStringSchema.describe(
+    "Apparel brand OR licensed property printed on a tag/label (e.g. Looney Tunes, Disney, Nike). Never leave Unknown when a licensed label or franchise mark is readable."
+  ),
+  licensedProperty: confidentStringSchema.describe(
+    "Licensed franchise/IP when visible (e.g. Looney Tunes, Disney, Marvel). Unknown if none."
+  ),
+  character: confidentStringSchema.describe(
+    "Named character when visibly depicted or labeled (e.g. Tweety Bird, Mickey Mouse). Unknown if none."
+  ),
+  theme: confidentStringSchema.describe(
+    "Theme for item specifics, e.g. Cartoon, Looney Tunes or Sports. Unknown if none."
+  ),
+  features: confidentStringSchema.describe(
+    "Comma-separated visible features: embroidered chest graphic, chest pocket, collared, sleeveless, button-front, patches, etc."
+  ),
+  itemType: confidentStringSchema.describe(
+    "Specific garment type, e.g. Women's sleeveless button-front shirt/blouse — not a vague top"
+  ),
+  category: confidentStringSchema.describe(
+    "Marketplace category path, e.g. Women > Clothing > Tops > Blouses"
+  ),
+  size: confidentStringSchema.describe(
+    "Size from tag when visible (e.g. 22W, XL). Tag OCR overrides guesses."
+  ),
   color: confidentStringSchema,
-  material: confidentStringSchema,
+  material: confidentStringSchema.describe(
+    "Fabric from care tag when readable (e.g. 100% Cotton)"
+  ),
   style: confidentStringSchema,
+  styleNumber: confidentStringSchema.describe(
+    "Style/RN/SKU number from tag when readable, else Unknown"
+  ),
+  countryOfOrigin: confidentStringSchema.describe(
+    "Country of origin from tag when readable, else Unknown"
+  ),
   pattern: confidentStringSchema.describe(
-    "Pattern such as solid, striped, floral, logo, colorblock"
+    "Pattern such as solid, striped, floral, gingham/check, logo, colorblock"
   ),
   gender: confidentStringSchema.describe(
-    "Men, Women, Unisex, Boys, Girls, or Unknown"
+    "Men, Women, Unisex, Boys, Girls, or Unknown — prefer tag gender when present"
   ),
   condition: z.object({
     value: conditionEnum,
@@ -66,6 +105,34 @@ export const imageDetectionSchema = z.object({
   imageSummary: z
     .string()
     .describe("One-sentence description of what this photo shows"),
+})
+
+/** Second-pass: logos, characters, embroidery, labels, and readable tag text across all photos */
+export const identitySecondPassSchema = z.object({
+  brand: confidentStringSchema.describe(
+    "Brand or licensed property from tags/labels/marks. Use Looney Tunes when that label is visible."
+  ),
+  licensedProperty: confidentStringSchema,
+  character: confidentStringSchema.describe(
+    "Named character from embroidery, print, or label (e.g. Tweety Bird)"
+  ),
+  theme: confidentStringSchema.describe(
+    "e.g. Cartoon, Looney Tunes"
+  ),
+  features: confidentStringSchema,
+  itemType: confidentStringSchema,
+  size: confidentStringSchema,
+  gender: confidentStringSchema,
+  material: confidentStringSchema,
+  styleNumber: confidentStringSchema,
+  countryOfOrigin: confidentStringSchema,
+  pattern: confidentStringSchema,
+  logoAndGraphicSummary: z
+    .string()
+    .describe("What logos, characters, embroidery, patches, or graphics are visible across the photos"),
+  tagTextSummary: z
+    .string()
+    .describe("All readable tag/label text combined (brand, size, material, country, style #, gender)"),
 })
 
 /** Batch response: one detection object per photo, in order */
@@ -127,6 +194,7 @@ export const compsEstimateSchema = z.object({
 })
 
 export type ImageDetection = z.infer<typeof imageDetectionSchema>
+export type IdentitySecondPassResult = z.infer<typeof identitySecondPassSchema>
 export type ListingCopy = z.infer<typeof listingCopySchema>
 export type CompsEstimate = z.infer<typeof compsEstimateSchema>
 
@@ -147,6 +215,7 @@ export type GeneratedListingOutput = {
     condition: string
     category: string
     flaws: string
+    extras?: Record<string, string>
   }
   fieldConfidence: Record<
     string,

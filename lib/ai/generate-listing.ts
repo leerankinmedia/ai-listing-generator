@@ -3,11 +3,13 @@ import { createOpenAI } from "@ai-sdk/openai"
 import {
   compsEstimateSchema,
   imageBatchDetectionSchema,
+  identitySecondPassSchema,
   listingCopySchema,
   VISION_BATCH_SIZE,
   type CompsEstimate,
   type GeneratedListingOutput,
   type ImageDetection,
+  type IdentitySecondPassResult,
   type ListingCopy,
 } from "@/lib/listings/schema"
 import {
@@ -27,7 +29,19 @@ import {
   sanitizeDetectedFlaws,
 } from "@/lib/listings/condition-details"
 import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
-import type { DetectedFieldKey, FieldConfidence, Listing } from "@/lib/types"
+import {
+  applyLicensedBrandFallback,
+  identityExtrasFromFields,
+  identityFieldConfidence,
+  isKnownValue,
+  isUnknownValue,
+  mergeClothingDetections,
+  mergeIdentitySecondPass,
+  needsIdentitySecondPass,
+  type IdentityFields,
+  type IdentitySecondPass,
+} from "@/lib/listings/clothing-identity"
+import type { FieldConfidence, Listing } from "@/lib/types"
 
 type OpenAIClient = ReturnType<typeof createOpenAI>
 
@@ -82,9 +96,20 @@ type ContentPart =
   | { type: "image"; image: Uint8Array | Buffer | string; mediaType?: string }
 
 const DETECT_SYSTEM = `You are ListWise Vision, a production clothing identification engine for eBay resale listings.
-Analyze ONLY what is visible in the provided clothing photo(s).
-Rules:
-- Never invent brands, sizes, or labels you cannot see or reasonably infer.
+Analyze ONLY what is visible in the provided clothing photo(s). Use ALL visual evidence: garment body, tags, labels, embroidery, patches, logos, and graphics.
+
+Identity rules (critical):
+- Detect licensed characters, franchises, logos, embroidery, patches, and graphic details.
+  Examples: Looney Tunes + Tweety Bird embroidery; Disney + Mickey; sports team logos.
+- photoKind must reflect the photo: garment | tag | label | graphic | detail | other.
+- Read EVERY visible tag/label with OCR-level care for brand, size, material, country, style number, and gender.
+- When a tag says Looney Tunes (or shows an official Looney Tunes label), brand AND licensedProperty = "Looney Tunes".
+- When Tweety (or Tweety Bird) is embroidered/printed/labeled, character = "Tweety Bird".
+- Theme example when cartoon IP is present: "Cartoon, Looney Tunes".
+- itemType must be specific (e.g. Women's sleeveless button-front shirt/blouse), not a vague "top".
+- features: list visible construction/graphic details (embroidered chest graphic, chest pocket, collared, sleeveless, button-front…).
+- Never invent brands, sizes, or labels you cannot see or reasonably infer from marks.
+- Never leave brand as Unknown when a licensed property or recognizable brand label is visible.
 - Use "Unknown" when evidence is insufficient; keep confidence low.
 - Confidence must reflect visual certainty (logos, tags, fabric grain, wear).
 - Flaws: ONLY report defects with strong, unambiguous visual evidence (clear stains, holes, tears,
@@ -96,11 +121,19 @@ Rules:
 - Color: use a single primary garment color only (White, Black, Red, Blue, Gray, Green, Brown, Pink, Purple, Yellow, Orange).
   Put accent details (red stitching, contrast trim, logos) in pattern, style, or description — never in Color.
   Example: Color "White" and note "red stitching" elsewhere — not "White with red stitch".
+  For black-and-white gingham/check, Color may be Black or White (pick dominant) and pattern = gingham/check.
   Do not default to Black when the garment looks charcoal, slate, or dark gray — especially in
   uneven lighting. Reserve Black for clearly jet-black fabric with no gray/charcoal evidence.
 - Seller context (when provided) is HIGH PRIORITY guidance for ambiguous attributes
   (women's/men's, size, brand, flaws, item type). Use it to fill gaps and disambiguate.
   NEVER overwrite attributes that are clearly contradicted by strong, visible photo evidence.`
+
+const IDENTITY_SECOND_PASS_SYSTEM = `You are ListWise Identity Vision — a second-pass specialist.
+Your ONLY job is to inspect logos, characters, embroidery, patches, graphics, brand marks, and every readable tag/label across ALL photos together.
+Do not treat the item as a generic garment. Name franchises and characters when visually clear (e.g. Looney Tunes / Tweety Bird).
+Tag text overrides guesses from cover shots for brand, size, material, country, style number, and gender.
+If an official Looney Tunes label/tag is visible, brand and licensedProperty must be "Looney Tunes".
+Return Unknown only when truly not visible.`
 
 function sellerContextBlock(sellerNotes?: string): string {
   const notes = sellerNotes?.trim()
@@ -119,23 +152,25 @@ const COPY_SYSTEM = `You are ListWise Copy, an expert eBay clothing listing writ
 Write conversion-focused, accurate eBay titles and descriptions from verified attributes and photo evidence.
 
 Apparel eBay title rules (strict priority order — omit unknown parts, do not reorder):
-1. Brand / franchise
-2. Collection, event, character, team, or graphic keywords
-3. Gender / department (e.g. Men's, Women's)
-4. Size
-5. Exact normalized search color (e.g. Gray — not shade compounds like Dark Gray/Charcoal)
-6. Item type / style (e.g. Graphic T-Shirt)
-7. Material when it is a strong search term (cashmere, leather, silk, wool) OR one strong search keyword
-- Use up to 80 characters when the attributes support it — do not leave valuable title space unused
+1. Brand / franchise (e.g. Looney Tunes)
+2. Character, collection, event, team, or graphic keywords (e.g. Tweety Bird)
+3. Gender / department (e.g. Women's, Men's)
+4. Pattern when searchable (e.g. Gingham) OR normalized color
+5. Exact item type / style words (e.g. Sleeveless Button Shirt)
+6. Size (e.g. 22W)
+7. Optional: Vintage when clearly vintage, or one strong material search term (cashmere, leather, silk, wool)
+- Target near 80 characters when attributes support it — do not leave valuable title space unused
 - Do not add filler words, keyword stuffing, or ALL CAPS
 - Do NOT put commodity fabric callouts like "100% Cotton" or "Cotton Blend" in the title
   unless the material itself is a rare major selling feature (cashmere, leather, silk, wool coat)
 - Color accents (stitching, trim, logos) belong in description bullets — not the Color specific
-Example title shape:
+Example titles:
+Vintage Looney Tunes Tweety Bird Women's Gingham Sleeveless Button Shirt 22W
 WWE WrestleMania Legends Men's XL Gray Graphic T-Shirt Wrestling Tee
 
 Description rules:
 - Clear paragraphs + bullet details
+- Call out character, franchise, embroidery/graphics, pattern, and construction features
 - Use a positive neutral condition line for normal pre-owned items with no verified flaws
 - ONLY mention flaws that appear in the verified attributes.flaws field with strong evidence
 - Never invent wrinkles, fading, stains, holes, wear, or damage
@@ -161,7 +196,10 @@ async function detectSingleImage(
     {
       type: "text",
       text: `Analyze photo ${photoNumber} of ${totalImages} individually.
-Return exactly one analysis object for this photo covering brand, category, size, color, material, style, pattern, gender, condition, and flaws.
+Classify photoKind (garment/tag/label/graphic/detail/other).
+Return brand, licensedProperty, character, theme, features, itemType, category, size, color, material, style, styleNumber, countryOfOrigin, pattern, gender, condition, and flaws.
+Prioritize readable tags for brand/size/material/country/style number/gender.
+Detect characters, franchises, logos, embroidery, and patches when visible.
 For flaws: use "None visible" unless a defect is clearly and strongly evidenced in this photo. Do not invent wrinkles or fading.${sellerContextBlock(sellerNotes)}`,
     },
     {
@@ -208,7 +246,9 @@ async function detectBatch(
     {
       type: "text",
       text: `Batch ${batchIndex + 1}: analyze EACH of these ${batch.length} photos individually (photos ${startIndex + 1}–${startIndex + batch.length} of ${totalImages}).
-Return one analysis object per photo in the same order. Cover brand, category, size, color, material, style, pattern, gender, condition, and flaws for every image.
+Return one analysis object per photo in the same order.
+For every image: photoKind, brand, licensedProperty, character, theme, features, itemType, category, size, color, material, style, styleNumber, countryOfOrigin, pattern, gender, condition, and flaws.
+Read tags carefully; detect characters/franchises/logos/embroidery/patches.
 For flaws: use "None visible" unless a defect is clearly and strongly evidenced in that photo. Do not invent wrinkles or fading.${sellerContextBlock(sellerNotes)}`,
     },
   ]
@@ -301,30 +341,6 @@ For flaws: use "None visible" unless a defect is clearly and strongly evidenced 
   }
 }
 
-function pickBest(
-  fields: Array<{ value: string; confidence: number; rationale: string }>
-): FieldConfidence {
-  const ranked = [...fields].sort((a, b) => b.confidence - a.confidence)
-  const best = ranked[0]
-  const known = ranked.filter(
-    (f) => f.value && f.value.toLowerCase() !== "unknown"
-  )
-  const chosen = known[0] ?? best
-  // Boost slightly when multiple batches agree
-  const agreements = known.filter(
-    (f) => f.value.toLowerCase() === chosen.value.toLowerCase()
-  ).length
-  const confidence = Math.min(
-    1,
-    chosen.confidence + (agreements > 1 ? 0.05 * (agreements - 1) : 0)
-  )
-  return {
-    value: chosen.value,
-    confidence: Number(confidence.toFixed(3)),
-    rationale: chosen.rationale,
-  }
-}
-
 function colorDetailScore(value: string): number {
   const v = value.trim()
   let score = 0
@@ -334,18 +350,25 @@ function colorDetailScore(value: string): number {
   return score
 }
 
-/**
- * Merge color across all uploaded photos.
- * When black vs gray-family is uncertain, keep the detailed gray wording for
- * review — never let a later Black vote automatically overwrite it.
- */
 function pickBestColor(
   fields: Array<{ value: string; confidence: number; rationale: string }>
 ): FieldConfidence {
   const known = fields.filter(
     (f) => f.value?.trim() && f.value.trim().toLowerCase() !== "unknown"
   )
-  if (known.length === 0) return pickBest(fields)
+  if (known.length === 0) {
+    const ranked = [...fields].sort((a, b) => b.confidence - a.confidence)
+    const best = ranked[0] || {
+      value: "Unknown",
+      confidence: 0,
+      rationale: "No color detections",
+    }
+    return {
+      value: best.value,
+      confidence: best.confidence,
+      rationale: best.rationale,
+    }
+  }
 
   const grayVotes = known.filter((f) => colorIsGrayFamily(f.value))
   const blackVotes = known.filter(
@@ -395,40 +418,33 @@ function pickBestColor(
     }
   }
 
-  return pickBest(known)
+  const ranked = [...known].sort((a, b) => b.confidence - a.confidence)
+  const chosen = ranked[0]
+  const agreements = known.filter(
+    (f) => f.value.toLowerCase() === chosen.value.toLowerCase()
+  ).length
+  return {
+    value: chosen.value,
+    confidence: Number(
+      Math.min(
+        1,
+        chosen.confidence + (agreements > 1 ? 0.05 * (agreements - 1) : 0)
+      ).toFixed(3)
+    ),
+    rationale: chosen.rationale,
+  }
 }
 
 function mergeDetections(detections: ImageDetection[]): {
-  fields: Record<
-    Exclude<DetectedFieldKey, "title" | "description" | "price" | "keywords">,
-    FieldConfidence
-  >
+  fields: IdentityFields
   perImage: GeneratedListingOutput["perImage"]
 } {
-  const keys = [
-    "brand",
-    "category",
-    "size",
-    "color",
-    "material",
-    "style",
-    "pattern",
-    "gender",
-    "condition",
-    "flaws",
-  ] as const
+  const { fields, perImage } = mergeClothingDetections(detections)
 
-  const fields = {} as Record<
-    (typeof keys)[number],
-    FieldConfidence
-  >
+  // Color: keep specialized black/gray merge.
+  const colorVotes = detections.map((d) => d.color)
+  fields.color = pickBestColor(colorVotes)
 
-  for (const key of keys) {
-    const votes = detections.map((d) => d[key])
-    fields[key] = key === "color" ? pickBestColor(votes) : pickBest(votes)
-  }
-
-  // Never keep low-confidence / speculative wear as the listing flaw value.
   const sanitizedFlaws = sanitizeDetectedFlaws(
     fields.flaws.value,
     fields.flaws.confidence
@@ -442,13 +458,102 @@ function mergeDetections(detections: ImageDetection[]): {
         : fields.flaws.rationale,
   }
 
-  const perImage = detections.map((d, index) => ({
-    index,
-    summary: d.imageSummary,
-    flaws: sanitizeDetectedFlaws(d.flaws.value, d.flaws.confidence),
-  }))
+  const licensed = applyLicensedBrandFallback(fields)
+  Object.assign(fields, licensed)
 
-  return { fields, perImage }
+  return {
+    fields,
+    perImage: perImage.map((p) => ({
+      index: p.index,
+      summary: p.summary,
+      flaws: sanitizeDetectedFlaws(
+        detections[p.index]?.flaws.value || p.flaws,
+        detections[p.index]?.flaws.confidence ?? 0
+      ),
+    })),
+  }
+}
+
+function toIdentitySecondPass(
+  result: IdentitySecondPassResult
+): IdentitySecondPass {
+  return {
+    brand: result.brand,
+    licensedProperty: result.licensedProperty,
+    character: result.character,
+    theme: result.theme,
+    features: result.features,
+    itemType: result.itemType,
+    size: result.size,
+    gender: result.gender,
+    material: result.material,
+    styleNumber: result.styleNumber,
+    countryOfOrigin: result.countryOfOrigin,
+    pattern: result.pattern,
+    logoAndGraphicSummary: result.logoAndGraphicSummary,
+    tagTextSummary: result.tagTextSummary,
+  }
+}
+
+/**
+ * Second pass: inspect logos, characters, embroidery, labels, and tag text
+ * across ALL photos together when first-pass identity confidence is low.
+ */
+async function recognizeIdentitySecondPass(
+  openai: OpenAIClient,
+  images: VisionImage[],
+  firstPass: IdentityFields,
+  sellerNotes?: string
+): Promise<{ identity: IdentitySecondPass; usage: TokenUsage }> {
+  const content: ContentPart[] = [
+    {
+      type: "text",
+      text: `SECOND PASS — identity only. Inspect EVERY photo together for:
+- Licensed franchises / brands on tags and marks
+- Characters (embroidery, prints, patches)
+- Logos, graphic details, text on garment
+- Full tag OCR: brand, size, material, country, style number, gender
+
+First-pass garment summary (may be incomplete — correct and enrich):
+${JSON.stringify(
+  {
+    brand: firstPass.brand,
+    licensedProperty: firstPass.licensedProperty,
+    character: firstPass.character,
+    theme: firstPass.theme,
+    features: firstPass.features,
+    itemType: firstPass.itemType,
+    size: firstPass.size,
+    pattern: firstPass.pattern,
+  },
+  null,
+  2
+)}
+
+Merge evidence across all ${images.length} photos. Tag photos override cover guesses.
+Never leave brand Unknown when a licensed label is readable.
+Example: Looney Tunes tag + Tweety embroidery → brand/licensedProperty Looney Tunes, character Tweety Bird, theme "Cartoon, Looney Tunes".${sellerContextBlock(sellerNotes)}`,
+    },
+  ]
+  for (const image of images) {
+    content.push({
+      type: "image",
+      image: image.data,
+      mediaType: image.mediaType,
+    })
+  }
+
+  const result = await generateObject({
+    model: listingModel(openai),
+    schema: identitySecondPassSchema,
+    system: IDENTITY_SECOND_PASS_SYSTEM,
+    messages: [{ role: "user", content }],
+  })
+
+  return {
+    identity: toIdentitySecondPass(result.object),
+    usage: usageFromResult(result),
+  }
 }
 
 /** Search color for titles only — does not change detected attributes. */
@@ -561,16 +666,17 @@ async function generateCopy(
       type: "text",
       text: `Create an eBay SEO title, eBay-ready description, keywords, and eBay category suggestion for this clothing item.
 
-Title must follow this apparel priority (omit unknowns; keep under 80 chars):
-Brand/franchise → collection/event/character/team/graphic → gender/department → size → normalized color → item type/style → strong search keyword.
+Title must follow this apparel priority (omit unknowns; target near 80 chars):
+Brand/franchise → character/collection/graphic → gender/department → pattern (when searchable, e.g. Gingham) or normalized color → item type/style → size.
+Prefer character + franchise keywords over generic garment words.
+Example: Vintage Looney Tunes Tweety Bird Women's Gingham Sleeveless Button Shirt 22W
+Example: WWE WrestleMania Legends Men's XL Gray Graphic T-Shirt Wrestling Tee
 
-Title color to use (normalized for search only): ${searchColor || "omit if unknown"}
+Title color to use (normalized for search only): ${searchColor || "omit if unknown or when pattern (e.g. gingham) is the stronger search term"}
 Do not use shade compounds like "Dark Gray/Charcoal" in the title when a normalized color is provided.
 Do not put material percentages such as "100% Cotton" in the title — keep those in description and item specifics only.
 
-Example shape: WWE WrestleMania Legends Men's XL Gray Graphic T-Shirt Wrestling Tee
-
-Verified attributes (with confidence) — Color is already a primary eBay color when possible.
+Verified attributes (with confidence) — include character, theme, features, and itemType when present.
 Keep accent details (stitching, trim) in description/pattern/style, not in Color.
 ${JSON.stringify(fields, null, 2)}
 Total photos in listing: ${totalImages}. Sample photos attached for visual context.${sellerContextBlock(sellerNotes)}`,
@@ -594,6 +700,19 @@ Total photos in listing: ${totalImages}. Sample photos attached for visual conte
   copy.title.value = sanitizeApparelTitle(copy.title.value)
   // Prefer filling toward 80 chars with real attributes when the model undershot.
   {
+    const extras: Record<string, string> = {}
+    if (isKnownValue(fields.character?.value)) {
+      extras.Character = fields.character!.value
+    }
+    if (isKnownValue(fields.theme?.value)) {
+      extras.Theme = fields.theme!.value
+    }
+    if (isKnownValue(fields.features?.value)) {
+      extras.Features = fields.features!.value
+    }
+    if (isKnownValue(fields.itemType?.value)) {
+      extras.Type = fields.itemType!.value
+    }
     const draftListing = {
       id: "draft",
       userId: "",
@@ -607,12 +726,18 @@ Total photos in listing: ${totalImages}. Sample photos attached for visual conte
         size: fields.size?.value,
         color: fields.color?.value,
         material: fields.material?.value,
-        style: fields.style?.value,
+        style: fields.style?.value || fields.itemType?.value,
         pattern: fields.pattern?.value,
         gender: fields.gender?.value,
         category: copy.category.value,
+        extras,
       },
-      fieldConfidence: {},
+      fieldConfidence: {
+        character: fields.character,
+        theme: fields.theme,
+        features: fields.features,
+        itemType: fields.itemType,
+      },
       images: [],
       status: "draft" as const,
       marketplaceListings: [],
@@ -783,7 +908,7 @@ export async function generateListingFromImages(
     style: mergedFields.style,
     description: "",
   })
-  const fields = {
+  let fields: IdentityFields = {
     ...mergedFields,
     color: colorSplit.color || mergedFields.color,
     pattern: colorSplit.pattern || mergedFields.pattern,
@@ -797,16 +922,95 @@ export async function generateListingFromImages(
         (f) => f.index === (img.index ?? idx + 1)
       )
   )
+  const visionImages =
+    survivingImages.length > 0 ? survivingImages : images
+
+  // Second pass when brand/character identity confidence is low.
+  if (needsIdentitySecondPass(fields, detections)) {
+    try {
+      const second = await recognizeIdentitySecondPass(
+        openai,
+        visionImages,
+        fields,
+        sellerNotes
+      )
+      usage = addTokenUsage(usage, second.usage)
+      fields = mergeIdentitySecondPass(fields, second.identity)
+      warnings.push(
+        "Identity second pass ran to inspect logos, characters, embroidery, and tags across all photos."
+      )
+      console.info("[listing engine] identity second pass", {
+        brand: fields.brand.value,
+        character: fields.character.value,
+        licensedProperty: fields.licensedProperty.value,
+        logoSummary: second.identity.logoAndGraphicSummary,
+        tagSummary: second.identity.tagTextSummary,
+      })
+    } catch (secondPassError) {
+      const message =
+        secondPassError instanceof Error
+          ? secondPassError.message
+          : "Identity second pass failed"
+      console.warn("[listing engine] identity second pass failed", { message })
+      warnings.push(
+        "Identity second pass could not complete; listing uses first-pass garment analysis."
+      )
+    }
+  }
+
+  // Ensure style carries item type when style is vague.
+  if (
+    isUnknownValue(fields.style.value) &&
+    isKnownValue(fields.itemType.value)
+  ) {
+    fields.style = {
+      ...fields.itemType,
+      rationale: `Item type used as style: ${fields.itemType.rationale || ""}`.trim(),
+    }
+  }
+
+  const extras = identityExtrasFromFields(fields)
+  const identityConfidence = identityFieldConfidence(fields)
 
   const [copyResult, comps] = await Promise.all([
     generateCopy(
       openai,
-      fields,
-      survivingImages.length > 0 ? survivingImages : images,
+      {
+        brand: fields.brand,
+        category: fields.category,
+        size: fields.size,
+        color: fields.color,
+        material: fields.material,
+        style: fields.style,
+        pattern: fields.pattern,
+        gender: fields.gender,
+        condition: fields.condition,
+        flaws: fields.flaws,
+        character: fields.character,
+        theme: fields.theme,
+        features: fields.features,
+        itemType: fields.itemType,
+        licensedProperty: fields.licensedProperty,
+      },
+      visionImages,
       detections.length,
       sellerNotes
     ),
-    (options?.compsProvider ?? createAiCompsProvider(openai)).estimate(fields),
+    (options?.compsProvider ?? createAiCompsProvider(openai)).estimate({
+      brand: fields.brand,
+      category: fields.category,
+      size: fields.size,
+      color: fields.color,
+      material: fields.material,
+      style: fields.style,
+      pattern: fields.pattern,
+      gender: fields.gender,
+      condition: fields.condition,
+      flaws: fields.flaws,
+      character: fields.character,
+      theme: fields.theme,
+      itemType: fields.itemType,
+    }),
   ])
   usage = addTokenUsage(usage, copyResult.usage)
   usage = addTokenUsage(usage, comps.usage)
@@ -820,7 +1024,30 @@ export async function generateListingFromImages(
     copy.description.value = `${copy.description.value.trim()}\n\n${accentDetailNote}`.trim()
   }
 
+  // Inject identity bullets when description omitted them.
+  const identityBits = [
+    isKnownValue(fields.character.value)
+      ? `Character: ${fields.character.value}`
+      : "",
+    isKnownValue(fields.licensedProperty.value)
+      ? `Licensed property: ${fields.licensedProperty.value}`
+      : "",
+    isKnownValue(fields.features.value)
+      ? `Features: ${fields.features.value}`
+      : "",
+  ].filter(Boolean)
+  for (const bit of identityBits) {
+    const needle = bit.split(":")[1]?.trim().toLowerCase()
+    if (
+      needle &&
+      !copy.description.value.toLowerCase().includes(needle)
+    ) {
+      copy.description.value = `${copy.description.value.trim()}\n\n${bit}`.trim()
+    }
+  }
+
   const fieldConfidence: GeneratedListingOutput["fieldConfidence"] = {
+    ...identityConfidence,
     brand: fields.brand,
     category: copy.category,
     size: fields.size,
@@ -831,6 +1058,10 @@ export async function generateListingFromImages(
     gender: fields.gender,
     condition: fields.condition,
     flaws: fields.flaws,
+    character: fields.character,
+    theme: fields.theme,
+    features: fields.features,
+    itemType: fields.itemType,
     title: {
       value: copy.title.value,
       confidence: copy.title.confidence,
@@ -870,6 +1101,7 @@ export async function generateListingFromImages(
       condition: fields.condition.value,
       category: copy.category.value,
       flaws: fields.flaws.value,
+      extras,
     },
     fieldConfidence,
     comps: {

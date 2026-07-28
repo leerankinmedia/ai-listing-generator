@@ -106,10 +106,16 @@ function confidenceForAspect(listing: Listing, aspectName: string): number | und
   if (name === "size" || name === "waist size") return fc.size?.confidence
   if (name === "color" || name === "colour") return fc.color?.confidence
   if (name === "material" || name === "fabric type") return fc.material?.confidence
-  if (name === "style" || name === "fit" || name === "type" || name === "item type") {
+  if (name === "style" || name === "fit") {
     return fc.style?.confidence
   }
-  if (name === "pattern" || name === "theme") return fc.pattern?.confidence
+  if (name === "type" || name === "item type") {
+    return fc.itemType?.confidence ?? fc.style?.confidence
+  }
+  if (name === "features") return fc.features?.confidence ?? fc.style?.confidence
+  if (name === "character") return fc.character?.confidence
+  if (name === "pattern") return fc.pattern?.confidence
+  if (name === "theme") return fc.theme?.confidence ?? fc.pattern?.confidence
   if (name === "department" || name === "gender") return fc.gender?.confidence
   if (name === "size type") return fc.size?.confidence
   return undefined
@@ -176,11 +182,30 @@ function listingCandidatesForAspect(
     case "item type":
       return [
         fromExtras,
+        listing.specifics.extras?.Type,
+        listing.fieldConfidence?.itemType?.value,
         listing.specifics.style,
         inferGarmentType(listing),
       ]
     case "theme":
-      return [fromExtras, listing.specifics.pattern]
+      return [
+        fromExtras,
+        listing.specifics.extras?.Theme,
+        listing.fieldConfidence?.theme?.value,
+        listing.specifics.pattern,
+      ]
+    case "character":
+      return [
+        fromExtras,
+        listing.specifics.extras?.Character,
+        listing.fieldConfidence?.character?.value,
+      ]
+    case "features":
+      return [
+        fromExtras,
+        listing.specifics.extras?.Features,
+        listing.fieldConfidence?.features?.value,
+      ]
     case "rise":
       return [fromExtras, extras.Rise, extras.rise]
     case "fit":
@@ -188,8 +213,6 @@ function listingCandidatesForAspect(
     case "fabric wash":
     case "wash":
       return [fromExtras, extras["Fabric Wash"], extras.Wash]
-    case "features":
-      return [fromExtras, extras.Features]
     case "closure":
       return [fromExtras, extras.Closure]
     case "vintage":

@@ -84,10 +84,11 @@ export const EBAY_SEO_ASPECT_PRIORITY = [
   "Department",
   "Type",
   "Features",
+  "Character",
+  "Theme",
   "Closure",
   "Rise",
   "Fit",
-  "Theme",
   "Season",
   "Pocket Type",
   "Country of Origin",
@@ -149,13 +150,15 @@ export function confidenceForListingAspect(
     name === "fit" ||
     name === "type" ||
     name === "item type" ||
-    name === "features" ||
     name === "closure" ||
     name === "rise"
   ) {
-    return fc.style?.confidence
+    return fc.style?.confidence ?? fc.itemType?.confidence
   }
-  if (name === "pattern" || name === "theme") return fc.pattern?.confidence
+  if (name === "features") return fc.features?.confidence ?? fc.style?.confidence
+  if (name === "character") return fc.character?.confidence
+  if (name === "pattern") return fc.pattern?.confidence
+  if (name === "theme") return fc.theme?.confidence ?? fc.pattern?.confidence
   if (name === "department" || name === "gender") return fc.gender?.confidence
   if (name === "size type") return fc.size?.confidence
   if (name === "season" || name === "pocket type") return fc.style?.confidence
@@ -240,16 +243,42 @@ export function detectedValueForAspect(
   if (
     name === "style" ||
     name === "fit" ||
-    name === "type" ||
-    name === "item type" ||
-    name === "features" ||
     name === "closure" ||
     name === "rise"
   ) {
     return fc.style?.value || listing.specifics.style
   }
-  if (name === "pattern" || name === "theme") {
+  if (name === "type" || name === "item type") {
+    return (
+      listing.specifics.extras?.Type ||
+      fc.itemType?.value ||
+      fc.style?.value ||
+      listing.specifics.style
+    )
+  }
+  if (name === "features") {
+    return (
+      listing.specifics.extras?.Features ||
+      fc.features?.value ||
+      fc.style?.value
+    )
+  }
+  if (name === "character") {
+    return (
+      listing.specifics.extras?.Character ||
+      fc.character?.value
+    )
+  }
+  if (name === "pattern") {
     return fc.pattern?.value || listing.specifics.pattern
+  }
+  if (name === "theme") {
+    return (
+      listing.specifics.extras?.Theme ||
+      fc.theme?.value ||
+      fc.pattern?.value ||
+      listing.specifics.pattern
+    )
   }
   if (name === "department" || name === "gender") {
     return fc.gender?.value || listing.specifics.gender

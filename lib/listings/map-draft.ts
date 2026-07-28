@@ -94,6 +94,27 @@ export function mapDraftToListingFields(draft: GeneratedListingOutput): {
       : asKeywords(conf.keywords?.value)
 
   const specificsSource = draft.specifics ?? {}
+  const draftExtras =
+    specificsSource.extras && typeof specificsSource.extras === "object"
+      ? { ...specificsSource.extras }
+      : {}
+
+  // Promote identity fields from fieldConfidence into eBay extras.
+  const identityMaps: Array<[string, string]> = [
+    ["Character", "character"],
+    ["Theme", "theme"],
+    ["Features", "features"],
+    ["Type", "itemType"],
+  ]
+  for (const [extraKey, confKey] of identityMaps) {
+    if (!draftExtras[extraKey]?.trim()) {
+      const fromConf = asString(conf[confKey])
+      if (fromConf && !/^unknown$/i.test(fromConf)) {
+        draftExtras[extraKey] = fromConf
+      }
+    }
+  }
+
   const specifics: ListingSpecifics = {
     brand: asString(specificsSource.brand) || asString(conf.brand) || undefined,
     size: asString(specificsSource.size) || asString(conf.size) || undefined,
@@ -114,6 +135,7 @@ export function mapDraftToListingFields(draft: GeneratedListingOutput): {
       asString(conf.category) ||
       undefined,
     flaws: asString(specificsSource.flaws) || asString(conf.flaws) || undefined,
+    extras: Object.keys(draftExtras).length > 0 ? draftExtras : undefined,
   }
 
   const fieldKeys: DetectedFieldKey[] = [
@@ -127,6 +149,10 @@ export function mapDraftToListingFields(draft: GeneratedListingOutput): {
     "gender",
     "condition",
     "flaws",
+    "character",
+    "theme",
+    "features",
+    "itemType",
     "title",
     "description",
     "price",
@@ -163,7 +189,11 @@ export function mapDraftToListingFields(draft: GeneratedListingOutput): {
     highPrice: asNumber(compsRaw?.highPrice, price),
     currency: "USD",
     confidence: asNumber(compsRaw?.confidence, fieldConfidence.price?.confidence ?? 0),
-    method: compsRaw?.method === "ebay_sold_api" ? "ebay_sold_api" : "ai_market_comps",
+    method:
+      (compsRaw?.method as SoldCompsEstimate["method"] | undefined) ===
+      "ebay_sold_api"
+        ? "ebay_sold_api"
+        : "ai_market_comps",
     rationale: asString(compsRaw?.rationale) || "Sold comps estimate",
     comparableSummary: asString(compsRaw?.comparableSummary) || undefined,
     sampleSize:

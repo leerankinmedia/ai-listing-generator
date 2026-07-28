@@ -346,6 +346,18 @@ export function applyRequiredEbayAspects(
       continue
     }
 
+    // Brand accepts custom values not in eBay's predefined list (e.g. VEES).
+    if (
+      current &&
+      name.toLowerCase() === "brand" &&
+      !/^(unbranded|unknown|n\/?a)$/i.test(current)
+    ) {
+      aspects[name] = [current]
+      filledRequired.push(name)
+      resolvedFields.push({ name, value: current })
+      continue
+    }
+
     // If extras already holds an exact allowed value, keep it — unless it's a
     // stale Black overriding a gray-family detection.
     const extrasExact = (() => {
@@ -358,6 +370,12 @@ export function applyRequiredEbayAspects(
         return (
           allowed.find((a) => a.toLowerCase() === raw.toLowerCase()) || raw
         )
+      }
+      if (
+        name.toLowerCase() === "brand" &&
+        !/^(unbranded|unknown|n\/?a)$/i.test(raw)
+      ) {
+        return raw
       }
       return undefined
     })()

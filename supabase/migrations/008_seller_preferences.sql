@@ -1,5 +1,7 @@
 -- Seller eBay defaults (handling, shipping, returns, offers, promoted listings).
 -- One row per user; ListWise applies these to every new listing.
+-- Run this in the production Supabase SQL editor if the table is missing.
+-- After create, refresh PostgREST schema cache (see NOTIFY at bottom).
 
 create table if not exists public.seller_preferences (
   user_id uuid primary key references public.profiles (id) on delete cascade,
@@ -35,7 +37,14 @@ create policy "Users can delete own seller preferences"
   on public.seller_preferences for delete
   using (auth.uid() = user_id);
 
+grant select, insert, update, delete on table public.seller_preferences to authenticated;
+grant all on table public.seller_preferences to service_role;
+
 drop trigger if exists seller_preferences_set_updated_at on public.seller_preferences;
 create trigger seller_preferences_set_updated_at
   before update on public.seller_preferences
   for each row execute function public.set_updated_at();
+
+-- Force PostgREST (Supabase API) to reload the schema cache so
+-- /rest/v1/seller_preferences resolves immediately after this migration.
+notify pgrst, 'reload schema';

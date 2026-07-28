@@ -134,8 +134,25 @@ export const ebayAdapter: MarketplaceAdapter = {
 
     const auth = await withFreshToken(connection)
 
-    // 1) Seller-owned Business Policies (env IDs only if owned by this seller).
-    const policies = await ensureEbayBusinessPolicyIds(auth.accessToken)
+    // 1) Seller-owned Business Policies — match explicit shipping mode
+    // (default: buyer pays calculated). Never silently use free shipping.
+    const shippingMode =
+      listing.specifics.shippingMode === "flat" ||
+      listing.specifics.shippingMode === "free" ||
+      listing.specifics.shippingMode === "calculated"
+        ? listing.specifics.shippingMode
+        : "calculated"
+    const policies = await ensureEbayBusinessPolicyIds(auth.accessToken, {
+      shippingMode,
+      freeShippingConfirmed: Boolean(listing.specifics.freeShippingConfirmed),
+      flatShippingAmount: listing.specifics.flatShippingAmount,
+      fulfillmentPolicyId: listing.specifics.fulfillmentPolicyId,
+    })
+    console.info("[ebay/shipping] publish using fulfillment policy", {
+      shippingMode,
+      freeShippingConfirmed: Boolean(listing.specifics.freeShippingConfirmed),
+      policy: policies.fulfillmentSummary,
+    })
 
     // 2) ENABLED inventory location with postalCode + country; persist verified key.
     const { merchantLocationKey, connection: withLocation } =

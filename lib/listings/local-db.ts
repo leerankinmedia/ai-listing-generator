@@ -119,7 +119,9 @@ export function createEmptyListing(userId: string): Listing {
     price: 0,
     currency: "USD",
     keywords: [],
-    specifics: {},
+    specifics: {
+      shippingMode: "calculated",
+    },
     fieldConfidence: {},
     images: [],
     status: "draft",

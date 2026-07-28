@@ -4,6 +4,10 @@ import { useMemo } from "react"
 import { ConfidenceMeter } from "@/components/listings/confidence-meter"
 import { CompsPricingPanel } from "@/components/listings/comps-pricing-panel"
 import { ShippingPackageFields } from "@/components/listings/shipping-package-fields"
+import {
+  EbayShippingModeFields,
+  useEbayFulfillmentPolicies,
+} from "@/components/listings/ebay-shipping-section"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -55,6 +59,12 @@ export function ListingEditorForm({
     () => (listing.keywords ?? []).join(", "),
     [listing.keywords]
   )
+  const ebayTargeted = listing.targetMarketplaces.includes("ebay")
+  const {
+    policies: fulfillmentPolicies,
+    loading: policiesLoading,
+    error: policiesError,
+  } = useEbayFulfillmentPolicies(ebayTargeted)
 
   /** Single atomic update — avoids stale overwrites from multiple patch() calls */
   function update(partial: Partial<Listing>) {
@@ -294,11 +304,28 @@ export function ListingEditorForm({
         </div>
       </section>
 
-      <ShippingPackageFields
-        listing={listing}
-        onChange={onChange}
-        disabled={disabled}
-      />
+      <section className="space-y-6">
+        <div>
+          <h2 className="font-display text-lg font-semibold">Shipping</h2>
+          <p className="text-sm text-muted-foreground">
+            Choose who pays before publishing to eBay. Package weight is required for
+            calculated shipping and is never invented by AI.
+          </p>
+        </div>
+        <EbayShippingModeFields
+          listing={listing}
+          onChange={onChange}
+          disabled={disabled}
+          policies={fulfillmentPolicies}
+          policiesLoading={policiesLoading}
+          policiesError={policiesError}
+        />
+        <ShippingPackageFields
+          listing={listing}
+          onChange={onChange}
+          disabled={disabled}
+        />
+      </section>
 
       <section className="space-y-3">
         <FieldHeader

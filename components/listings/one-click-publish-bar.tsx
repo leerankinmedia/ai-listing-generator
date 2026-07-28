@@ -16,7 +16,15 @@ import {
   applyPublishResultsToListing,
   publishResultsIncludeSuccess,
 } from "@/lib/listings/publish-persist"
-import { ebayShippingPackageBlockMessage } from "@/lib/listings/publish"
+import {
+  ebayFreeShippingBlockMessage,
+  ebayShippingPackageBlockMessage,
+} from "@/lib/listings/publish"
+import {
+  EbayShippingPublishSummary,
+  useEbayFulfillmentPolicies,
+} from "@/components/listings/ebay-shipping-section"
+import { defaultEbayShippingMode } from "@/lib/marketplaces/adapters/ebay/fulfillment-shipping"
 import { persistListing } from "@/lib/listings/repository"
 import { ensureDurableOriginalImageUrls } from "@/lib/listings/durable-images"
 import { readApiJsonResponse } from "@/lib/api/read-json-response"
@@ -181,6 +189,33 @@ export function OneClickPublishBar({
   const [connections, setConnections] = useState<PublicConnection[]>([])
   const [selected, setSelected] = useState<MarketplaceId[]>([])
   const [loadingConnections, setLoadingConnections] = useState(true)
+
+  const ebaySelected = selected.includes("ebay")
+  const {
+    policies: fulfillmentPolicies,
+    loading: policiesLoading,
+  } = useEbayFulfillmentPolicies(ebaySelected)
+
+  const shippingSummaryPolicy = useMemo(() => {
+    if (!ebaySelected) return null
+    const mode = defaultEbayShippingMode(listing.specifics.shippingMode)
+    const matching = fulfillmentPolicies.filter((p) => p.mode === mode)
+    const preferredId = listing.specifics.fulfillmentPolicyId
+    if (preferredId) {
+      const hit = matching.find((p) => p.fulfillmentPolicyId === preferredId)
+      if (hit) return hit
+    }
+    return (
+      matching.find((p) => p.name.toLowerCase().includes("listwise")) ||
+      matching[0] ||
+      null
+    )
+  }, [
+    ebaySelected,
+    fulfillmentPolicies,
+    listing.specifics.shippingMode,
+    listing.specifics.fulfillmentPolicyId,
+  ])
 
   const requiredFields = useMemo(() => {
     const fields = (results || []).flatMap((r) => r.requiredFields || [])
@@ -347,6 +382,32 @@ export function OneClickPublishBar({
           setPublishing(false)
           return
         }
+        const freeBlock = ebayFreeShippingBlockMessage(listing)
+        if (freeBlock) {
+          setError(freeBlock)
+          setPublishing(false)
+          return
+        }
+        if (
+          shippingSummaryPolicy?.isFreeShipping &&
+          defaultEbayShippingMode(listing.specifics.shippingMode) !== "free"
+        ) {
+          setError(
+            `Selected eBay policy "${shippingSummaryPolicy.name}" is free shipping. Choose Buyer pays calculated/flat shipping, or switch to Free shipping and confirm.`
+          )
+          setPublishing(false)
+          return
+        }
+        if (
+          shippingSummaryPolicy?.isFreeShipping &&
+          !listing.specifics.freeShippingConfirmed
+        ) {
+          setError(
+            `Free shipping policy "${shippingSummaryPolicy.name}" requires confirmation before publishing.`
+          )
+          setPublishing(false)
+          return
+        }
       }
 
       // Upload full-resolution originals (not analysis copies) before eBay.
@@ -408,34 +469,18 @@ export function OneClickPublishBar({
 
   return (
     <section className="space-y-4 rounded-2xl border border-border bg-card/70 p-4 sm:p-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="font-display text-lg font-semibold">Publish</h2>
-          <p className="text-sm text-muted-foreground">
-            Select connected marketplaces and publish this listing through their
-            live APIs.{" "}
-            <Link
-              href="/dashboard/connections"
-              className="underline underline-offset-2"
-            >
-              Manage connections
-            </Link>
-          </p>
-        </div>
-        <Button
-          variant="accent"
-          disabled={
-            disabled ||
-            publishing ||
-            selected.length === 0 ||
-            loadingConnections
-          }
-          onClick={() => void handlePublish()}
-        >
-          {publishing ? <Loader2 className="animate-spin" /> : <Rocket />}
-          Publish
-          {selected.length > 0 ? ` (${selected.length})` : ""}
-        </Button>
+      <div>
+        <h2 className="font-display text-lg font-semibold">Publish</h2>
+        <p className="text-sm text-muted-foreground">
+          Select connected marketplaces and publish this listing through their
+          live APIs.{" "}
+          <Link
+            href="/dashboard/connections"
+            className="underline underline-offset-2"
+          >
+            Manage connections
+          </Link>
+        </p>
       </div>
 
       {loadingConnections ? (
@@ -481,6 +526,45 @@ export function OneClickPublishBar({
           })}
         </div>
       )}
+
+      {ebaySelected && (
+        <div className="space-y-2">
+          {policiesLoading && (
+            <p className="text-xs text-muted-foreground">
+              Loading eBay shipping policy details…
+            </p>
+          )}
+          <EbayShippingPublishSummary
+            listing={listing}
+            policy={shippingSummaryPolicy}
+          />
+          {shippingSummaryPolicy?.isFreeShipping && (
+            <p className="text-xs text-amber-800 dark:text-amber-200">
+              Warning: the matched eBay policy is free shipping
+              {listing.specifics.freeShippingConfirmed
+                ? " (confirmed)."
+                : " — confirm Free shipping in the Shipping section before publishing."}
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="flex justify-end">
+        <Button
+          variant="accent"
+          disabled={
+            disabled ||
+            publishing ||
+            selected.length === 0 ||
+            loadingConnections
+          }
+          onClick={() => void handlePublish()}
+        >
+          {publishing ? <Loader2 className="animate-spin" /> : <Rocket />}
+          Publish
+          {selected.length > 0 ? ` (${selected.length})` : ""}
+        </Button>
+      </div>
 
       {error && (
         <p className="text-sm text-destructive" role="alert">

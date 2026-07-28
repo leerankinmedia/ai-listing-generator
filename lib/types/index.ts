@@ -104,6 +104,17 @@ export interface ListingSpecifics {
    * Required before eBay publish; leave empty for AI/imported drafts.
    */
   shippingPackage?: ListingShippingPackage
+  /**
+   * Who pays for shipping on eBay publish.
+   * Defaults to calculated (buyer pays). Never silently use free shipping.
+   */
+  shippingMode?: "calculated" | "flat" | "free"
+  /** Flat rate amount in USD when shippingMode is flat. */
+  flatShippingAmount?: number
+  /** Required when shippingMode is free (or policy is free). */
+  freeShippingConfirmed?: boolean
+  /** Optional explicit eBay fulfillment policy id. */
+  fulfillmentPolicyId?: string
 }
 
 export interface SoldCompsEstimate {

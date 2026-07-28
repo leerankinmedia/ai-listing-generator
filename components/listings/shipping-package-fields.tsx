@@ -75,14 +75,14 @@ export function ShippingPackageFields({
   }
 
   return (
-    <section className="space-y-4">
+    <div className="space-y-4">
       <div>
-        <h2 className="font-display text-lg font-semibold">Shipping package</h2>
-        <p className="text-sm text-muted-foreground">
-          Required for eBay publish. Enter the packed weight and box size yourself —
-          ListWise does not invent weight for AI or imported clothing.
-        </p>
-      </div>
+          <h3 className="text-sm font-semibold">Package details</h3>
+          <p className="text-xs text-muted-foreground">
+            Enter the packed weight and box size yourself — ListWise does not invent weight
+            for AI or imported clothing.
+          </p>
+        </div>
 
       {presets.length > 0 && (
         <div className="space-y-2">
@@ -239,6 +239,6 @@ export function ShippingPackageFields({
           Save preset
         </button>
       </div>
-    </section>
+    </div>
   )
 }

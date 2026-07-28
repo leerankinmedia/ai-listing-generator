@@ -4,6 +4,10 @@ import {
   formatMissingShippingPackageMessage,
   missingShippingPackageFields,
 } from "@/lib/listings/shipping-package"
+import {
+  defaultEbayShippingMode,
+  shippingModeLabel,
+} from "@/lib/marketplaces/adapters/ebay/fulfillment-shipping"
 
 /**
  * Maps a saved listing into a publish-ready payload for a marketplace adapter.
@@ -58,6 +62,14 @@ export function ebayShippingPackageBlockMessage(listing: Listing): string | null
   return formatMissingShippingPackageMessage(missing)
 }
 
+export function ebayFreeShippingBlockMessage(listing: Listing): string | null {
+  const mode = defaultEbayShippingMode(listing.specifics.shippingMode)
+  if (mode === "free" && !listing.specifics.freeShippingConfirmed) {
+    return `Free shipping requires confirmation before publishing. Check the confirmation box under ${shippingModeLabel("free")}.`
+  }
+  return null
+}
+
 /**
  * Ready to save as "ready" / publish to non-eBay markets.
  * eBay package weight is enforced separately when eBay is selected.
@@ -79,8 +91,10 @@ export function listingCanPublishTo(
     }
   }
   if (marketplaceIds.includes("ebay")) {
-    const block = ebayShippingPackageBlockMessage(listing)
-    if (block) return { ok: false, message: block }
+    const packageBlock = ebayShippingPackageBlockMessage(listing)
+    if (packageBlock) return { ok: false, message: packageBlock }
+    const freeBlock = ebayFreeShippingBlockMessage(listing)
+    if (freeBlock) return { ok: false, message: freeBlock }
   }
   return { ok: true }
 }

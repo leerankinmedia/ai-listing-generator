@@ -76,6 +76,16 @@ export interface ListingImage {
   }
 }
 
+/** Seller-entered eBay package dims/weight — never AI-invented. */
+export interface ListingShippingPackage {
+  weightPounds: number
+  weightOunces: number
+  lengthInches: number
+  widthInches: number
+  heightInches: number
+  packageType: string
+}
+
 export interface ListingSpecifics {
   brand?: string
   size?: string
@@ -89,6 +99,11 @@ export interface ListingSpecifics {
   /** Visible defects / wear notes */
   flaws?: string
   extras?: Record<string, string>
+  /**
+   * Package weight/dims/type for eBay Inventory packageWeightAndSize.
+   * Required before eBay publish; leave empty for AI/imported drafts.
+   */
+  shippingPackage?: ListingShippingPackage
 }
 
 export interface SoldCompsEstimate {

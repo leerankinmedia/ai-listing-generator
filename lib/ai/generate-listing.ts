@@ -20,6 +20,7 @@ import { usageFromResult } from "@/lib/ai/token-usage"
 import {
   colorIsBlackFamily,
   colorIsGrayFamily,
+  splitPrimaryColorAndDetails,
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import {
   appendConditionNotesSection,
@@ -91,7 +92,9 @@ Rules:
   folds, or normal pre-owned appearance.
 - Gender/department should reflect labeled/cut cues, otherwise Unisex or Unknown.
 - Category should map to eBay clothing taxonomy when possible.
-- Color: prefer detailed shade wording when visible (e.g. Dark Gray/Charcoal, Heather Gray).
+- Color: use a single primary garment color only (White, Black, Red, Blue, Gray, Green, Brown, Pink, Purple, Yellow, Orange).
+  Put accent details (red stitching, contrast trim, logos) in pattern, style, or description — never in Color.
+  Example: Color "White" and note "red stitching" elsewhere — not "White with red stitch".
   Do not default to Black when the garment looks charcoal, slate, or dark gray — especially in
   uneven lighting. Reserve Black for clearly jet-black fabric with no gray/charcoal evidence.
 - Seller context (when provided) is HIGH PRIORITY guidance for ambiguous attributes
@@ -128,6 +131,7 @@ Apparel eBay title rules (strict priority order — omit unknown parts, do not r
   (e.g. never "100% Cotton", "Cotton Blend", "Polyester") unless the material itself
   is a rare major selling feature (e.g. cashmere, leather, silk, wool coat).
   Put everyday materials like 100% Cotton in the description and item specifics only.
+- Color accents (stitching, trim, logos) belong in description bullets — not the Color specific.
 Example title shape:
 WWE WrestleMania Legends Men's XL Gray Graphic T-Shirt Wrestling Tee
 
@@ -138,6 +142,7 @@ Description rules:
 - Never invent wrinkles, fading, stains, holes, wear, or damage
 - If verified flaws exist, put them under a final section titled "Condition notes"
 - Mention materials (including 100% Cotton when known), fit/style, and department
+- Preserve accent details (e.g. red stitching) in the description when Color is a primary value
 - Plain text only (no HTML)`
 
 const COMPS_SYSTEM = `You are ListWise Pricing, a secondary-market comps analyst for clothing on eBay sold listings.
@@ -452,9 +457,76 @@ function titleSearchColor(detectedColor: string | undefined): string | undefined
   const raw = detectedColor?.trim()
   if (!raw || raw.toLowerCase() === "unknown") return undefined
   if (colorIsGrayFamily(raw)) return "Gray"
+  const split = splitPrimaryColorAndDetails(raw)
+  if (split.primaryLabel) return split.primaryLabel
   // Prefer the primary token before slash compounds (Navy/Blue → Navy).
   const primary = raw.split(/[/,|]/)[0]?.trim()
   return primary || raw
+}
+
+/**
+ * Keep Color as an eBay primary value; move accent wording into pattern/style/description.
+ * Example: "White with red stitch" → color White, detail preserved elsewhere.
+ */
+function applyPrimaryColorSplit(args: {
+  color?: FieldConfidence
+  pattern?: FieldConfidence
+  style?: FieldConfidence
+  description: string
+}): {
+  color?: FieldConfidence
+  pattern?: FieldConfidence
+  style?: FieldConfidence
+  description: string
+} {
+  const color = args.color
+  if (!color?.value?.trim()) return args
+  const split = splitPrimaryColorAndDetails(color.value)
+  if (!split.primaryLabel) return args
+
+  const nextColor: FieldConfidence = {
+    ...color,
+    value: split.primaryLabel,
+    rationale:
+      split.detail && split.detail !== color.value
+        ? `${color.rationale || ""} Primary color ${split.primaryLabel}; accent "${split.detail}" moved out of Color.`.trim()
+        : color.rationale,
+  }
+
+  let pattern = args.pattern
+  let style = args.style
+  let description = args.description
+  const detail = split.detail?.trim()
+  if (detail) {
+    const patternEmpty =
+      !pattern?.value?.trim() || pattern.value.trim().toLowerCase() === "unknown"
+    const styleEmpty =
+      !style?.value?.trim() || style.value.trim().toLowerCase() === "unknown"
+    if (
+      patternEmpty &&
+      /\b(stripe|striped|plaid|floral|print|graphic|logo|dot|camo)\b/i.test(detail)
+    ) {
+      pattern = {
+        value: detail,
+        confidence: color.confidence,
+        rationale: `Accent detail from color wording: ${detail}`,
+      }
+    } else if (
+      styleEmpty &&
+      /\b(stitch|embroidery|trim|piping|contrast)\b/i.test(detail)
+    ) {
+      style = {
+        value: detail,
+        confidence: color.confidence,
+        rationale: `Accent detail from color wording: ${detail}`,
+      }
+    }
+    if (!description.toLowerCase().includes(detail.toLowerCase())) {
+      description = `${description.trim()}\n\nDetails: ${detail}.`.trim()
+    }
+  }
+
+  return { color: nextColor, pattern, style, description }
 }
 
 /**
@@ -499,9 +571,8 @@ Do not put material percentages such as "100% Cotton" in the title — keep thos
 
 Example shape: WWE WrestleMania Legends Men's XL Gray Graphic T-Shirt Wrestling Tee
 
-Verified attributes (with confidence) — leave these attribute values unchanged.
-The title may use the normalized search color above, but must NOT rewrite specifics/fieldConfidence color
-(e.g. keep Dark Gray/Charcoal in attributes even if the title says Gray).
+Verified attributes (with confidence) — Color is already a primary eBay color when possible.
+Keep accent details (stitching, trim) in description/pattern/style, not in Color.
 ${JSON.stringify(fields, null, 2)}
 Total photos in listing: ${totalImages}. Sample photos attached for visual context.${sellerContextBlock(sellerNotes)}`,
     },
@@ -671,7 +742,22 @@ export async function generateListingFromImages(
     })
   }
 
-  const { fields, perImage } = mergeDetections(detections)
+  const { fields: mergedFields, perImage } = mergeDetections(detections)
+  // Primary eBay color only — move "with red stitch" accents out of Color early.
+  const colorSplit = applyPrimaryColorSplit({
+    color: mergedFields.color,
+    pattern: mergedFields.pattern,
+    style: mergedFields.style,
+    description: "",
+  })
+  const fields = {
+    ...mergedFields,
+    color: colorSplit.color || mergedFields.color,
+    pattern: colorSplit.pattern || mergedFields.pattern,
+    style: colorSplit.style || mergedFields.style,
+  }
+  const accentDetailNote = colorSplit.description.trim()
+
   const survivingImages = images.filter(
     (img, idx) =>
       !imagesFailed.some(
@@ -692,6 +778,14 @@ export async function generateListingFromImages(
   usage = addTokenUsage(usage, copyResult.usage)
   usage = addTokenUsage(usage, comps.usage)
   const copy = copyResult.copy
+  if (
+    accentDetailNote &&
+    !copy.description.value.toLowerCase().includes(
+      accentDetailNote.replace(/^details:\s*/i, "").toLowerCase()
+    )
+  ) {
+    copy.description.value = `${copy.description.value.trim()}\n\n${accentDetailNote}`.trim()
+  }
 
   const fieldConfidence: GeneratedListingOutput["fieldConfidence"] = {
     brand: fields.brand,

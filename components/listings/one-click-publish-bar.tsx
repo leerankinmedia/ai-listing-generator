@@ -16,6 +16,7 @@ import {
   applyPublishResultsToListing,
   publishResultsIncludeSuccess,
 } from "@/lib/listings/publish-persist"
+import { ebayShippingPackageBlockMessage } from "@/lib/listings/publish"
 import { persistListing } from "@/lib/listings/repository"
 import { ensureDurableOriginalImageUrls } from "@/lib/listings/durable-images"
 import { readApiJsonResponse } from "@/lib/api/read-json-response"
@@ -337,6 +338,15 @@ export function OneClickPublishBar({
     try {
       if (!user?.id) {
         throw new Error("Sign in required to publish.")
+      }
+
+      if (selected.includes("ebay")) {
+        const packageBlock = ebayShippingPackageBlockMessage(listing)
+        if (packageBlock) {
+          setError(packageBlock)
+          setPublishing(false)
+          return
+        }
       }
 
       // Upload full-resolution originals (not analysis copies) before eBay.

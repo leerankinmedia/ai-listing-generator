@@ -93,6 +93,11 @@ describe("sanitizeEbayInventoryItemPayload", () => {
           aspects: { Brand: ["Nike"], Color: ["Gray"] },
           imageUrls: ["https://cdn.example.com/1.jpg"],
         },
+        packageWeightAndSize: {
+          dimensions: { length: 12, width: 9, height: 1, unit: "INCH" },
+          weight: { value: 0.5, unit: "POUND" },
+          packageType: "PACKAGE_THICK_ENVELOPE",
+        },
       },
     })
     assert.equal(result.sku, "lwabc123")
@@ -100,6 +105,28 @@ describe("sanitizeEbayInventoryItemPayload", () => {
     assert.equal(result.inventoryItem.condition, "USED_EXCELLENT")
     assert.equal(result.blockingIssues.length, 0)
     assert.equal(result.inventoryItem.product.imageUrls.length, 1)
+    assert.equal(
+      result.inventoryItem.packageWeightAndSize?.packageType,
+      "PACKAGE_THICK_ENVELOPE"
+    )
+  })
+
+  it("blocks when package weight is missing", () => {
+    const result = sanitizeEbayInventoryItemPayload({
+      sku: "SKU1",
+      inventoryItem: {
+        condition: "NEW",
+        product: {
+          title: "X",
+          description: "Y",
+          aspects: {},
+          imageUrls: ["https://cdn.example.com/a.jpg"],
+        },
+      },
+    })
+    assert.ok(
+      result.blockingIssues.some((i) => i.field.includes("packageWeightAndSize"))
+    )
   })
 
   it("blocks when no valid images remain", () => {
@@ -112,6 +139,11 @@ describe("sanitizeEbayInventoryItemPayload", () => {
           description: "Y",
           aspects: {},
           imageUrls: ["http://insecure.example/a.jpg"],
+        },
+        packageWeightAndSize: {
+          dimensions: { length: 12, width: 9, height: 1, unit: "INCH" },
+          weight: { value: 0.5, unit: "POUND" },
+          packageType: "PACKAGE_THICK_ENVELOPE",
         },
       },
     })

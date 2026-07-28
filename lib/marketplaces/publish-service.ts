@@ -6,7 +6,7 @@ import type {
 import { getAdapter } from "@/lib/marketplaces/adapters/registry"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { getConnection, isPhase5Marketplace } from "@/lib/marketplaces/connections/store"
-import { listingIsReadyToPublish } from "@/lib/listings/publish"
+import { listingCanPublishTo } from "@/lib/listings/publish"
 import { getMarketplace } from "@/lib/marketplaces"
 
 /**
@@ -17,12 +17,15 @@ export async function publishListingOneClick(
   listing: Listing,
   marketplaceIds: MarketplaceId[]
 ): Promise<OneClickPublishResult[]> {
-  if (!listingIsReadyToPublish(listing)) {
+  const gate = listingCanPublishTo(listing, marketplaceIds)
+  if (!gate.ok) {
     return marketplaceIds.map((marketplaceId) => ({
       marketplaceId,
       ok: false,
       status: "error" as const,
-      message: "Listing needs title, description, price, and at least one photo.",
+      message:
+        gate.message ||
+        "Listing needs title, description, price, and at least one photo.",
     }))
   }
 

@@ -92,6 +92,58 @@ const SIZE_TYPE_SYNONYMS: Record<string, string[]> = {
   maternity: ["maternity"],
 }
 
+const MATERIAL_SYNONYMS: Record<string, string[]> = {
+  cotton: ["cotton", "100% cotton", "cotton blend", "pure cotton"],
+  polyester: ["polyester", "poly", "100% polyester"],
+  wool: ["wool", "wool blend", "merino", "cashmere"],
+  silk: ["silk", "silk blend"],
+  linen: ["linen", "linen blend"],
+  denim: ["denim", "jean", "jeans fabric"],
+  leather: ["leather", "genuine leather", "faux leather", "vegan leather"],
+  nylon: ["nylon"],
+  spandex: ["spandex", "elastane", "lycra"],
+  rayon: ["rayon", "viscose"],
+  fleece: ["fleece"],
+}
+
+const PATTERN_SYNONYMS: Record<string, string[]> = {
+  solid: ["solid", "solid color", "plain", "no pattern"],
+  striped: ["striped", "stripes", "stripe", "pinstripe"],
+  plaid: ["plaid", "check", "checked", "checkered", "tartan"],
+  floral: ["floral", "flower", "flowers"],
+  graphic: ["graphic", "graphic print", "print", "printed"],
+  logo: ["logo", "logo print", "branded"],
+  camouflage: ["camouflage", "camo"],
+  "polka dot": ["polka dot", "polka dots", "dotted", "dots"],
+  colorblock: ["colorblock", "color block", "colourblock"],
+}
+
+const STYLE_SYNONYMS: Record<string, string[]> = {
+  casual: ["casual"],
+  athletic: ["athletic", "sport", "sports", "athleisure", "activewear"],
+  formal: ["formal", "dressy", "business"],
+  vintage: ["vintage", "retro"],
+  streetwear: ["streetwear", "street wear"],
+  outdoor: ["outdoor", "outdoors", "hiking"],
+  basic: ["basic", "essential"],
+}
+
+const TYPE_SYNONYMS: Record<string, string[]> = {
+  "t-shirt": ["t-shirt", "t shirt", "tee", "tee shirt", "tshirt", "graphic tee"],
+  shirt: ["shirt", "button up", "button-up", "button down", "button-down"],
+  blouse: ["blouse"],
+  hoodie: ["hoodie", "hooded sweatshirt", "hoody"],
+  sweatshirt: ["sweatshirt", "crewneck", "crew neck"],
+  sweater: ["sweater", "jumper", "pullover", "knit"],
+  jacket: ["jacket", "coat", "outerwear"],
+  jeans: ["jeans", "denim jeans", "denim pants"],
+  pants: ["pants", "trousers", "slacks"],
+  shorts: ["shorts"],
+  skirt: ["skirt"],
+  dress: ["dress"],
+  leggings: ["leggings", "tights"],
+}
+
 function collapse(value: string): string {
   return value
     .trim()
@@ -100,6 +152,11 @@ function collapse(value: string): string {
     .replace(/[^a-z0-9&+.\s-]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
+}
+
+function titleCaseColor(canonical: string): string {
+  if (canonical === "gray") return "Gray"
+  return canonical.replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 function buildSynonymLookup(table: Record<string, string[]>): Map<string, string> {
@@ -117,6 +174,77 @@ const SIZE_LOOKUP = buildSynonymLookup(SIZE_SYNONYMS)
 const COLOR_LOOKUP = buildSynonymLookup(COLOR_SYNONYMS)
 const DEPARTMENT_LOOKUP = buildSynonymLookup(DEPARTMENT_SYNONYMS)
 const SIZE_TYPE_LOOKUP = buildSynonymLookup(SIZE_TYPE_SYNONYMS)
+const MATERIAL_LOOKUP = buildSynonymLookup(MATERIAL_SYNONYMS)
+const PATTERN_LOOKUP = buildSynonymLookup(PATTERN_SYNONYMS)
+const STYLE_LOOKUP = buildSynonymLookup(STYLE_SYNONYMS)
+const TYPE_LOOKUP = buildSynonymLookup(TYPE_SYNONYMS)
+
+/**
+ * Split compound color wording into an eBay primary color + accent detail.
+ * Example: "White with red stitch" → primary White, detail "red stitch".
+ */
+export function splitPrimaryColorAndDetails(raw: string | undefined | null): {
+  primary?: string
+  primaryLabel?: string
+  detail?: string
+} {
+  const input = (raw || "").trim()
+  if (!input) return {}
+
+  const collapsed = collapse(input)
+
+  const finish = (canonical: string, detail?: string) => ({
+    primary: canonical,
+    primaryLabel: titleCaseColor(canonical),
+    detail: detail?.trim() || undefined,
+  })
+
+  // "{color} with {detail}" — e.g. White with red stitch / stitching
+  const withMatch = collapsed.match(
+    /^(.+?)\s+with\s+(?:a\s+|an\s+|the\s+)?(.+)$/i
+  )
+  if (withMatch) {
+    const colorPart = withMatch[1]
+    let detail = withMatch[2].trim()
+    // Prefer human phrasing for common stitch notes
+    if (/\bstitch(?:ing|es)?\b/i.test(detail) && !/\bstitching\b/i.test(detail)) {
+      detail = detail.replace(/\bstitch\b/i, "stitching")
+    }
+    const direct = COLOR_LOOKUP.get(collapse(colorPart))
+    if (direct) return finish(direct, detail)
+
+    // First known color token in the left side (e.g. "bright white")
+    const words = collapse(colorPart).split(" ").filter(Boolean)
+    for (let len = Math.min(3, words.length); len >= 1; len--) {
+      for (let i = 0; i <= words.length - len; i++) {
+        const phrase = words.slice(i, i + len).join(" ")
+        const hit = COLOR_LOOKUP.get(phrase)
+        if (hit) return finish(hit, detail)
+      }
+    }
+  }
+
+  // Full-string synonym (Dark Gray/Charcoal → gray) — no separate detail
+  const full = COLOR_LOOKUP.get(collapsed)
+  if (full) return finish(full)
+
+  // Leading primary color word, remainder is detail
+  const words = collapsed.split(" ").filter(Boolean)
+  for (let len = Math.min(3, words.length); len >= 1; len--) {
+    const phrase = words.slice(0, len).join(" ")
+    const hit = COLOR_LOOKUP.get(phrase)
+    if (hit) {
+      const rest = words.slice(len).join(" ").trim()
+      // Shade compounds like "dark gray" already consumed — no detail
+      if (!rest || COLOR_LOOKUP.get(collapsed) === hit) return finish(hit)
+      // Avoid treating "blue" remainder of "navy blue" as detail
+      if (COLOR_LOOKUP.get(rest) === hit) return finish(hit)
+      return finish(hit, rest)
+    }
+  }
+
+  return {}
+}
 
 function expandCandidates(
   aspectName: string,
@@ -146,6 +274,11 @@ function expandCandidates(
     const stripped = collapsed.replace(/\bsize\b/g, "").trim()
     if (stripped) addCanonical(SIZE_LOOKUP.get(stripped))
   } else if (name === "color" || name === "colour") {
+    const split = splitPrimaryColorAndDetails(raw)
+    if (split.primary) {
+      addCanonical(split.primary)
+      if (split.primaryLabel) out.add(split.primaryLabel)
+    }
     addCanonical(COLOR_LOOKUP.get(collapsed))
     // Compound detections like "Dark Gray/Charcoal" → match each part.
     const words = collapsed.split(" ").filter(Boolean)
@@ -159,6 +292,24 @@ function expandCandidates(
     addCanonical(DEPARTMENT_LOOKUP.get(collapsed))
   } else if (name === "size type") {
     addCanonical(SIZE_TYPE_LOOKUP.get(collapsed))
+  } else if (name === "material") {
+    addCanonical(MATERIAL_LOOKUP.get(collapsed))
+  } else if (name === "pattern") {
+    addCanonical(PATTERN_LOOKUP.get(collapsed))
+  } else if (name === "style") {
+    addCanonical(STYLE_LOOKUP.get(collapsed))
+  } else if (name === "type" || name === "item type") {
+    addCanonical(TYPE_LOOKUP.get(collapsed))
+    for (const word of collapsed.split(" ").filter(Boolean)) {
+      addCanonical(TYPE_LOOKUP.get(word))
+    }
+  } else if (name === "brand") {
+    // Normalize casing / strip common prefixes for free-text + selection lists.
+    const stripped = collapsed.replace(/^(brand|by)\s+/i, "").trim()
+    if (stripped) {
+      out.add(stripped)
+      out.add(stripped.replace(/\b\w/g, (c) => c.toUpperCase()))
+    }
   }
 
   return [...out]
@@ -190,7 +341,16 @@ function matchExactEbayColorValue(
   if (allowed.length === 0) {
     for (const c of candidates) {
       const v = c?.trim()
-      if (v) return { value: v, detected: v, path: "free_text" }
+      if (!v) continue
+      const split = splitPrimaryColorAndDetails(v)
+      if (split.primaryLabel) {
+        return {
+          value: split.primaryLabel,
+          detected: v,
+          path: "primary_free_text",
+        }
+      }
+      return { value: v, detected: v, path: "free_text" }
     }
     return {}
   }
@@ -220,6 +380,25 @@ function matchExactEbayColorValue(
         value: grayOpt,
         detected: grayRaw.trim(),
         path: "gray_family_priority",
+      }
+    }
+  }
+
+  // Prefer primary color extracted from compounds ("White with red stitch" → White).
+  for (const candidate of candidates) {
+    const raw = candidate?.trim()
+    if (!raw) continue
+    const split = splitPrimaryColorAndDetails(raw)
+    if (!split.primary) continue
+    const primaryHit =
+      allowedByKey.get(collapse(split.primary)) ||
+      allowedByKey.get(collapse(split.primaryLabel || ""))
+    if (primaryHit) {
+      if (isGrayFamily(raw) && isBlackFamily(primaryHit)) continue
+      return {
+        value: primaryHit,
+        detected: raw,
+        path: "primary_color_split",
       }
     }
   }

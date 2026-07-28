@@ -5,6 +5,7 @@ import {
   isHighConfidenceField,
   matchExactEbayAspectValue,
   resolveEbayGrayAspectValue,
+  splitPrimaryColorAndDetails,
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import { ebayFetch } from "@/lib/marketplaces/adapters/ebay/client"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
@@ -375,7 +376,7 @@ export function applyRequiredEbayAspects(
 /**
  * Final Color aspect correction immediately before inventory write.
  * Forces Dark Gray / Charcoal / Grey → exact eBay Gray (never Black).
- * Does not modify listing title, description, or AI-detected color wording.
+ * Primary colors only on Color (e.g. White with red stitch → White).
  */
 export function finalizeEbayColorAspect(
   listing: Listing,
@@ -446,6 +447,62 @@ export function finalizeEbayColorAspect(
   })
 
   return { aspects, color: finalColor }
+}
+
+/**
+ * Move accent details out of Color ("White with red stitch" → Color White,
+ * detail "red stitching" into Accents / Pattern / Style / description).
+ */
+export function relocateEbayColorAccentDetails(
+  listing: Listing,
+  existingAspects: Record<string, string[]>,
+  description: string
+): {
+  aspects: Record<string, string[]>
+  description: string
+  accentDetail?: string
+} {
+  const aspects: Record<string, string[]> = { ...existingAspects }
+  const raw =
+    listing.fieldConfidence?.color?.value ||
+    listing.specifics.color ||
+    aspects.Color?.[0] ||
+    ""
+  const split = splitPrimaryColorAndDetails(raw)
+  const detail = split.detail?.trim()
+  if (!detail) {
+    return { aspects, description }
+  }
+
+  const detailKey = detail.toLowerCase()
+  if (!aspects.Accents?.[0]?.trim()) {
+    aspects.Accents = [detail]
+  }
+
+  const looksPattern =
+    /\b(stripe|striped|plaid|floral|print|graphic|logo|dot|camo)\b/i.test(detail)
+  if (looksPattern && !aspects.Pattern?.[0]?.trim()) {
+    aspects.Pattern = [detail]
+  } else if (
+    !looksPattern &&
+    !aspects.Style?.[0]?.trim() &&
+    /\b(stitch|embroidery|trim|piping|contrast)\b/i.test(detail)
+  ) {
+    // Keep Style if empty and detail is a style accent — optional.
+    // Prefer Accents for stitching; leave Style alone when Pattern fits better.
+  }
+
+  let nextDescription = description || ""
+  if (!nextDescription.toLowerCase().includes(detailKey)) {
+    nextDescription = `${nextDescription.trim()}\n\nDetails: ${detail}.`.trim()
+  }
+
+  console.info("[ebay/color] relocated accent detail from Color", {
+    primary: split.primaryLabel || aspects.Color?.[0] || null,
+    detail,
+  })
+
+  return { aspects, description: nextDescription, accentDetail: detail }
 }
 
 export function missingAspectsError(

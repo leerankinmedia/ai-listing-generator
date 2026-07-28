@@ -3,6 +3,7 @@
 import { useMemo } from "react"
 import { ConfidenceMeter } from "@/components/listings/confidence-meter"
 import { CompsPricingPanel } from "@/components/listings/comps-pricing-panel"
+import { ShippingPackageFields } from "@/components/listings/shipping-package-fields"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -292,6 +293,12 @@ export function ListingEditorForm({
           />
         </div>
       </section>
+
+      <ShippingPackageFields
+        listing={listing}
+        onChange={onChange}
+        disabled={disabled}
+      />
 
       <section className="space-y-3">
         <FieldHeader

@@ -10,6 +10,7 @@ import {
   type EbayInventoryItemPayload,
   type InventoryFieldIssue,
 } from "@/lib/marketplaces/adapters/ebay/inventory-sanitize"
+import type { EbayPackageWeightAndSize } from "@/lib/marketplaces/adapters/ebay/inventory-sanitize"
 import { ebayApiBase } from "@/lib/marketplaces/adapters/ebay/oauth"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { ebayConditionDescription } from "@/lib/listings/condition-details"
@@ -81,6 +82,8 @@ export function mapListingToEbayInventory(listing: Listing) {
         // Populated by adapter after EPS / Media API upload
         imageUrls: [] as string[],
       },
+      // Populated by adapter from seller-entered shippingPackage (never invented).
+      packageWeightAndSize: undefined as EbayPackageWeightAndSize | undefined,
     },
   }
 }

@@ -34,6 +34,20 @@ export const EBAY_SKU_MAX = 50
 export const EBAY_IMAGE_URL_MAX = 500
 export const EBAY_MAX_IMAGES = 24
 
+export type EbayPackageWeightAndSize = {
+  dimensions: {
+    height: number
+    length: number
+    width: number
+    unit: "INCH" | "CENTIMETER"
+  }
+  weight: {
+    value: number
+    unit: "POUND" | "KILOGRAM" | "OUNCE" | "GRAM"
+  }
+  packageType: string
+}
+
 export type EbayInventoryItemPayload = {
   availability: {
     shipToLocationAvailability: {
@@ -48,6 +62,7 @@ export type EbayInventoryItemPayload = {
     aspects: Record<string, string[]>
     imageUrls: string[]
   }
+  packageWeightAndSize?: EbayPackageWeightAndSize
 }
 
 export type InventoryFieldIssue = {
@@ -321,6 +336,116 @@ export function sanitizeEbayProductTitle(
   return { title: text, issues }
 }
 
+export function sanitizeEbayPackageWeightAndSize(
+  raw: unknown
+): {
+  packageWeightAndSize?: EbayPackageWeightAndSize
+  issues: InventoryFieldIssue[]
+  blockingIssues: InventoryFieldIssue[]
+} {
+  const issues: InventoryFieldIssue[] = []
+  const blockingIssues: InventoryFieldIssue[] = []
+  if (raw == null) {
+    blockingIssues.push({
+      field: "packageWeightAndSize",
+      issue: "Missing package weight/dimensions (required for publishOffer)",
+    })
+    return { issues, blockingIssues }
+  }
+  if (!raw || typeof raw !== "object") {
+    blockingIssues.push({
+      field: "packageWeightAndSize",
+      issue: "Invalid packageWeightAndSize object",
+    })
+    return { issues, blockingIssues }
+  }
+
+  const obj = raw as Record<string, unknown>
+  const dims = (obj.dimensions || {}) as Record<string, unknown>
+  const weight = (obj.weight || {}) as Record<string, unknown>
+
+  const length = Number(dims.length)
+  const width = Number(dims.width)
+  const height = Number(dims.height)
+  const weightValue = Number(weight.value)
+  const packageType =
+    typeof obj.packageType === "string" ? obj.packageType.trim() : ""
+
+  if (!Number.isFinite(length) || length <= 0) {
+    blockingIssues.push({
+      field: "packageWeightAndSize.dimensions.length",
+      issue: "Package length must be > 0",
+      valuePreview: String(dims.length ?? ""),
+    })
+  }
+  if (!Number.isFinite(width) || width <= 0) {
+    blockingIssues.push({
+      field: "packageWeightAndSize.dimensions.width",
+      issue: "Package width must be > 0",
+      valuePreview: String(dims.width ?? ""),
+    })
+  }
+  if (!Number.isFinite(height) || height <= 0) {
+    blockingIssues.push({
+      field: "packageWeightAndSize.dimensions.height",
+      issue: "Package height must be > 0",
+      valuePreview: String(dims.height ?? ""),
+    })
+  }
+  if (!Number.isFinite(weightValue) || weightValue <= 0) {
+    blockingIssues.push({
+      field: "packageWeightAndSize.weight.value",
+      issue: "Package weight must be > 0",
+      valuePreview: String(weight.value ?? ""),
+    })
+  }
+  if (!packageType) {
+    blockingIssues.push({
+      field: "packageWeightAndSize.packageType",
+      issue: "Package type is required",
+    })
+  }
+
+  if (blockingIssues.length > 0) {
+    return { issues, blockingIssues }
+  }
+
+  const dimUnit =
+    dims.unit === "CENTIMETER" || dims.unit === "INCH" ? dims.unit : "INCH"
+  if (dims.unit && dims.unit !== dimUnit) {
+    issues.push({
+      field: "packageWeightAndSize.dimensions.unit",
+      issue: `Normalized dimension unit to ${dimUnit}`,
+    })
+  }
+
+  const weightUnit =
+    weight.unit === "POUND" ||
+    weight.unit === "KILOGRAM" ||
+    weight.unit === "OUNCE" ||
+    weight.unit === "GRAM"
+      ? weight.unit
+      : "POUND"
+
+  return {
+    packageWeightAndSize: {
+      dimensions: {
+        length: Number(length.toFixed(2)),
+        width: Number(width.toFixed(2)),
+        height: Number(height.toFixed(2)),
+        unit: dimUnit,
+      },
+      weight: {
+        value: Number(weightValue.toFixed(3)),
+        unit: weightUnit,
+      },
+      packageType,
+    },
+    issues,
+    blockingIssues,
+  }
+}
+
 export function sanitizeEbayConditionDescription(
   value: string | undefined | null
 ): { conditionDescription: string | undefined; issues: InventoryFieldIssue[] } {
@@ -356,6 +481,7 @@ export function sanitizeEbayInventoryItemPayload(input: {
       aspects?: Record<string, string[]>
       imageUrls?: string[]
     }
+    packageWeightAndSize?: unknown
   }
   locale?: string
 }): {
@@ -405,6 +531,13 @@ export function sanitizeEbayInventoryItemPayload(input: {
     sanitizeEbayConditionDescription(raw.conditionDescription)
   issues.push(...cdIssues)
 
+  const {
+    packageWeightAndSize,
+    issues: pkgIssues,
+    blockingIssues: pkgBlocking,
+  } = sanitizeEbayPackageWeightAndSize(raw.packageWeightAndSize)
+  issues.push(...pkgIssues)
+
   const inventoryItem: EbayInventoryItemPayload = {
     availability: {
       shipToLocationAvailability: { quantity },
@@ -417,13 +550,17 @@ export function sanitizeEbayInventoryItemPayload(input: {
       aspects,
       imageUrls,
     },
+    ...(packageWeightAndSize ? { packageWeightAndSize } : {}),
   }
 
-  const blockingIssues = issues.filter(
-    (i) =>
-      i.field === "product.imageUrls" ||
-      (i.field.startsWith("product.imageUrls[") && i.issue.includes("No valid"))
-  )
+  const blockingIssues = [
+    ...pkgBlocking,
+    ...issues.filter(
+      (i) =>
+        i.field === "product.imageUrls" ||
+        (i.field.startsWith("product.imageUrls[") && i.issue.includes("No valid"))
+    ),
+  ]
   if (imageUrls.length === 0) {
     blockingIssues.push({
       field: "product.imageUrls",
@@ -487,6 +624,26 @@ export function diagnoseEbayInventoryPayload(opts: {
       lines.push(`product.imageUrls[${i}]: not HTTPS`)
     }
   })
+  if (!item.packageWeightAndSize) {
+    lines.push("packageWeightAndSize: missing (required for publishOffer / error 25020)")
+  } else {
+    const pkg = item.packageWeightAndSize
+    if (!(pkg.weight?.value > 0)) {
+      lines.push("packageWeightAndSize.weight.value: must be > 0")
+    }
+    if (!(pkg.dimensions?.length > 0)) {
+      lines.push("packageWeightAndSize.dimensions.length: must be > 0")
+    }
+    if (!(pkg.dimensions?.width > 0)) {
+      lines.push("packageWeightAndSize.dimensions.width: must be > 0")
+    }
+    if (!(pkg.dimensions?.height > 0)) {
+      lines.push("packageWeightAndSize.dimensions.height: must be > 0")
+    }
+    if (!pkg.packageType?.trim()) {
+      lines.push("packageWeightAndSize.packageType: missing")
+    }
+  }
   for (const [name, values] of Object.entries(item.product.aspects || {})) {
     if (!name.trim()) lines.push("product.aspects: empty aspect name")
     if (!values?.length || values.every((v) => !String(v || "").trim())) {

@@ -12,7 +12,13 @@ import {
   fetchEbayItemAspectsForCategory,
   finalizeEbayColorAspect,
   missingAspectsError,
+  relocateEbayColorAccentDetails,
 } from "@/lib/marketplaces/adapters/ebay/aspects"
+import { ebayShippingPackageBlockMessage } from "@/lib/listings/publish"
+import {
+  shippingPackageIsComplete,
+  toEbayPackageWeightAndSize,
+} from "@/lib/listings/shipping-package"
 import { ensureEbayMerchantLocationKey } from "@/lib/marketplaces/adapters/ebay/location"
 import { resolveEbayImageUrls } from "@/lib/marketplaces/adapters/ebay/media"
 import { isEbayConfigured, refreshEbayToken, ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
@@ -215,13 +221,39 @@ export const ebayAdapter: MarketplaceAdapter = {
       throw missingAspectsError(missingRequired, resolvedFields)
     }
     // Force gray-family → exact eBay Color "Gray" on the inventory aspect only.
-    // AI-detected color / title / description wording are left unchanged.
+    // AI-detected color / title wording are left unchanged on the listing record.
     const finalized = finalizeEbayColorAspect(listing, taxonomyAspects, aspects)
-    inventoryItem.product.aspects = finalized.aspects
+    const withAccents = relocateEbayColorAccentDetails(
+      listing,
+      finalized.aspects,
+      inventoryItem.product.description
+    )
+    inventoryItem.product.aspects = withAccents.aspects
+    inventoryItem.product.description = withAccents.description
     console.info("[ebay/color] TEMP inventory payload Color", {
       sku,
       color: inventoryItem.product.aspects.Color || null,
+      accents: inventoryItem.product.aspects.Accents || null,
       titleUnchanged: inventoryItem.product.title.slice(0, 80),
+    })
+
+    // Package weight/dims required for publishOffer (eBay error 25020).
+    // Never invent — seller must enter values or pick a saved preset.
+    const packageBlock = ebayShippingPackageBlockMessage(listing)
+    if (packageBlock || !shippingPackageIsComplete(listing.specifics.shippingPackage)) {
+      throw new MarketplaceError(
+        packageBlock ||
+          "Enter shipping package details before publishing to eBay.",
+        "ebay_shipping_package_required",
+        400
+      )
+    }
+    inventoryItem.packageWeightAndSize = toEbayPackageWeightAndSize(
+      listing.specifics.shippingPackage!
+    )
+    console.info("[ebay/inventory] packageWeightAndSize", {
+      sku,
+      packageWeightAndSize: inventoryItem.packageWeightAndSize,
     })
 
     // 5) Create/replace inventory item (sanitize + log + one 25001 retry)
@@ -233,7 +265,10 @@ export const ebayAdapter: MarketplaceAdapter = {
     const publishSku = replaced.sku
 
     const offer = mapListingToEbayOffer(
-      listing,
+      {
+        ...listing,
+        description: withAccents.description,
+      },
       publishSku,
       merchantLocationKey,
       policies,

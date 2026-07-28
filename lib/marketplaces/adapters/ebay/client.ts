@@ -3,19 +3,29 @@ import {
   colorIsBlackFamily,
   colorIsGrayFamily,
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
+import {
+  diagnoseEbayInventoryPayload,
+  sanitizeEbayInventoryItemPayload,
+  sanitizeEbayInventorySku,
+  type EbayInventoryItemPayload,
+  type InventoryFieldIssue,
+} from "@/lib/marketplaces/adapters/ebay/inventory-sanitize"
 import { ebayApiBase } from "@/lib/marketplaces/adapters/ebay/oauth"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { ebayConditionDescription } from "@/lib/listings/condition-details"
 
 export type EbayFetchInit = RequestInit & {
   contentLanguage?: string
-  /** TEMP: labels which publish step made this call for logs + UI errors. */
+  /** Labels which publish step made this call for logs + UI errors. */
   step?: string
+  /** When true, do not auto-retry 25001 (used on the second attempt). */
+  skip25001Retry?: boolean
 }
 
 export function mapListingToEbayInventory(listing: Listing) {
-  const sku =
-    listing.id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 50) || `lw-${Date.now()}`
+  const { sku } = sanitizeEbayInventorySku(
+    listing.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 50) || `LW${Date.now()}`
+  )
 
   const aspects: Record<string, string[]> = {}
   if (listing.specifics.brand) aspects.Brand = [listing.specifics.brand]
@@ -171,12 +181,15 @@ export function mapListingToEbayOffer(
   }
 }
 
+type EbayErrorParameter = { name?: string; value?: string }
+
 type EbayErrorDetail = {
   errorId?: number
   domain?: string
   category?: string
   message?: string
   longMessage?: string
+  parameters?: EbayErrorParameter[]
 }
 
 function isGenericEbayMessage(message?: string) {
@@ -186,7 +199,8 @@ function isGenericEbayMessage(message?: string) {
     normalized === "system error" ||
     normalized === "error" ||
     normalized === "internal error" ||
-    normalized === "unknown error"
+    normalized === "unknown error" ||
+    normalized.includes("core inventory service internal error")
   )
 }
 
@@ -215,6 +229,19 @@ function extractEbayErrorDetails(json: unknown): EbayErrorDetail[] {
     errorId?: number
     domain?: string
     category?: string
+    parameters?: EbayErrorParameter[]
+  }
+
+  const mapParams = (raw: unknown): EbayErrorParameter[] | undefined => {
+    if (!Array.isArray(raw)) return undefined
+    return raw.map((p) => {
+      if (!p || typeof p !== "object") return {}
+      const row = p as Record<string, unknown>
+      return {
+        name: typeof row.name === "string" ? row.name : undefined,
+        value: typeof row.value === "string" ? row.value : undefined,
+      }
+    })
   }
 
   const fromArray = Array.isArray(payload.errors)
@@ -225,6 +252,7 @@ function extractEbayErrorDetails(json: unknown): EbayErrorDetail[] {
         message: typeof err.message === "string" ? err.message : undefined,
         longMessage:
           typeof err.longMessage === "string" ? err.longMessage : undefined,
+        parameters: mapParams(err.parameters),
       }))
     : []
 
@@ -238,6 +266,7 @@ function extractEbayErrorDetails(json: unknown): EbayErrorDetail[] {
         category: payload.category,
         message: payload.message,
         longMessage: payload.longMessage,
+        parameters: mapParams(payload.parameters),
       },
     ]
   }
@@ -258,53 +287,141 @@ function formatEbayUserMessage(
   const longMsg = sanitizeEbayText(first.longMessage, 400)
   const preferred =
     (!isGenericEbayMessage(shortMsg) && shortMsg) ||
-    longMsg ||
+    (!isGenericEbayMessage(longMsg) && longMsg) ||
     shortMsg ||
+    longMsg ||
     `eBay API error (${status})`
 
   const meta: string[] = []
   if (typeof first.errorId === "number") meta.push(`errorId=${first.errorId}`)
   if (first.domain) meta.push(`domain=${first.domain}`)
   if (first.category) meta.push(`category=${first.category}`)
+  if (first.parameters?.length) {
+    for (const p of first.parameters) {
+      if (p.name && p.value) meta.push(`${p.name}=${sanitizeEbayText(p.value, 80)}`)
+      else if (p.name) meta.push(p.name)
+    }
+  }
 
   const body =
     meta.length > 0 ? `${preferred} (${meta.join(", ")})` : preferred
   return `${stepPrefix}${body}`
 }
 
+const TRACE_HEADER_NAMES = [
+  "rlogid",
+  "x-ebay-c-request-id",
+  "x-ebay-c-requestid",
+  "x-ebay-request-id",
+  "x-ebay-requestid",
+  "x-request-id",
+  "x-ebay-c-version",
+  "x-ebay-soa-request-id",
+] as const
+
+function extractEbayTraceHeaders(response: Response): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const name of TRACE_HEADER_NAMES) {
+    const value = response.headers.get(name)
+    if (value) out[name] = value.slice(0, 200)
+  }
+  // Also capture any x-ebay-* headers we might have missed (no auth).
+  response.headers.forEach((value, key) => {
+    const lower = key.toLowerCase()
+    if (
+      (lower.startsWith("x-ebay") || lower === "rlogid") &&
+      !out[lower] &&
+      !/auth|token|secret|cookie/i.test(lower)
+    ) {
+      out[lower] = value.slice(0, 200)
+    }
+  })
+  return out
+}
+
+function parseRequestBody(body: BodyInit | null | undefined): unknown {
+  if (body == null) return null
+  if (typeof body === "string") {
+    try {
+      return JSON.parse(body)
+    } catch {
+      return { raw: sanitizeEbayText(body, 2000) }
+    }
+  }
+  return { note: "non-string body omitted from log" }
+}
+
 /**
- * TEMP: safe Inventory/Account API response logging (no tokens, secrets, or full addresses).
+ * Safe Inventory/Account API request/response logging (no tokens/secrets).
  */
-function logEbayInventoryResponse(opts: {
+function logEbayInventoryExchange(opts: {
   method: string
   path: string
   status: number
   ok: boolean
   step?: string
+  sku?: string
+  marketplaceId?: string
+  locale?: string
+  attempt?: number
+  requestPayload?: unknown
+  responseBody?: unknown
+  responseText?: string
+  traceHeaders?: Record<string, string>
   errors: EbayErrorDetail[]
 }) {
-  console.info("[ebay/inventory] TEMP response", {
+  console.info("[ebay/inventory] exchange", {
     step: opts.step || null,
     method: opts.method,
     path: opts.path.split("?")[0],
+    sku: opts.sku || null,
+    marketplaceId: opts.marketplaceId || process.env.EBAY_MARKETPLACE_ID || "EBAY_US",
+    locale: opts.locale || null,
+    attempt: opts.attempt ?? 1,
     status: opts.status,
     ok: opts.ok,
+    traceHeaders: opts.traceHeaders || {},
+    requestPayload: opts.requestPayload ?? null,
+    responseBody:
+      opts.responseBody ??
+      (opts.responseText
+        ? { raw: sanitizeEbayText(opts.responseText, 4000) }
+        : null),
     errors: opts.errors.map((err) => ({
       errorId: err.errorId,
       domain: err.domain,
       category: err.category,
       message: sanitizeEbayText(err.message),
       longMessage: sanitizeEbayText(err.longMessage),
+      parameters: err.parameters,
     })),
   })
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function hasErrorId(errors: EbayErrorDetail[], id: number) {
+  return errors.some((e) => e.errorId === id)
+}
+
+function skuFromInventoryPath(path: string): string | undefined {
+  const match = path.match(/\/inventory_item\/([^/?#]+)/i)
+  if (!match) return undefined
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return match[1]
+  }
 }
 
 export async function ebayFetchResult(
   path: string,
   accessToken: string,
   init?: EbayFetchInit
-): Promise<{ status: number; data: unknown }> {
-  const { contentLanguage, step, ...fetchInit } = init || {}
+): Promise<{ status: number; data: unknown; traceHeaders: Record<string, string> }> {
+  const { contentLanguage, step, skip25001Retry, ...fetchInit } = init || {}
   const headers = new Headers(fetchInit.headers)
   headers.set("Authorization", `Bearer ${accessToken}`)
   headers.set("Content-Type", "application/json")
@@ -314,38 +431,95 @@ export async function ebayFetchResult(
   headers.set("Accept-Language", locale)
 
   const method = (fetchInit.method || "GET").toUpperCase()
-  const response = await fetch(`${ebayApiBase()}${path}`, {
-    ...fetchInit,
-    headers,
-  })
+  const requestPayload = parseRequestBody(fetchInit.body)
+  const sku = skuFromInventoryPath(path)
+  const marketplaceId = process.env.EBAY_MARKETPLACE_ID || "EBAY_US"
 
-  const text = await response.text()
-  let json: unknown = null
-  try {
-    json = text ? JSON.parse(text) : null
-  } catch {
-    json = text ? { parseError: true } : null
+  const attemptOnce = async (attempt: number) => {
+    const response = await fetch(`${ebayApiBase()}${path}`, {
+      ...fetchInit,
+      headers,
+    })
+
+    const text = await response.text()
+    let json: unknown = null
+    try {
+      json = text ? JSON.parse(text) : null
+    } catch {
+      json = text ? { parseError: true, raw: sanitizeEbayText(text, 2000) } : null
+    }
+
+    const errors = extractEbayErrorDetails(json)
+    const traceHeaders = extractEbayTraceHeaders(response)
+
+    logEbayInventoryExchange({
+      method,
+      path,
+      status: response.status,
+      ok: response.ok,
+      step,
+      sku,
+      marketplaceId,
+      locale,
+      attempt,
+      requestPayload,
+      responseBody: json,
+      responseText: text,
+      traceHeaders,
+      errors,
+    })
+
+    return { response, json, text, errors, traceHeaders }
   }
 
-  const errors = extractEbayErrorDetails(json)
-  logEbayInventoryResponse({
-    method,
-    path,
-    status: response.status,
-    ok: response.ok,
-    step,
-    errors,
-  })
+  let result = await attemptOnce(1)
 
-  if (!response.ok) {
+  // One automatic retry for Core Inventory Service 25001 — still log both attempts.
+  if (
+    !result.response.ok &&
+    !skip25001Retry &&
+    step === "createOrReplaceInventoryItem" &&
+    hasErrorId(result.errors, 25001)
+  ) {
+    console.warn("[ebay/inventory] retrying createOrReplaceInventoryItem after 25001", {
+      sku: sku || null,
+      marketplaceId,
+      delayMs: 750,
+      firstStatus: result.response.status,
+      firstErrors: result.errors,
+      firstTraceHeaders: result.traceHeaders,
+    })
+    await sleep(750)
+    result = await attemptOnce(2)
+  }
+
+  if (!result.response.ok) {
     throw new MarketplaceError(
-      formatEbayUserMessage(errors, response.status, step),
+      formatEbayUserMessage(result.errors, result.response.status, step),
       "ebay_api_error",
-      response.status
+      result.response.status,
+      {
+        ebay: {
+          step: step || null,
+          sku: sku || null,
+          marketplaceId,
+          locale,
+          httpStatus: result.response.status,
+          errorId: result.errors[0]?.errorId ?? null,
+          errors: result.errors,
+          responseBody: result.json,
+          traceHeaders: result.traceHeaders,
+          requestPayload,
+        },
+      }
     )
   }
 
-  return { status: response.status, data: json }
+  return {
+    status: result.response.status,
+    data: result.json,
+    traceHeaders: result.traceHeaders,
+  }
 }
 
 export async function ebayFetch(
@@ -355,4 +529,144 @@ export async function ebayFetch(
 ) {
   const result = await ebayFetchResult(path, accessToken, init)
   return result.data
+}
+
+/**
+ * Validate/sanitize inventory fields, PUT createOrReplaceInventoryItem,
+ * retry once on 25001, and surface field-level diagnosis without hiding eBay's response.
+ */
+export async function createOrReplaceEbayInventoryItem(opts: {
+  accessToken: string
+  sku: string
+  inventoryItem: ReturnType<typeof mapListingToEbayInventory>["inventoryItem"]
+  locale?: string
+}): Promise<{ sku: string; inventoryItem: EbayInventoryItemPayload }> {
+  const sanitized = sanitizeEbayInventoryItemPayload({
+    sku: opts.sku,
+    inventoryItem: opts.inventoryItem,
+    locale: opts.locale,
+  })
+
+  if (sanitized.blockingIssues.length > 0) {
+    const detail = sanitized.blockingIssues
+      .map((i) => `${i.field}: ${i.issue}`)
+      .join("; ")
+    throw new MarketplaceError(
+      `[createOrReplaceInventoryItem] Inventory payload failed validation before send — ${detail}`,
+      "ebay_inventory_payload_invalid",
+      400,
+      {
+        ebay: {
+          step: "createOrReplaceInventoryItem",
+          sku: sanitized.sku,
+          marketplaceId: process.env.EBAY_MARKETPLACE_ID || "EBAY_US",
+          locale: sanitized.locale,
+          httpStatus: 400,
+          errorId: null,
+          sanitizeIssues: sanitized.issues,
+          requestPayload: sanitized.inventoryItem,
+        },
+      }
+    )
+  }
+
+  if (sanitized.issues.length > 0) {
+    console.info("[ebay/inventory] sanitized createOrReplaceInventoryItem fields", {
+      sku: sanitized.sku,
+      marketplaceId: process.env.EBAY_MARKETPLACE_ID || "EBAY_US",
+      locale: sanitized.locale,
+      issues: sanitized.issues,
+    })
+  }
+
+  console.info("[ebay/inventory] outbound createOrReplaceInventoryItem", {
+    step: "createOrReplaceInventoryItem",
+    sku: sanitized.sku,
+    marketplaceId: process.env.EBAY_MARKETPLACE_ID || "EBAY_US",
+    locale: sanitized.locale,
+    path: `/sell/inventory/v1/inventory_item/${sanitized.sku}`,
+    requestPayload: sanitized.inventoryItem,
+  })
+
+  try {
+    await ebayFetch(
+      `/sell/inventory/v1/inventory_item/${encodeURIComponent(sanitized.sku)}`,
+      opts.accessToken,
+      {
+        method: "PUT",
+        step: "createOrReplaceInventoryItem",
+        contentLanguage: sanitized.locale,
+        body: JSON.stringify(sanitized.inventoryItem),
+      }
+    )
+  } catch (err) {
+    if (!(err instanceof MarketplaceError)) throw err
+    const ebay = err.details?.ebay
+    const diagnosis = diagnoseEbayInventoryPayload({
+      sku: sanitized.sku,
+      locale: sanitized.locale,
+      inventoryItem: sanitized.inventoryItem,
+      priorIssues: sanitized.issues,
+    })
+
+    const ebayErrorId = ebay?.errorId ?? null
+    const paramHints =
+      ebay?.errors
+        ?.flatMap((e) => e.parameters || [])
+        .filter((p) => p.name || p.value)
+        .map((p) =>
+          p.name && p.value ? `${p.name}=${p.value}` : p.name || p.value || ""
+        )
+        .filter(Boolean) || []
+
+    const fieldHint =
+      paramHints.length > 0
+        ? `eBay field hints: ${paramHints.join("; ")}`
+        : diagnosis.length > 0
+          ? `Likely payload fields: ${diagnosis.slice(0, 8).join("; ")}`
+          : "No local field violations detected after sanitization — eBay Core Inventory returned an opaque failure."
+
+    const responsePreview = sanitizeEbayText(
+      typeof ebay?.responseBody === "string"
+        ? ebay.responseBody
+        : JSON.stringify(ebay?.responseBody ?? null),
+      800
+    )
+
+    const trace =
+      ebay?.traceHeaders && Object.keys(ebay.traceHeaders).length > 0
+        ? ` trace=${JSON.stringify(ebay.traceHeaders)}`
+        : ""
+
+    throw new MarketplaceError(
+      `[createOrReplaceInventoryItem] Failed for SKU ${sanitized.sku} on ${
+        ebay?.marketplaceId || process.env.EBAY_MARKETPLACE_ID || "EBAY_US"
+      } (HTTP ${ebay?.httpStatus ?? err.status}, errorId=${ebayErrorId ?? "unknown"}). ${fieldHint} eBay response: ${
+        responsePreview || err.message
+      }.${trace}`,
+      err.code || "ebay_api_error",
+      err.status,
+      {
+        ...err.details,
+        ebay: {
+          ...(ebay || {
+            step: "createOrReplaceInventoryItem",
+            sku: sanitized.sku,
+            marketplaceId: process.env.EBAY_MARKETPLACE_ID || "EBAY_US",
+            locale: sanitized.locale,
+            httpStatus: err.status,
+            errorId: null,
+          }),
+          step: "createOrReplaceInventoryItem",
+          sku: sanitized.sku,
+          locale: sanitized.locale,
+          sanitizeIssues: sanitized.issues as InventoryFieldIssue[],
+          diagnosis,
+          requestPayload: sanitized.inventoryItem,
+        },
+      }
+    )
+  }
+
+  return { sku: sanitized.sku, inventoryItem: sanitized.inventoryItem }
 }

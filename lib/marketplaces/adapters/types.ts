@@ -18,6 +18,32 @@ export class MarketplaceError extends Error {
       name: string
       value: string
     }>
+    /** eBay Inventory publish diagnostics (no tokens). */
+    ebay?: {
+      step?: string | null
+      sku?: string | null
+      marketplaceId?: string
+      locale?: string
+      httpStatus?: number
+      errorId?: number | null
+      errors?: Array<{
+        errorId?: number
+        domain?: string
+        category?: string
+        message?: string
+        longMessage?: string
+        parameters?: Array<{ name?: string; value?: string }>
+      }>
+      responseBody?: unknown
+      traceHeaders?: Record<string, string>
+      requestPayload?: unknown
+      sanitizeIssues?: Array<{
+        field: string
+        issue: string
+        valuePreview?: string
+      }>
+      diagnosis?: string[]
+    }
   }
   constructor(
     message: string,

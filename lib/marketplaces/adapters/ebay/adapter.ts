@@ -2,6 +2,7 @@ import type { Listing } from "@/lib/types"
 import type { StoredMarketplaceConnection } from "@/lib/marketplaces/connections/crypto"
 import {
   attachEbayImageUrls,
+  createOrReplaceEbayInventoryItem,
   ebayFetch,
   mapListingToEbayInventory,
   mapListingToEbayOffer,
@@ -223,20 +224,17 @@ export const ebayAdapter: MarketplaceAdapter = {
       titleUnchanged: inventoryItem.product.title.slice(0, 80),
     })
 
-    // 5) Create/replace inventory item (with required aspects filled)
-    await ebayFetch(
-      `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
-      withLocation.accessToken,
-      {
-        method: "PUT",
-        step: "createOrReplaceInventoryItem",
-        body: JSON.stringify(inventoryItem),
-      }
-    )
+    // 5) Create/replace inventory item (sanitize + log + one 25001 retry)
+    const replaced = await createOrReplaceEbayInventoryItem({
+      accessToken: withLocation.accessToken,
+      sku,
+      inventoryItem,
+    })
+    const publishSku = replaced.sku
 
     const offer = mapListingToEbayOffer(
       listing,
-      sku,
+      publishSku,
       merchantLocationKey,
       policies,
       categoryId
@@ -244,7 +242,7 @@ export const ebayAdapter: MarketplaceAdapter = {
     console.info("[ebay/location] TEMP offer request location key", {
       step: "createOffer",
       merchantLocationKey,
-      sku,
+      sku: publishSku,
       categoryId,
       fulfillmentPolicyId: policies.fulfillmentPolicyId,
       paymentPolicyId: policies.paymentPolicyId,
@@ -253,7 +251,7 @@ export const ebayAdapter: MarketplaceAdapter = {
     })
 
     // 6) Create (or update existing) offer with the verified location key
-    const offerId = await resolveOfferId(withLocation.accessToken, sku, offer)
+    const offerId = await resolveOfferId(withLocation.accessToken, publishSku, offer)
 
     // 7) Publish offer
     const published = (await ebayFetch(

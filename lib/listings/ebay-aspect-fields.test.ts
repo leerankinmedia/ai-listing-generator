@@ -1,16 +1,20 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
-  ASPECT_AUTO_FILL_CONFIDENCE,
-  ASPECT_REVIEW_CONFIDENCE,
   autoFillHighConfidenceAspects,
   classifyAspectField,
   formatAiEmployeeBanner,
+  resolveMustFillAspectValue,
   splitAspectFieldsForDisplay,
   summarizeAiEmployeeAspects,
-  validateAspectsAgainstOptions,
   type EbayAspectFormField,
 } from "@/lib/listings/ebay-aspect-fields"
+import {
+  matchBrandToEbayList,
+  matchStyleToEbayList,
+  resolveSizeTypeFromText,
+  stringSimilarity,
+} from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import type { Listing } from "@/lib/types"
 
 function baseListing(partial: Partial<Listing> = {}): Listing {
@@ -18,7 +22,7 @@ function baseListing(partial: Partial<Listing> = {}): Listing {
     id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     userId: "user1",
     title: "Levi's Men's 32 Blue Straight Jeans",
-    description: "Jeans",
+    description: "Straight leg denim jeans",
     price: 28,
     currency: "USD",
     keywords: [],
@@ -26,26 +30,18 @@ function baseListing(partial: Partial<Listing> = {}): Listing {
       brand: "Levi's",
       size: "32",
       color: "Blue",
-      style: "Straight",
+      style: "straight-leg jeans",
       gender: "Men",
-      extras: {
-        Brand: "Levi's",
-        Style: "Straight",
-        Color: "Blue",
-        Department: "Men",
-        Type: "Jeans",
-        Pattern: "Solid",
-        Material: "Cotton",
-      },
+      extras: {},
     },
     fieldConfidence: {
-      brand: { value: "Levi's", confidence: 0.97 },
-      style: { value: "straight-leg jeans", confidence: 0.96 },
-      color: { value: "Blue", confidence: 0.98 },
+      brand: { value: "Levi's", confidence: 0.92 },
+      style: { value: "straight-leg jeans", confidence: 0.88 },
+      color: { value: "Blue", confidence: 0.97 },
       gender: { value: "Men", confidence: 0.96 },
-      size: { value: "32", confidence: 0.97 },
+      size: { value: "32", confidence: 0.9 },
       pattern: { value: "Solid", confidence: 0.8 },
-      material: { value: "Cotton", confidence: 0.82 },
+      material: { value: "Cotton", confidence: 0.85 },
     },
     images: [],
     status: "draft",
@@ -58,183 +54,209 @@ function baseListing(partial: Partial<Listing> = {}): Listing {
   }
 }
 
-describe("confidence tiers", () => {
-  it("uses 95% auto-fill and 70% review thresholds", () => {
-    assert.equal(ASPECT_AUTO_FILL_CONFIDENCE, 0.95)
-    assert.equal(ASPECT_REVIEW_CONFIDENCE, 0.7)
+describe("brand fuzzy matching", () => {
+  it("scores exact brands at 1.0", () => {
+    assert.equal(stringSimilarity("Levi's", "Levi's"), 1)
+  })
+
+  it("auto-selects when fuzzy score ≥ 95%", () => {
+    const brands = ["Nike", "Levi's", "Adidas", "Unbranded", "Levi Strauss & Co."]
+    const hit = matchBrandToEbayList("Levis", brands)
+    assert.ok(hit.score >= 0.95, `score was ${hit.score}`)
+    assert.ok(hit.value === "Levi's" || hit.value?.includes("Levi"))
+  })
+
+  it("selects Levi's from OCR-ish Levi's wording", () => {
+    const hit = matchBrandToEbayList("Levi's", [
+      "Nike",
+      "Levi's",
+      "Lee",
+      "Wrangler",
+    ])
+    assert.equal(hit.value, "Levi's")
+    assert.ok(hit.score >= 0.95)
   })
 })
 
-describe("classifyAspectField tiers", () => {
-  it("marks ≥95% filled values as auto_filled", () => {
-    const view = classifyAspectField(
-      { name: "Brand", required: true, value: "Levi's" },
-      baseListing()
+describe("style closest match", () => {
+  it("maps straight-leg jeans → Straight", () => {
+    assert.equal(
+      matchStyleToEbayList("straight-leg jeans", [
+        "Skinny",
+        "Straight",
+        "Flared",
+        "Bootcut",
+      ]),
+      "Straight"
     )
-    assert.equal(view.status, "auto_filled")
   })
 
-  it("marks 70–94% filled values as needs_review", () => {
-    const view = classifyAspectField(
-      { name: "Pattern", required: false, value: "Solid" },
-      baseListing()
+  it("maps flared leg → Flared", () => {
+    assert.equal(
+      matchStyleToEbayList("flared leg", ["Skinny", "Straight", "Flared"]),
+      "Flared"
     )
-    assert.equal(view.status, "needs_review")
-    assert.ok((view.confidence || 0) >= 0.7)
-    assert.ok((view.confidence || 0) < 0.95)
-  })
-
-  it("marks empty required as needs_input", () => {
-    const view = classifyAspectField(
-      { name: "Theme", required: true },
-      baseListing({ specifics: { brand: "Levi's", extras: {} } })
-    )
-    assert.equal(view.status, "needs_input")
   })
 })
 
-describe("splitAspectFieldsForDisplay", () => {
-  it("puts Review + blank required on the main page; auto-filled in More", () => {
-    const fields: EbayAspectFormField[] = [
-      { name: "Brand", required: true, value: "Levi's" },
-      { name: "Color", required: true, value: "Blue" },
-      { name: "Pattern", required: false, value: "Solid" },
-      { name: "Material", required: false, value: "Cotton" },
-      { name: "Theme", required: true },
-      { name: "Inseam", required: false },
-    ]
-    const { primary, more, autoFilledCount, reviewCount } =
-      splitAspectFieldsForDisplay(fields, baseListing())
-    assert.ok(primary.some((v) => v.field.name === "Theme"))
-    assert.ok(primary.some((v) => v.field.name === "Pattern"))
-    assert.ok(primary.some((v) => v.field.name === "Material"))
-    assert.ok(more.some((v) => v.field.name === "Brand"))
-    assert.ok(autoFilledCount >= 2)
-    assert.ok(reviewCount >= 2)
-    assert.ok(!more.some((v) => v.field.name === "Inseam"))
+describe("size type Regular default", () => {
+  it("defaults to Regular when tag has no special type", () => {
+    assert.equal(
+      resolveSizeTypeFromText("Men's 32x32 denim", [
+        "Petite",
+        "Regular",
+        "Tall",
+        "Plus",
+      ]),
+      "Regular"
+    )
+  })
+
+  it("picks Petite when tag says Petite", () => {
+    assert.equal(
+      resolveSizeTypeFromText("Women's Petite 6", [
+        "Petite",
+        "Regular",
+        "Plus",
+      ]),
+      "Petite"
+    )
   })
 })
 
-describe("autoFillHighConfidenceAspects", () => {
-  it("auto-selects at ≥95%", () => {
-    const listing = baseListing({
-      specifics: {
-        brand: "Levi's",
-        style: "straight-leg jeans",
-        color: "Blue",
-        extras: {},
-      },
-      fieldConfidence: {
-        brand: { value: "Levi's", confidence: 0.97 },
-        style: { value: "straight-leg jeans", confidence: 0.96 },
-        color: { value: "Blue", confidence: 0.98 },
-      },
-    })
+describe("must-fill Brand Style Size Type", () => {
+  it("never leaves Brand/Style/Size Type blank when determinable", () => {
+    const listing = baseListing()
+    const brand = resolveMustFillAspectValue("Brand", listing, [
+      "Nike",
+      "Levi's",
+      "Lee",
+    ])
+    const style = resolveMustFillAspectValue("Style", listing, [
+      "Skinny",
+      "Straight",
+      "Flared",
+    ])
+    const sizeType = resolveMustFillAspectValue("Size Type", listing, [
+      "Petite",
+      "Regular",
+      "Plus",
+      "Juniors",
+      "Maternity",
+    ])
+    assert.equal(brand, "Levi's")
+    assert.equal(style, "Straight")
+    assert.equal(sizeType, "Regular")
+  })
+})
+
+describe("autoFill opens with zero required when fillable", () => {
+  it("auto-selects Brand Style Size Type Color Department even under 95% confidence", () => {
+    const listing = baseListing()
     const fields: EbayAspectFormField[] = [
       {
         name: "Brand",
         required: true,
-        allowedValues: ["Levi's", "Nike", "Unbranded"],
+        allowedValues: ["Nike", "Levi's", "Lee", "Unbranded"],
       },
       {
         name: "Style",
         required: true,
-        allowedValues: ["Skinny", "Straight", "Bootcut"],
+        allowedValues: ["Skinny", "Straight", "Flared", "Bootcut"],
+      },
+      {
+        name: "Size Type",
+        required: true,
+        allowedValues: ["Petite", "Regular", "Tall", "Plus", "Juniors", "Maternity"],
       },
       {
         name: "Color",
         required: true,
         allowedValues: ["Black", "Blue", "Gray"],
+      },
+      {
+        name: "Department",
+        required: true,
+        allowedValues: ["Men", "Women", "Unisex"],
+      },
+      {
+        name: "Size",
+        required: true,
+        allowedValues: ["30", "32", "34"],
       },
     ]
     const next = autoFillHighConfidenceAspects(listing, fields)
     assert.equal(next.specifics.extras?.Brand, "Levi's")
     assert.equal(next.specifics.extras?.Style, "Straight")
+    assert.equal(next.specifics.extras?.["Size Type"], "Regular")
     assert.equal(next.specifics.extras?.Color, "Blue")
+    assert.equal(next.specifics.extras?.Department || next.specifics.gender, "Men")
+    assert.equal(next.specifics.extras?.Size || next.specifics.size, "32")
+
+    const { primary } = splitAspectFieldsForDisplay(fields, next)
+    assert.equal(
+      primary.length,
+      0,
+      `expected 0 required attention fields, got ${primary.map((p) => p.field.name).join(", ")}`
+    )
   })
 
-  it("preselects at 70–94% for Review", () => {
+  it("treats filled dropdown matches as auto_filled not Review", () => {
     const listing = baseListing({
-      specifics: { pattern: "Solid", extras: {} },
+      specifics: {
+        brand: "Levi's",
+        extras: { Brand: "Levi's", Pattern: "Solid" },
+      },
       fieldConfidence: {
+        brand: { value: "Levi's", confidence: 0.8 },
         pattern: { value: "Solid", confidence: 0.8 },
       },
     })
-    const fields: EbayAspectFormField[] = [
+    const brandView = classifyAspectField(
       {
-        name: "Pattern",
-        required: false,
-        allowedValues: ["Solid", "Striped", "Plaid"],
-      },
-    ]
-    const next = autoFillHighConfidenceAspects(listing, fields)
-    assert.equal(next.specifics.extras?.Pattern, "Solid")
-    const view = classifyAspectField(fields[0], next)
-    assert.equal(view.status, "needs_review")
-  })
-
-  it("leaves blank under 70%", () => {
-    const listing = baseListing({
-      specifics: { style: "maybe skinny", extras: {} },
-      fieldConfidence: {
-        style: { value: "maybe skinny", confidence: 0.55 },
-      },
-    })
-    const fields: EbayAspectFormField[] = [
-      {
-        name: "Style",
+        name: "Brand",
         required: true,
-        allowedValues: ["Skinny", "Straight", "Bootcut"],
+        allowedValues: ["Levi's", "Nike"],
+        value: "Levi's",
       },
-    ]
-    const next = autoFillHighConfidenceAspects(listing, fields)
-    assert.equal(next.specifics.extras?.Style, undefined)
+      listing
+    )
+    assert.equal(brandView.status, "auto_filled")
   })
 })
 
 describe("AI employee banner", () => {
-  it("formats completed / attention copy", () => {
-    const fields: EbayAspectFormField[] = [
-      { name: "Brand", required: true, value: "Levi's" },
-      { name: "Color", required: true, value: "Blue" },
-      { name: "Pattern", required: false, value: "Solid" },
-      { name: "Theme", required: true },
-    ]
-    const summary = summarizeAiEmployeeAspects(fields, baseListing())
-    const banner = formatAiEmployeeBanner(summary)
-    assert.match(banner, /AI completed \d+\/\d+ item specifics/)
-    assert.match(banner, /need your attention|Ready to publish/)
-    assert.ok(summary.needsAttention >= 1)
-  })
-})
-
-describe("validateAspectsAgainstOptions", () => {
-  it("clears invalid selection values silently", () => {
+  it("reports ready when nothing needs attention", () => {
     const listing = baseListing({
       specifics: {
         brand: "Levi's",
+        size: "32",
+        color: "Blue",
+        style: "Straight",
+        gender: "Men",
         extras: {
           Brand: "Levi's",
-          Style: "straight-leg jeans",
+          Style: "Straight",
           Color: "Blue",
+          Department: "Men",
+          Size: "32",
+          "Size Type": "Regular",
         },
       },
     })
     const fields: EbayAspectFormField[] = [
+      { name: "Brand", required: true, allowedValues: ["Levi's"], value: "Levi's" },
+      { name: "Style", required: true, allowedValues: ["Straight"], value: "Straight" },
       {
-        name: "Style",
+        name: "Size Type",
         required: true,
-        allowedValues: ["Skinny", "Straight", "Bootcut"],
-      },
-      {
-        name: "Color",
-        required: true,
-        allowedValues: ["Black", "Blue", "Gray"],
-        value: "Blue",
+        allowedValues: ["Regular"],
+        value: "Regular",
       },
     ]
-    const result = validateAspectsAgainstOptions(listing, fields)
-    assert.ok(result.cleared.includes("Style"))
-    assert.ok(result.missingRequired.includes("Style"))
+    const filled = autoFillHighConfidenceAspects(listing, fields)
+    const summary = summarizeAiEmployeeAspects(fields, filled)
+    assert.equal(summary.needsAttention, 0)
+    assert.match(formatAiEmployeeBanner(summary), /Ready to publish/)
   })
 })

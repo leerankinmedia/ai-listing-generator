@@ -170,8 +170,8 @@ function listingCandidatesForAspect(
     case "gender":
       return [fromExtras, listing.specifics.gender]
     case "size type":
-      // Only when size/title implies a type — never default to Regular.
-      return [fromExtras, inferSizeTypeFromListing(listing)]
+      // Petite/Tall/Plus/Juniors/Maternity from tag text; else Regular.
+      return [fromExtras, inferSizeTypeFromListing(listing), "Regular", "Regular Size"]
     case "type":
     case "item type":
       return [
@@ -266,19 +266,21 @@ function listingHasGrayFamilyColor(
 }
 
 /**
- * Infer a Size Type candidate from listing size / title text.
- * Final value is only applied when allowed for the category.
+ * Infer a Size Type candidate from listing size / title / description text.
+ * Defaults to Regular when no special size type is indicated.
  */
 function inferSizeTypeFromListing(listing: Listing): string | undefined {
-  const hay = `${listing.specifics.size || ""} ${listing.title || ""}`.toLowerCase()
+  const hay =
+    `${listing.specifics.size || ""} ${listing.title || ""} ${listing.description || ""} ${listing.specifics.flaws || ""}`.toLowerCase()
   if (/\bpetite\b/.test(hay)) return "Petite"
   if (/\bplus\b/.test(hay) || /\b1[x-z]\b/.test(hay) || /\b2[x-z]\b/.test(hay)) {
     return "Plus"
   }
-  if (/\bbig\b|\btall\b|\bbig ?& ?tall\b/.test(hay)) return "Big & Tall"
+  if (/\btall\b/.test(hay) || /\bbig\s*&?\s*tall\b/.test(hay)) return "Tall"
   if (/\bjunior/.test(hay)) return "Juniors"
   if (/\bmaternity\b/.test(hay)) return "Maternity"
-  return undefined
+  // Default Regular — never leave Size Type blank for clothing.
+  return "Regular"
 }
 
 /**
@@ -315,10 +317,14 @@ export function applyRequiredEbayAspects(
       "SELECTION_ONLY"
     const conf = confidenceForAspect(listing, name)
     const highConfidence = isHighConfidenceField(conf)
-    // ≥95% enables fuzzy maps; ≥70% allows exact/synonym preselect.
+    // ≥95% enables fuzzy maps; Brand/Style/Size Type always attempt a match.
     const autoFillReady = (conf ?? 0) >= ASPECT_AUTO_FILL_CONFIDENCE
     const reviewReady =
-      conf == null || (conf ?? 0) >= ASPECT_REVIEW_CONFIDENCE
+      conf == null ||
+      (conf ?? 0) >= ASPECT_REVIEW_CONFIDENCE ||
+      name.toLowerCase() === "brand" ||
+      name.toLowerCase() === "style" ||
+      name.toLowerCase() === "size type"
 
     // Preserve exact manual / already-valid selections — never overwrite them.
     // Exception: Color — do not keep a stale Black when any gray-family signal
@@ -366,7 +372,7 @@ export function applyRequiredEbayAspects(
       delete aspects[name]
     }
 
-    // Under 70% confidence → leave blank (seller must fill if required).
+    // Under 70% confidence → leave blank, except Brand / Style / Size Type.
     if (conf != null && !reviewReady) {
       missingRequired.push({
         name,
@@ -381,10 +387,13 @@ export function applyRequiredEbayAspects(
       allowed,
       {
         selectionOnly,
-        // Measurements: exact only. Fuzzy only at ≥95%.
+        // Measurements: exact only. Brand/Style always fuzzy-capable. Else ≥95%.
         highConfidence: isMeasurementAspect(name)
           ? false
-          : autoFillReady || highConfidence,
+          : name.toLowerCase() === "brand" ||
+              name.toLowerCase() === "style" ||
+              autoFillReady ||
+              highConfidence,
       }
     )
 

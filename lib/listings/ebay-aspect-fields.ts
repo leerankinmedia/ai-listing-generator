@@ -10,7 +10,10 @@
 import {
   colorIsBlackFamily,
   colorIsGrayFamily,
+  matchBrandToEbayList,
   matchExactEbayAspectValue,
+  matchStyleToEbayList,
+  resolveSizeTypeFromText,
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import type { Listing } from "@/lib/types"
 
@@ -24,10 +27,17 @@ const KNOWN_SPECIFIC_KEYS = new Set([
   "gender",
 ])
 
-/** Auto-select without user interaction. */
+/** Auto-select without user interaction when confidence ≥ this. */
 export const ASPECT_AUTO_FILL_CONFIDENCE = 0.95
-/** Preselect + Review badge. Below this → leave blank. */
+/** Legacy review band — if AI value maps to an eBay option, still auto-select. */
 export const ASPECT_REVIEW_CONFIDENCE = 0.7
+
+/** Must-fill clothing aspects — never leave blank when AI/eBay can determine. */
+export const MUST_FILL_ASPECTS = new Set(["brand", "style", "size type"])
+
+export function isMustFillAspect(name: string): boolean {
+  return MUST_FILL_ASPECTS.has(name.trim().toLowerCase())
+}
 
 export type EbayAspectFormField = {
   name: string
@@ -312,6 +322,32 @@ export function resolveSelectValue(
       suggestedValue
     )
   }
+
+  // Brand: fuzzy ≥95% against eBay brand list.
+  if (nameKey === "brand") {
+    for (const candidate of [detectedValue, rawValue, suggestedValue]) {
+      const brand = matchBrandToEbayList(candidate, options)
+      if (brand.value) return brand.value
+    }
+    return ""
+  }
+
+  // Style: closest eBay style (Straight, Skinny, Flared…).
+  if (nameKey === "style") {
+    return (
+      matchStyleToEbayList(detectedValue, options) ||
+      matchStyleToEbayList(rawValue, options) ||
+      matchStyleToEbayList(suggestedValue, options) ||
+      ""
+    )
+  }
+
+  // Size Type: special / Regular default handled by resolveMustFillAspectValue.
+  if (nameKey === "size type") {
+    const hay = [detectedValue, rawValue, suggestedValue].filter(Boolean).join(" ")
+    return resolveSizeTypeFromText(hay, options) || ""
+  }
+
   const matched = matchExactEbayAspectValue(
     fieldName,
     [detectedValue, rawValue, suggestedValue],
@@ -322,6 +358,69 @@ export function resolveSelectValue(
     }
   )
   return matched || ""
+}
+
+/**
+ * Resolve Brand / Style / Size Type aggressively for zero-required openings.
+ */
+export function resolveMustFillAspectValue(
+  fieldName: string,
+  listing: Listing,
+  options: string[]
+): string {
+  const nameKey = fieldName.trim().toLowerCase()
+  const raw = readAspectValue(listing, fieldName)
+  const detected = detectedValueForAspect(listing, fieldName)
+
+  if (nameKey === "brand") {
+    const brand = matchBrandToEbayList(
+      detected || raw || listing.specifics.brand,
+      options
+    )
+    if (brand.value) return brand.value
+    // Free-text brand categories: keep detected brand when no list / open text.
+    if (options.length === 0) {
+      return (detected || raw || listing.specifics.brand || "").trim()
+    }
+    return ""
+  }
+
+  if (nameKey === "style") {
+    return (
+      matchStyleToEbayList(
+        detected || raw || listing.specifics.style || listing.fieldConfidence?.style?.value,
+        options
+      ) ||
+      matchExactEbayAspectValue(
+        "Style",
+        [
+          detected,
+          raw,
+          listing.specifics.style,
+          listing.title,
+        ],
+        options,
+        { selectionOnly: true, highConfidence: true }
+      ) ||
+      ""
+    )
+  }
+
+  if (nameKey === "size type") {
+    const hay = [
+      listing.specifics.size,
+      listing.title,
+      listing.description,
+      listing.specifics.flaws,
+      raw,
+      detected,
+    ]
+      .filter(Boolean)
+      .join(" ")
+    return resolveSizeTypeFromText(hay, options) || ""
+  }
+
+  return resolveSelectValue(fieldName, raw, options, undefined, detected)
 }
 
 export function readAspectValue(listing: Listing, name: string): string {
@@ -372,6 +471,10 @@ export function resolveAspectFieldValue(
   listing: Listing
 ): string {
   const options = field.allowedValues || []
+  if (isMustFillAspect(field.name)) {
+    const must = resolveMustFillAspectValue(field.name, listing, options)
+    if (must) return must
+  }
   const raw = readAspectValue(listing, field.name)
   const detected = detectedValueForAspect(listing, field.name)
   if (options.length > 0) {
@@ -388,7 +491,8 @@ export function resolveAspectFieldValue(
 
 /**
  * Classify for AI-employee UI.
- * ≥95% filled → auto_filled · 70–94% filled → needs_review · empty required → needs_input
+ * If AI value maps to an eBay option, treat as auto_filled (not Review).
+ * Only blank required fields need attention.
  */
 export function classifyAspectField(
   field: EbayAspectFormField,
@@ -399,18 +503,8 @@ export function classifyAspectField(
   const empty = !value.trim()
 
   if (!empty) {
-    if (isAutoFillConfidence(confidence)) {
-      return { field, value, status: "auto_filled", confidence }
-    }
-    if (isReviewConfidence(confidence)) {
-      return { field, value, status: "needs_review", confidence }
-    }
-    // Filled without Vision confidence (exact Taxonomy match / manual) → treat as done.
-    if (confidence == null) {
-      return { field, value, status: "auto_filled", confidence }
-    }
-    // Confidence known but <70% yet somehow filled — still ask for review.
-    return { field, value, status: "needs_review", confidence }
+    // Known + on the eBay list (or free-text filled) → done. No Review nag.
+    return { field, value, status: "auto_filled", confidence }
   }
 
   if (field.required) {
@@ -521,10 +615,9 @@ export function countCompletedAspects(
 }
 
 /**
- * AI employee fill:
- * - ≥95%: apply exact eBay value
- * - 70–94%: preselect most likely exact value (Review later)
- * - <70%: leave blank (do not invent)
+ * Auto-select whenever AI knows a value that maps onto an eBay dropdown option.
+ * Brand: fuzzy ≥95%. Style: closest eBay style. Size Type: Regular default.
+ * Never leave Brand / Style / Size Type blank when determinable.
  */
 export function autoFillHighConfidenceAspects(
   listing: Listing,
@@ -534,46 +627,49 @@ export function autoFillHighConfidenceAspects(
   const toApply: Array<{ name: string; value: string }> = []
 
   for (const field of fields) {
-    const confidence = confidenceForListingAspect(listing, field.name)
-    // Below review threshold — leave blank even if a fuzzy guess exists.
-    if (isBlankConfidence(confidence) && confidence != null) continue
-
     const options = field.allowedValues || []
+    const nameKey = field.name.trim().toLowerCase()
+    const confidence = confidenceForListingAspect(listing, field.name)
     const detected = detectedValueForAspect(listing, field.name)
     const raw = readAspectValue(listing, field.name)
 
-    // No Vision confidence: only keep values already exact on the listing / server.
-    if (confidence == null) {
-      if (options.length === 0) {
-        const free = (raw || field.value || "").trim()
-        if (free) toApply.push({ name: field.name, value: free })
-      } else if (raw && isExactOption(raw, options)) {
-        const exact =
-          options.find((o) => o.toLowerCase() === raw.toLowerCase()) || raw
+    if (options.length) optionsByName.set(nameKey, options)
+
+    // Brand / Style / Size Type — always try must-fill resolvers.
+    if (isMustFillAspect(field.name)) {
+      const value = resolveMustFillAspectValue(field.name, listing, options)
+      if (value) toApply.push({ name: field.name, value })
+      continue
+    }
+
+    // If AI already knows a value that exists on the eBay list → select it.
+    if (options.length > 0) {
+      const exact = resolveSelectValue(
+        field.name,
+        raw,
+        options,
+        field.suggestedValue || field.value,
+        detected
+      )
+      if (exact) {
         toApply.push({ name: field.name, value: exact })
-      } else if (field.value && isExactOption(field.value, options)) {
-        toApply.push({ name: field.name, value: field.value })
+        continue
       }
-      if (options.length) optionsByName.set(field.name.toLowerCase(), options)
+      // No dropdown match — leave blank (do not invent).
       continue
     }
 
-    // ≥70%: try exact eBay match (fuzzy allowed at ≥95%).
-    if (options.length === 0) {
-      const free = (raw || detected || field.suggestedValue || field.value || "").trim()
-      if (free) toApply.push({ name: field.name, value: free })
+    // Free-text aspects: fill when we have AI signal (≥70% or any detected string).
+    if (
+      isBlankConfidence(confidence) &&
+      confidence != null &&
+      !detected?.trim() &&
+      !raw.trim()
+    ) {
       continue
     }
-
-    const exact = resolveSelectValue(
-      field.name,
-      raw,
-      options,
-      field.suggestedValue || field.value,
-      detected
-    )
-    if (exact) toApply.push({ name: field.name, value: exact })
-    optionsByName.set(field.name.toLowerCase(), options)
+    const free = (raw || detected || field.suggestedValue || field.value || "").trim()
+    if (free) toApply.push({ name: field.name, value: free })
   }
 
   return applyExactAspectsToListing(listing, toApply, optionsByName)

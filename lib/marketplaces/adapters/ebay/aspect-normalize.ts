@@ -139,12 +139,21 @@ const STYLE_SYNONYMS: Record<string, string[]> = {
   skinny: ["skinny", "skinny leg", "skinny fit", "skinny jeans"],
   slim: ["slim", "slim fit", "slim leg", "slim jeans"],
   bootcut: ["bootcut", "boot cut", "boot-cut", "bootcut jeans"],
-  flared: ["flared", "flare", "bell bottom", "bell bottoms"],
+  flared: [
+    "flared",
+    "flare",
+    "flared leg",
+    "flare leg",
+    "bell bottom",
+    "bell bottoms",
+  ],
   relaxed: ["relaxed", "relaxed fit", "relaxed leg"],
   tapered: ["tapered", "taper", "tapered leg"],
   boyfriend: ["boyfriend", "boyfriend fit"],
   mom: ["mom", "mom jeans", "mom fit"],
   wide: ["wide", "wide leg", "wide-leg"],
+  cropped: ["cropped", "crop", "ankle"],
+  cargo: ["cargo", "cargo pant", "cargo pants"],
 }
 
 const TYPE_SYNONYMS: Record<string, string[]> = {
@@ -529,6 +538,151 @@ function closestAllowedByTokens(
   return undefined
 }
 
+/** Dice coefficient on character bigrams — 0..1 brand/style similarity. */
+export function stringSimilarity(a: string, b: string): number {
+  const x = collapse(a)
+  const y = collapse(b)
+  if (!x || !y) return 0
+  if (x === y) return 1
+  if (x.includes(y) || y.includes(x)) {
+    return Math.min(x.length, y.length) / Math.max(x.length, y.length)
+  }
+  const bigrams = (s: string): Map<string, number> => {
+    const map = new Map<string, number>()
+    for (let i = 0; i < s.length - 1; i++) {
+      const g = s.slice(i, i + 2)
+      map.set(g, (map.get(g) || 0) + 1)
+    }
+    return map
+  }
+  const A = bigrams(x)
+  const B = bigrams(y)
+  if (A.size === 0 || B.size === 0) {
+    // Single-char / short tokens — character overlap
+    let hit = 0
+    for (const ch of new Set(x)) {
+      if (y.includes(ch)) hit += 1
+    }
+    return hit / Math.max(new Set(x).size, new Set(y).size)
+  }
+  let overlap = 0
+  for (const [g, n] of A) {
+    overlap += Math.min(n, B.get(g) || 0)
+  }
+  const total = [...A.values()].reduce((s, n) => s + n, 0) +
+    [...B.values()].reduce((s, n) => s + n, 0)
+  return total === 0 ? 0 : (2 * overlap) / total
+}
+
+export const BRAND_FUZZY_MIN_SCORE = 0.95
+
+/**
+ * Fuzzy-match a detected brand onto the eBay Brand allowed list.
+ * Auto-select when the best score is ≥ 95%.
+ */
+export function matchBrandToEbayList(
+  detected: string | undefined | null,
+  allowed: string[]
+): { value?: string; score: number } {
+  const raw = (detected || "").trim()
+  if (!raw || allowed.length === 0) return { score: 0 }
+
+  const collapsed = collapse(raw)
+  const compact = collapsed.replace(/\s+/g, "")
+  const allowedByKey = new Map(allowed.map((v) => [collapse(v), v] as const))
+  const allowedByCompact = new Map(
+    allowed.map((v) => [collapse(v).replace(/\s+/g, ""), v] as const)
+  )
+
+  const direct = allowedByKey.get(collapsed) || allowedByCompact.get(compact)
+  if (direct) return { value: direct, score: 1 }
+
+  // Strip common prefixes ("Brand: Nike", "by Levi's")
+  const stripped = collapsed.replace(/^(brand|by)\s+/i, "").trim()
+  const strippedCompact = stripped.replace(/\s+/g, "")
+  if (stripped) {
+    const hit =
+      allowedByKey.get(stripped) || allowedByCompact.get(strippedCompact)
+    if (hit) return { value: hit, score: 1 }
+  }
+
+  let best: { value: string; score: number } | undefined
+  for (const option of allowed) {
+    const optCollapsed = collapse(option)
+    const optCompact = optCollapsed.replace(/\s+/g, "")
+    const score = Math.max(
+      stringSimilarity(raw, option),
+      stringSimilarity(collapsed, optCollapsed),
+      stringSimilarity(compact, optCompact),
+      stringSimilarity(strippedCompact || compact, optCompact)
+    )
+    // Containment boost for "Levi's Strauss" → "Levi's"
+    const cand = strippedCompact || compact
+    if (cand.includes(optCompact) || optCompact.includes(cand)) {
+      const containScore =
+        Math.min(optCompact.length, cand.length) /
+        Math.max(optCompact.length, cand.length)
+      const merged = Math.max(score, containScore)
+      if (!best || merged > best.score) best = { value: option, score: merged }
+      continue
+    }
+    if (!best || score > best.score) best = { value: option, score }
+  }
+
+  if (best && best.score >= BRAND_FUZZY_MIN_SCORE) {
+    return best
+  }
+  return { score: best?.score || 0 }
+}
+
+/**
+ * Map AI style wording onto the closest eBay Style option (Straight, Skinny, Flared…).
+ */
+export function matchStyleToEbayList(
+  detected: string | undefined | null,
+  allowed: string[]
+): string | undefined {
+  const raw = (detected || "").trim()
+  if (!raw) return undefined
+  return matchExactEbayAspectValue("Style", [raw], allowed, {
+    selectionOnly: true,
+    highConfidence: true,
+  })
+}
+
+/**
+ * Size Type: Petite / Tall / Plus / Juniors / Maternity when tag/text says so;
+ * otherwise default to Regular when that option exists.
+ */
+export function resolveSizeTypeFromText(
+  haystack: string,
+  allowed: string[]
+): string | undefined {
+  const hay = haystack.toLowerCase()
+  const pick = (wanted: string[]) => {
+    for (const w of wanted) {
+      const hit = allowed.find((a) => collapse(a) === collapse(w))
+      if (hit) return hit
+      const fuzzy = allowed.find((a) => collapse(a).includes(collapse(w)))
+      if (fuzzy) return fuzzy
+    }
+    return undefined
+  }
+
+  if (/\bpetite\b/.test(hay)) return pick(["Petite"])
+  if (/\bplus\b/.test(hay) || /\b1[x-z]\b/.test(hay) || /\b2[x-z]\b/.test(hay)) {
+    return pick(["Plus", "Plus Size"])
+  }
+  if (/\btall\b/.test(hay) || /\bbig\s*&?\s*tall\b/.test(hay)) {
+    return pick(["Tall", "Big & Tall", "Big and Tall"])
+  }
+  if (/\bjunior/.test(hay)) return pick(["Juniors", "Junior"])
+  if (/\bmaternity\b/.test(hay)) return pick(["Maternity"])
+
+  // Default Regular whenever the category offers it.
+  return pick(["Regular", "Regular Size"])
+}
+
 export type MatchAspectOptions = {
   /** When true, allow closest-shade / token fuzzy matches onto allowed list. */
   highConfidence?: boolean
@@ -562,6 +716,15 @@ export function matchExactEbayAspectValue(
       })
     }
     return matched.value
+  }
+
+  // Brand: fuzzy match ≥95% similarity → auto-select exact eBay brand.
+  if (name === "brand") {
+    for (const candidate of candidates) {
+      const brand = matchBrandToEbayList(candidate, allowed)
+      if (brand.value) return brand.value
+    }
+    // Fall through to synonym / exact below for free-text edge cases.
   }
 
   if (allowed.length === 0) {

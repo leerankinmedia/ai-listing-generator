@@ -50,4 +50,14 @@ describe("matchExactEbayAspectValue color primary", () => {
     )
     assert.equal(value, "Straight")
   })
+
+  it("fuzzy-matches brand Levis → Levi's at high similarity", () => {
+    const value = matchExactEbayAspectValue(
+      "Brand",
+      ["Levis"],
+      ["Nike", "Levi's", "Adidas", "Lee"],
+      { selectionOnly: true, highConfidence: true }
+    )
+    assert.equal(value, "Levi's")
+  })
 })

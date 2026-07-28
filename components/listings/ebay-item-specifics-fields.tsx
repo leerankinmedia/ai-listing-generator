@@ -183,7 +183,8 @@ function AiEmployeeBanner({ summary }: { summary: AiEmployeeAspectSummary }) {
       <div>
         <p className="text-sm font-medium text-foreground">{text}</p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          ≥95% auto-filled · 70–94% preselected for Review · under 70% left blank
+          Brand, Style, and Size Type auto-select when AI can match eBay options.
+          Size Type defaults to Regular.
         </p>
       </div>
     </div>

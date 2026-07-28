@@ -21,10 +21,10 @@ import {
   ebayShippingPackageBlockMessage,
 } from "@/lib/listings/publish"
 import {
+  EbayShippingModeFields,
   EbayShippingPublishSummary,
-  useEbayFulfillmentPolicies,
 } from "@/components/listings/ebay-shipping-section"
-import { defaultEbayShippingMode } from "@/lib/marketplaces/adapters/ebay/fulfillment-shipping"
+import { ShippingPackageFields } from "@/components/listings/shipping-package-fields"
 import { persistListing } from "@/lib/listings/repository"
 import { ensureDurableOriginalImageUrls } from "@/lib/listings/durable-images"
 import { readApiJsonResponse } from "@/lib/api/read-json-response"
@@ -191,31 +191,6 @@ export function OneClickPublishBar({
   const [loadingConnections, setLoadingConnections] = useState(true)
 
   const ebaySelected = selected.includes("ebay")
-  const {
-    policies: fulfillmentPolicies,
-    loading: policiesLoading,
-  } = useEbayFulfillmentPolicies(ebaySelected)
-
-  const shippingSummaryPolicy = useMemo(() => {
-    if (!ebaySelected) return null
-    const mode = defaultEbayShippingMode(listing.specifics.shippingMode)
-    const matching = fulfillmentPolicies.filter((p) => p.mode === mode)
-    const preferredId = listing.specifics.fulfillmentPolicyId
-    if (preferredId) {
-      const hit = matching.find((p) => p.fulfillmentPolicyId === preferredId)
-      if (hit) return hit
-    }
-    return (
-      matching.find((p) => p.name.toLowerCase().includes("listwise")) ||
-      matching[0] ||
-      null
-    )
-  }, [
-    ebaySelected,
-    fulfillmentPolicies,
-    listing.specifics.shippingMode,
-    listing.specifics.fulfillmentPolicyId,
-  ])
 
   const requiredFields = useMemo(() => {
     const fields = (results || []).flatMap((r) => r.requiredFields || [])
@@ -388,26 +363,6 @@ export function OneClickPublishBar({
           setPublishing(false)
           return
         }
-        if (
-          shippingSummaryPolicy?.isFreeShipping &&
-          defaultEbayShippingMode(listing.specifics.shippingMode) !== "free"
-        ) {
-          setError(
-            `Selected eBay policy "${shippingSummaryPolicy.name}" is free shipping. Choose Buyer pays calculated/flat shipping, or switch to Free shipping and confirm.`
-          )
-          setPublishing(false)
-          return
-        }
-        if (
-          shippingSummaryPolicy?.isFreeShipping &&
-          !listing.specifics.freeShippingConfirmed
-        ) {
-          setError(
-            `Free shipping policy "${shippingSummaryPolicy.name}" requires confirmation before publishing.`
-          )
-          setPublishing(false)
-          return
-        }
       }
 
       // Upload full-resolution originals (not analysis copies) before eBay.
@@ -527,26 +482,24 @@ export function OneClickPublishBar({
         </div>
       )}
 
-      {ebaySelected && (
-        <div className="space-y-2">
-          {policiesLoading && (
-            <p className="text-xs text-muted-foreground">
-              Loading eBay shipping policy details…
-            </p>
-          )}
-          <EbayShippingPublishSummary
+      {ebaySelected && onListingChange && (
+        <div className="space-y-4 rounded-xl border border-border bg-secondary/20 p-3">
+          <EbayShippingModeFields
             listing={listing}
-            policy={shippingSummaryPolicy}
+            onChange={onListingChange}
+            disabled={disabled || publishing}
           />
-          {shippingSummaryPolicy?.isFreeShipping && (
-            <p className="text-xs text-amber-800 dark:text-amber-200">
-              Warning: the matched eBay policy is free shipping
-              {listing.specifics.freeShippingConfirmed
-                ? " (confirmed)."
-                : " — confirm Free shipping in the Shipping section before publishing."}
-            </p>
-          )}
+          <ShippingPackageFields
+            listing={listing}
+            onChange={onListingChange}
+            disabled={disabled || publishing}
+          />
+          <EbayShippingPublishSummary listing={listing} />
         </div>
+      )}
+
+      {ebaySelected && !onListingChange && (
+        <EbayShippingPublishSummary listing={listing} />
       )}
 
       <div className="flex justify-end">

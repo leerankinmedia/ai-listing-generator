@@ -146,11 +146,12 @@ export const ebayAdapter: MarketplaceAdapter = {
       shippingMode,
       freeShippingConfirmed: Boolean(listing.specifics.freeShippingConfirmed),
       flatShippingAmount: listing.specifics.flatShippingAmount,
-      fulfillmentPolicyId: listing.specifics.fulfillmentPolicyId,
+      handlingTimeDays: listing.specifics.handlingTimeDays,
     })
     console.info("[ebay/shipping] publish using fulfillment policy", {
       shippingMode,
       freeShippingConfirmed: Boolean(listing.specifics.freeShippingConfirmed),
+      handlingTimeDays: listing.specifics.handlingTimeDays ?? 1,
       policy: policies.fulfillmentSummary,
     })
 

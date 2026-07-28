@@ -121,6 +121,7 @@ export function createEmptyListing(userId: string): Listing {
     keywords: [],
     specifics: {
       shippingMode: "calculated",
+      handlingTimeDays: 1,
     },
     fieldConfidence: {},
     images: [],

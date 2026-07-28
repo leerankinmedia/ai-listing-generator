@@ -31,8 +31,8 @@ export type EnsureEbayPoliciesOptions = {
   freeShippingConfirmed?: boolean
   /** Preferred flat amount when creating/selecting flat policies. */
   flatShippingAmount?: number | null
-  /** Optional explicit fulfillment policy id (must match mode rules). */
-  fulfillmentPolicyId?: string | null
+  /** Handling time in business days (default 1). */
+  handlingTimeDays?: number | null
 }
 
 export type EnsureEbayPoliciesResult = PolicyIds & {
@@ -117,15 +117,17 @@ async function listReturnPolicies(accessToken: string) {
 async function createFulfillmentPolicyForMode(
   accessToken: string,
   mode: EbayShippingMode,
-  flatAmount = 5.99
+  flatAmount = 5.99,
+  handlingDays = 1
 ): Promise<string> {
   const amount = Math.max(0.01, Number(flatAmount) || 5.99).toFixed(2)
+  const days = Math.max(0, Math.min(30, Math.floor(handlingDays || 1)))
   const name =
     mode === "calculated"
-      ? "ListWise Calculated Shipping (buyer pays)"
+      ? `ListWise Calculated Shipping (buyer pays) · ${days}d`
       : mode === "free"
-        ? "ListWise Free Shipping"
-        : `ListWise Flat Shipping $${amount}`
+        ? `ListWise Free Shipping · ${days}d`
+        : `ListWise Flat Shipping $${amount} · ${days}d`
 
   const shippingServices =
     mode === "calculated"
@@ -167,7 +169,7 @@ async function createFulfillmentPolicyForMode(
       name,
       marketplaceId: marketplaceId(),
       categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
-      handlingTime: { value: 1, unit: "DAY" },
+      handlingTime: { value: days, unit: "DAY" },
       shippingOptions: [
         {
           optionType: "DOMESTIC",
@@ -180,7 +182,7 @@ async function createFulfillmentPolicyForMode(
 
   if (!payload.fulfillmentPolicyId) {
     throw new MarketplaceError(
-      "eBay did not return a fulfillmentPolicyId after create.",
+      "Could not set up shipping for this listing. Try publishing again.",
       "ebay_policy_create_failed",
       502
     )
@@ -189,6 +191,7 @@ async function createFulfillmentPolicyForMode(
     mode,
     fulfillmentPolicyId: payload.fulfillmentPolicyId,
     name,
+    handlingDays: days,
   })
   return payload.fulfillmentPolicyId
 }
@@ -244,21 +247,27 @@ async function createReturnPolicy(accessToken: string) {
 function pickFulfillmentForMode(
   policies: EbayFulfillmentPolicyRaw[],
   mode: EbayShippingMode,
-  preferredId?: string | null,
-  flatAmount?: number | null
+  flatAmount?: number | null,
+  handlingDays?: number | null
 ): EbayFulfillmentPolicyRaw | undefined {
   const matching = policies.filter(
     (p) => classifyFulfillmentShippingMode(p) === mode
   )
+  const days =
+    typeof handlingDays === "number" && Number.isFinite(handlingDays)
+      ? Math.max(0, Math.min(30, Math.floor(handlingDays)))
+      : 1
 
-  if (preferredId) {
-    const preferred = matching.find((p) => p.fulfillmentPolicyId === preferredId)
-    if (preferred) return preferred
-  }
+  const withHandling = matching.filter((p) => {
+    const summary = summarizeFulfillmentPolicy(p)
+    return summary?.handlingDays == null || summary.handlingDays === days
+  })
+
+  const pool = withHandling.length > 0 ? withHandling : matching
 
   if (mode === "flat" && flatAmount != null && Number.isFinite(flatAmount)) {
     const target = Number(flatAmount)
-    const byAmount = matching.find((p) => {
+    const byAmount = pool.find((p) => {
       const summary = summarizeFulfillmentPolicy(p)
       return (
         summary?.flatAmount != null &&
@@ -269,10 +278,10 @@ function pickFulfillmentForMode(
   }
 
   // Prefer ListWise-created policies for the mode.
-  const listwise = matching.find((p) =>
+  const listwise = pool.find((p) =>
     (p.name || "").toLowerCase().includes("listwise")
   )
-  return listwise || matching[0]
+  return listwise || pool[0]
 }
 
 /**
@@ -322,10 +331,14 @@ export async function ensureEbayBusinessPolicyIds(
   const envFulfillment = process.env.EBAY_FULFILLMENT_POLICY_ID?.trim()
   const envPayment = process.env.EBAY_PAYMENT_POLICY_ID?.trim()
   const envReturn = process.env.EBAY_RETURN_POLICY_ID?.trim()
+  const handlingDays =
+    typeof options.handlingTimeDays === "number" &&
+    Number.isFinite(options.handlingTimeDays)
+      ? Math.max(0, Math.min(30, Math.floor(options.handlingTimeDays)))
+      : 1
 
-  // Env fulfillment ID is only eligible when it matches the requested shipping mode
-  // and is not free shipping (unless the seller explicitly chose free + confirmed).
-  let preferredFulfillmentId = options.fulfillmentPolicyId?.trim() || null
+  // Env fulfillment ID is only noted in logs; ListWise always picks/creates
+  // from the seller's Calculated / Flat / Free choice automatically.
   if (envFulfillment) {
     const envPolicy = fulfillment.find((p) => p.fulfillmentPolicyId === envFulfillment)
     if (!envPolicy) {
@@ -335,9 +348,7 @@ export async function ensureEbayBusinessPolicyIds(
     } else {
       const envMode = classifyFulfillmentShippingMode(envPolicy)
       const envFree = fulfillmentPolicyIsFreeShipping(envPolicy)
-      if (envMode === shippingMode && !(envFree && shippingMode !== "free")) {
-        preferredFulfillmentId = preferredFulfillmentId || envFulfillment
-      } else {
+      if (envMode !== shippingMode || (envFree && shippingMode !== "free")) {
         logPolicies("env fulfillment policy skipped — shipping mode mismatch", {
           envFulfillment,
           envMode,
@@ -351,15 +362,16 @@ export async function ensureEbayBusinessPolicyIds(
   let selected = pickFulfillmentForMode(
     fulfillment,
     shippingMode,
-    preferredFulfillmentId,
-    options.flatShippingAmount
+    options.flatShippingAmount,
+    handlingDays
   )
 
   if (!selected) {
     const createdId = await createFulfillmentPolicyForMode(
       accessToken,
       shippingMode,
-      options.flatShippingAmount ?? 5.99
+      options.flatShippingAmount ?? 5.99,
+      handlingDays
     )
     fulfillment = await listEbayFulfillmentPolicies(accessToken)
     selected =
@@ -368,11 +380,11 @@ export async function ensureEbayBusinessPolicyIds(
         fulfillmentPolicyId: createdId,
         name:
           shippingMode === "calculated"
-            ? "ListWise Calculated Shipping (buyer pays)"
+            ? `ListWise Calculated Shipping (buyer pays) · ${handlingDays}d`
             : shippingMode === "free"
-              ? "ListWise Free Shipping"
-              : "ListWise Flat Shipping",
-        handlingTime: { value: 1, unit: "DAY" },
+              ? `ListWise Free Shipping · ${handlingDays}d`
+              : `ListWise Flat Shipping · ${handlingDays}d`,
+        handlingTime: { value: handlingDays, unit: "DAY" },
         shippingOptions: [
           {
             optionType: "DOMESTIC",
@@ -402,7 +414,7 @@ export async function ensureEbayBusinessPolicyIds(
   const fulfillmentSummary = summarizeFulfillmentPolicy(selected)
   if (!fulfillmentSummary) {
     throw new MarketplaceError(
-      "Could not read shipping settings from the selected eBay fulfillment policy.",
+      "Could not configure shipping for this listing. Try publishing again.",
       "ebay_fulfillment_unreadable",
       502
     )
@@ -412,14 +424,14 @@ export async function ensureEbayBusinessPolicyIds(
   if (fulfillmentSummary.isFreeShipping) {
     if (shippingMode !== "free") {
       throw new MarketplaceError(
-        `Selected eBay fulfillment policy "${fulfillmentSummary.name}" is free shipping, but this listing is set to "${shippingMode}". Choose Buyer pays calculated/flat shipping, or confirm Free shipping.`,
+        "Shipping is set to free, but this listing is not. Choose Calculated or Flat, or switch to Free and confirm.",
         "ebay_free_shipping_not_selected",
         400
       )
     }
     if (!freeConfirmed) {
       throw new MarketplaceError(
-        `Free shipping policy "${fulfillmentSummary.name}" requires confirmation before publishing. Confirm Free shipping in the Shipping section.`,
+        "Free shipping requires confirmation before publishing.",
         "ebay_free_shipping_unconfirmed",
         400
       )

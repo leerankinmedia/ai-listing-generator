@@ -4,10 +4,7 @@ import { useMemo } from "react"
 import { ConfidenceMeter } from "@/components/listings/confidence-meter"
 import { CompsPricingPanel } from "@/components/listings/comps-pricing-panel"
 import { ShippingPackageFields } from "@/components/listings/shipping-package-fields"
-import {
-  EbayShippingModeFields,
-  useEbayFulfillmentPolicies,
-} from "@/components/listings/ebay-shipping-section"
+import { EbayShippingModeFields } from "@/components/listings/ebay-shipping-section"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -59,12 +56,6 @@ export function ListingEditorForm({
     () => (listing.keywords ?? []).join(", "),
     [listing.keywords]
   )
-  const ebayTargeted = listing.targetMarketplaces.includes("ebay")
-  const {
-    policies: fulfillmentPolicies,
-    loading: policiesLoading,
-    error: policiesError,
-  } = useEbayFulfillmentPolicies(ebayTargeted)
 
   /** Single atomic update — avoids stale overwrites from multiple patch() calls */
   function update(partial: Partial<Listing>) {
@@ -316,9 +307,6 @@ export function ListingEditorForm({
           listing={listing}
           onChange={onChange}
           disabled={disabled}
-          policies={fulfillmentPolicies}
-          policiesLoading={policiesLoading}
-          policiesError={policiesError}
         />
         <ShippingPackageFields
           listing={listing}

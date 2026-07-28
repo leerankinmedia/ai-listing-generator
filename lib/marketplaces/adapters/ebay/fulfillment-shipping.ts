@@ -165,11 +165,22 @@ export function summarizeFulfillmentPolicy(
 export function shippingModeLabel(mode: EbayShippingMode): string {
   switch (mode) {
     case "calculated":
-      return "Buyer pays calculated shipping"
+      return "Calculated"
     case "flat":
-      return "Buyer pays flat shipping"
+      return "Flat"
     case "free":
-      return "Free shipping"
+      return "Free"
+  }
+}
+
+export function shippingModeDescription(mode: EbayShippingMode): string {
+  switch (mode) {
+    case "calculated":
+      return "Buyer pays postage calculated from your package weight and size."
+    case "flat":
+      return "Buyer pays a fixed shipping amount you set."
+    case "free":
+      return "You pay shipping. Confirm before publishing."
   }
 }
 

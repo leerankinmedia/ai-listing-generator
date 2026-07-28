@@ -6,7 +6,6 @@ import {
 } from "@/lib/listings/shipping-package"
 import {
   defaultEbayShippingMode,
-  shippingModeLabel,
 } from "@/lib/marketplaces/adapters/ebay/fulfillment-shipping"
 
 /**
@@ -65,7 +64,7 @@ export function ebayShippingPackageBlockMessage(listing: Listing): string | null
 export function ebayFreeShippingBlockMessage(listing: Listing): string | null {
   const mode = defaultEbayShippingMode(listing.specifics.shippingMode)
   if (mode === "free" && !listing.specifics.freeShippingConfirmed) {
-    return `Free shipping requires confirmation before publishing. Check the confirmation box under ${shippingModeLabel("free")}.`
+    return "Free shipping requires confirmation before publishing."
   }
   return null
 }

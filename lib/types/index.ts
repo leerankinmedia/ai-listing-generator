@@ -105,16 +105,16 @@ export interface ListingSpecifics {
    */
   shippingPackage?: ListingShippingPackage
   /**
-   * Who pays for shipping on eBay publish.
-   * Defaults to calculated (buyer pays). Never silently use free shipping.
+   * Shipping option for eBay publish. Defaults to calculated (buyer pays).
+   * ListWise maps this to the correct fulfillment policy automatically.
    */
   shippingMode?: "calculated" | "flat" | "free"
   /** Flat rate amount in USD when shippingMode is flat. */
   flatShippingAmount?: number
-  /** Required when shippingMode is free (or policy is free). */
+  /** Handling time in business days (default 1). */
+  handlingTimeDays?: number
+  /** Required when shippingMode is free. */
   freeShippingConfirmed?: boolean
-  /** Optional explicit eBay fulfillment policy id. */
-  fulfillmentPolicyId?: string
 }
 
 export interface SoldCompsEstimate {

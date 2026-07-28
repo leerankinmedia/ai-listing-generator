@@ -42,9 +42,10 @@ const FIELD_LABELS: Record<string, string> = {
   lengthInches: "package length",
   widthInches: "package width",
   heightInches: "package height",
-  packageType: "package type",
   weight: "package weight (pounds + ounces)",
 }
+
+export const DEFAULT_EBAY_PACKAGE_TYPE = "PACKAGE_THICK_ENVELOPE"
 
 function asFiniteNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value
@@ -86,7 +87,6 @@ export function missingShippingPackageFields(
       FIELD_LABELS.lengthInches,
       FIELD_LABELS.widthInches,
       FIELD_LABELS.heightInches,
-      FIELD_LABELS.packageType,
     ]
   }
 
@@ -120,9 +120,7 @@ export function missingShippingPackageFields(
     if (n == null || n <= 0) missing.push(label)
   }
 
-  const type = typeof pkg.packageType === "string" ? pkg.packageType.trim() : ""
-  if (!type) missing.push(FIELD_LABELS.packageType)
-
+  // packageType is auto-defaulted — never surface to sellers.
   return missing
 }
 
@@ -153,6 +151,8 @@ export function toEbayPackageWeightAndSize(pkg: ShippingPackage): {
     asFiniteNumber(pkg.weightOunces) ?? 0
   )
   const weightValue = Number((weightPounds + weightOunces / 16).toFixed(3))
+  const packageType =
+    String(pkg.packageType || "").trim() || DEFAULT_EBAY_PACKAGE_TYPE
   return {
     dimensions: {
       length: Number((asFiniteNumber(pkg.lengthInches) ?? 0).toFixed(2)),
@@ -164,7 +164,7 @@ export function toEbayPackageWeightAndSize(pkg: ShippingPackage): {
       value: weightValue,
       unit: "POUND",
     },
-    packageType: String(pkg.packageType).trim(),
+    packageType,
   }
 }
 

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
-  EBAY_PACKAGE_TYPES,
+  DEFAULT_EBAY_PACKAGE_TYPE,
   missingShippingPackageFields,
   readShippingPresets,
   saveShippingPreset,
@@ -19,7 +19,7 @@ const EMPTY_PACKAGE: ShippingPackage = {
   lengthInches: 0,
   widthInches: 0,
   heightInches: 0,
-  packageType: "",
+  packageType: DEFAULT_EBAY_PACKAGE_TYPE,
 }
 
 export function ShippingPackageFields({
@@ -42,7 +42,11 @@ export function ShippingPackageFields({
 
   function patchPackage(partial: Partial<ShippingPackage>) {
     const current = pkg || EMPTY_PACKAGE
-    const next: ShippingPackage = { ...current, ...partial }
+    const next: ShippingPackage = {
+      ...current,
+      ...partial,
+      packageType: current.packageType || DEFAULT_EBAY_PACKAGE_TYPE,
+    }
     onChange({
       ...listing,
       specifics: {
@@ -62,14 +66,17 @@ export function ShippingPackageFields({
       lengthInches: preset.lengthInches,
       widthInches: preset.widthInches,
       heightInches: preset.heightInches,
-      packageType: preset.packageType,
+      packageType: preset.packageType || DEFAULT_EBAY_PACKAGE_TYPE,
     })
   }
 
   function handleSavePreset() {
     const current = pkg
     if (!current || missingShippingPackageFields(current).length > 0) return
-    const updated = saveShippingPreset(presetName || "Clothing package", current)
+    const updated = saveShippingPreset(presetName || "Clothing package", {
+      ...current,
+      packageType: current.packageType || DEFAULT_EBAY_PACKAGE_TYPE,
+    })
     setPresets(updated)
     setPresetName("")
   }
@@ -77,16 +84,16 @@ export function ShippingPackageFields({
   return (
     <div className="space-y-4">
       <div>
-          <h3 className="text-sm font-semibold">Package details</h3>
-          <p className="text-xs text-muted-foreground">
-            Enter the packed weight and box size yourself — ListWise does not invent weight
-            for AI or imported clothing.
-          </p>
-        </div>
+        <h3 className="text-sm font-semibold">Weight & dimensions</h3>
+        <p className="text-xs text-muted-foreground">
+          Enter packed weight and size — ListWise does not invent these for AI or imported
+          clothing.
+        </p>
+      </div>
 
       {presets.length > 0 && (
         <div className="space-y-2">
-          <Label htmlFor="shipping-preset">Saved shipping preset</Label>
+          <Label htmlFor="shipping-preset">Saved package preset</Label>
           <select
             id="shipping-preset"
             disabled={disabled}
@@ -144,7 +151,7 @@ export function ShippingPackageFields({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="pkg-length">Package length (in)</Label>
+          <Label htmlFor="pkg-length">Length (in)</Label>
           <Input
             id="pkg-length"
             type="number"
@@ -161,7 +168,7 @@ export function ShippingPackageFields({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="pkg-width">Package width (in)</Label>
+          <Label htmlFor="pkg-width">Width (in)</Label>
           <Input
             id="pkg-width"
             type="number"
@@ -178,7 +185,7 @@ export function ShippingPackageFields({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="pkg-height">Package height (in)</Label>
+          <Label htmlFor="pkg-height">Height (in)</Label>
           <Input
             id="pkg-height"
             type="number"
@@ -193,23 +200,6 @@ export function ShippingPackageFields({
               })
             }
           />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="pkg-type">Package type</Label>
-          <select
-            id="pkg-type"
-            disabled={disabled}
-            value={pkg?.packageType ?? ""}
-            onChange={(e) => patchPackage({ packageType: e.target.value })}
-            className="flex h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option value="">Select package type…</option>
-            {EBAY_PACKAGE_TYPES.map((t) => (
-              <option key={t.value} value={t.value}>
-                {t.label}
-              </option>
-            ))}
-          </select>
         </div>
       </div>
 

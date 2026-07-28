@@ -9,11 +9,11 @@ import {
 } from "@/lib/listings/shipping-package"
 
 describe("shipping package validation", () => {
-  it("lists all fields when package is missing", () => {
+  it("lists weight and dimension fields when package is missing", () => {
     const missing = missingShippingPackageFields(undefined)
     assert.ok(missing.includes("weight pounds"))
     assert.ok(missing.includes("package length"))
-    assert.ok(missing.includes("package type"))
+    assert.ok(!missing.includes("package type"))
   })
 
   it("requires total weight > 0 without inventing defaults", () => {
@@ -28,14 +28,14 @@ describe("shipping package validation", () => {
     assert.ok(missing.some((m) => m.includes("weight")))
   })
 
-  it("accepts ounces-only weight", () => {
+  it("accepts ounces-only weight and auto package type", () => {
     const missing = missingShippingPackageFields({
       weightPounds: 0,
       weightOunces: 8,
       lengthInches: 12,
       widthInches: 9,
       heightInches: 1,
-      packageType: "PACKAGE_THICK_ENVELOPE",
+      packageType: "",
     })
     assert.deepEqual(missing, [])
   })
@@ -43,9 +43,9 @@ describe("shipping package validation", () => {
   it("formats a clear publish block message", () => {
     const msg = formatMissingShippingPackageMessage([
       "weight pounds",
-      "package type",
+      "package length",
     ])
-    assert.match(msg, /Missing: weight pounds, package type/)
+    assert.match(msg, /Missing: weight pounds, package length/)
   })
 })
 
@@ -63,6 +63,18 @@ describe("toEbayPackageWeightAndSize", () => {
     assert.equal(body.weight.value, 1.5)
     assert.equal(body.dimensions.unit, "INCH")
     assert.equal(body.packageType, "MAILING_BOX")
+  })
+
+  it("defaults package type when blank", () => {
+    const body = toEbayPackageWeightAndSize({
+      weightPounds: 0,
+      weightOunces: 8,
+      lengthInches: 12,
+      widthInches: 9,
+      heightInches: 1,
+      packageType: "",
+    })
+    assert.equal(body.packageType, "PACKAGE_THICK_ENVELOPE")
   })
 
   it("normalizes overflow ounces", () => {

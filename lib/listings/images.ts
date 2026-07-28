@@ -5,9 +5,8 @@ const MAX_DIMENSION = 1600
 const JPEG_QUALITY = 0.82
 
 /**
- * Vercel serverless request body limit is 4.5MB. Stay under that for
- * multipart Analyze Photos uploads so the platform does not return plain-text
- * "Request Entity Too Large" before our route can respond with JSON.
+ * Per-photo Analyze upload budget (under Vercel’s 4.5MB single-request limit).
+ * Photos are uploaded one at a time; generate only receives URLs.
  */
 export { ANALYZE_UPLOAD_MAX_BYTES }
 
@@ -85,46 +84,59 @@ async function compressBitmapToJpegBlob(
 }
 
 /**
- * Build JPEG blobs for Analyze Photos upload.
- * Keeps every photo (never drops). Recompresses all together until the total
- * multipart payload fits under Vercel's request body limit.
+ * Compress one photo for a single Analyze upload request.
+ * Never drops the photo — steps down quality/size until under the per-request budget.
+ */
+export async function compressDataUrlForAnalyzeUpload(
+  dataUrl: string,
+  maxBytes: number = ANALYZE_UPLOAD_MAX_BYTES
+): Promise<{ blob: Blob; bytes: number; presetIndex: number }> {
+  const bitmap = await dataUrlToBitmap(dataUrl)
+  try {
+    let lastBlob: Blob | null = null
+    let lastPreset = 0
+    for (let presetIndex = 0; presetIndex < ANALYZE_PRESETS.length; presetIndex++) {
+      const preset = ANALYZE_PRESETS[presetIndex]
+      const blob = await compressBitmapToJpegBlob(
+        bitmap,
+        preset.maxDimension,
+        preset.quality
+      )
+      lastBlob = blob
+      lastPreset = presetIndex
+      if (blob.size <= maxBytes) {
+        return { blob, bytes: blob.size, presetIndex }
+      }
+    }
+    throw new Error(
+      `Photo is still too large after compression (${Math.ceil((lastBlob?.size || 0) / (1024 * 1024))}MB; limit ${Math.floor(maxBytes / (1024 * 1024))}MB).`
+    )
+  } finally {
+    bitmap.close()
+  }
+}
+
+/**
+ * @deprecated Prefer compressDataUrlForAnalyzeUpload + per-image uploads.
+ * Kept for any callers that still batch-compress; does not drop images.
  */
 export async function buildAnalyzeUploadBlobs(
   dataUrls: string[],
-  maxTotalBytes: number = ANALYZE_UPLOAD_MAX_BYTES
+  maxBytesPerImage: number = ANALYZE_UPLOAD_MAX_BYTES
 ): Promise<{ blobs: Blob[]; totalBytes: number; presetIndex: number }> {
   if (dataUrls.length === 0) {
     throw new Error("Upload at least one product photo.")
   }
-
-  const bitmaps = await Promise.all(dataUrls.map((url) => dataUrlToBitmap(url)))
-  try {
-    let lastBlobs: Blob[] = []
-    let lastTotal = Number.POSITIVE_INFINITY
-    let lastPreset = 0
-
-    for (let presetIndex = 0; presetIndex < ANALYZE_PRESETS.length; presetIndex++) {
-      const preset = ANALYZE_PRESETS[presetIndex]
-      const blobs = await Promise.all(
-        bitmaps.map((bitmap) =>
-          compressBitmapToJpegBlob(bitmap, preset.maxDimension, preset.quality)
-        )
-      )
-      const totalBytes = blobs.reduce((sum, blob) => sum + blob.size, 0)
-      lastBlobs = blobs
-      lastTotal = totalBytes
-      lastPreset = presetIndex
-      if (totalBytes <= maxTotalBytes) {
-        return { blobs, totalBytes, presetIndex }
-      }
-    }
-
-    throw new Error(
-      `Photos are still too large to analyze together (${Math.ceil(lastTotal / (1024 * 1024))}MB after compression; limit ~${Math.floor(maxTotalBytes / (1024 * 1024))}MB). Try slightly smaller source photos — all ${dataUrls.length} will still be kept.`
-    )
-  } finally {
-    for (const bitmap of bitmaps) bitmap.close()
+  const results = []
+  let maxPreset = 0
+  for (const url of dataUrls) {
+    const result = await compressDataUrlForAnalyzeUpload(url, maxBytesPerImage)
+    results.push(result)
+    maxPreset = Math.max(maxPreset, result.presetIndex)
   }
+  const blobs = results.map((r) => r.blob)
+  const totalBytes = blobs.reduce((sum, blob) => sum + blob.size, 0)
+  return { blobs, totalBytes, presetIndex: maxPreset }
 }
 
 export function createImageId() {

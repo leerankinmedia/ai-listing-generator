@@ -11,7 +11,11 @@ import {
   assertListingCreditAvailable,
   creditPeriodStartFromSubscription,
 } from "@/lib/billing/credits"
-import { ANALYZE_UPLOAD_MAX_BYTES, MAX_LISTING_IMAGES } from "@/lib/listings/schema"
+import {
+  cleanupAnalyzeStagingUrls,
+  resolveAnalyzeImageUrls,
+} from "@/lib/listings/analyze-upload"
+import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
 import {
   getServerAuthUser,
   isSupabaseConfigured,
@@ -19,9 +23,6 @@ import {
 
 export const runtime = "nodejs"
 export const maxDuration = 300
-
-/** Vercel serverless request body limit — exceeded responses never reach this route as JSON. */
-const VERCEL_BODY_LIMIT_BYTES = Math.floor(4.5 * 1024 * 1024)
 
 function jsonError(
   error: string,
@@ -52,18 +53,14 @@ function jsonError(
   )
 }
 
-function isPayloadTooLargeError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error || "")
-  return /entity too large|body.*too large|payload.*too large|413|request.?entity/i.test(
-    message
-  )
+type GenerateBody = {
+  imageUrls?: unknown
+  listingId?: unknown
 }
 
 async function handleGenerate(request: Request) {
   const user = await getServerAuthUser()
 
-  // Usage rows require auth.users FK — always require a signed-in user when
-  // Supabase is configured so every successful generation can be recorded.
   if (isSupabaseConfigured() && !user?.id) {
     return jsonError("Sign in required to generate listings.", 401)
   }
@@ -77,9 +74,6 @@ async function handleGenerate(request: Request) {
     )
   }
 
-  // One completed AI listing = 1 customer credit (not per internal OpenAI call).
-  // No-op while BILLING_ENFORCEMENT=false — does not lock test users.
-  // Permanent Owner always bypasses credit limits.
   if (user?.id && !access.entitlement.ownerOverride) {
     const periodStart = creditPeriodStartFromSubscription(
       access.subscription
@@ -109,101 +103,66 @@ async function handleGenerate(request: Request) {
     }
   }
 
-  const contentLengthHeader = request.headers.get("content-length")
-  const contentLength = contentLengthHeader
-    ? Number(contentLengthHeader)
-    : NaN
-  if (
-    Number.isFinite(contentLength) &&
-    contentLength > VERCEL_BODY_LIMIT_BYTES
-  ) {
-    return jsonError(
-      `Request entity too large (${Math.ceil(contentLength / (1024 * 1024))}MB). Vercel limits Analyze Photos uploads to 4.5MB. Photos were not dropped — recompress and retry, or use fewer megapixels.`,
-      413,
-      {
-        code: "payload_too_large",
-        limitBytes: VERCEL_BODY_LIMIT_BYTES,
-        contentLength,
-        maxSupportedUploadBytes: ANALYZE_UPLOAD_MAX_BYTES,
-      }
-    )
-  }
-
   let imagesAnalyzed = 0
   let listingId: string | null = null
+  let imageUrls: string[] = []
 
   try {
-    let formData: FormData
-    try {
-      formData = await request.formData()
-    } catch (error) {
-      if (isPayloadTooLargeError(error)) {
-        return jsonError(
-          "Request entity too large. The photo upload exceeded the platform body limit before analysis could start. All photos are still in your uploader — retry after automatic recompression.",
-          413,
-          { code: "payload_too_large" }
-        )
-      }
+    const contentType = (request.headers.get("content-type") || "").toLowerCase()
+    if (!contentType.includes("application/json")) {
       return jsonError(
-        error instanceof Error
-          ? `Could not read upload: ${error.message}`
-          : "Could not read photo upload.",
+        "Analyze Photos expects JSON with imageUrls only. Upload each photo to /api/media/analyze-upload first — do not send image binaries to this endpoint.",
+        415,
+        { code: "unsupported_media_type" }
+      )
+    }
+
+    let body: GenerateBody
+    try {
+      body = (await request.json()) as GenerateBody
+    } catch {
+      return jsonError("Invalid JSON body.", 400)
+    }
+
+    if (typeof body.listingId === "string" && body.listingId.trim()) {
+      listingId = body.listingId.trim()
+    }
+
+    if (!Array.isArray(body.imageUrls)) {
+      return jsonError(
+        "imageUrls must be an array of previously uploaded photo URLs.",
         400
       )
     }
 
-    const listingIdRaw = formData.get("listingId")
-    if (typeof listingIdRaw === "string" && listingIdRaw.trim()) {
-      listingId = listingIdRaw.trim()
-    }
+    imageUrls = body.imageUrls
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter(Boolean)
 
-    const files = formData
-      .getAll("images")
-      .filter((value): value is File => value instanceof File && value.size > 0)
-
-    if (files.length === 0) {
+    if (imageUrls.length === 0) {
       return jsonError("Upload at least one product photo.", 400)
     }
-
-    if (files.length > MAX_LISTING_IMAGES) {
+    if (imageUrls.length > MAX_LISTING_IMAGES) {
       return jsonError(
-        `You can upload up to ${MAX_LISTING_IMAGES} photos.`,
+        `You can analyze up to ${MAX_LISTING_IMAGES} photos.`,
         400,
-        { receivedImages: files.length }
+        { receivedImages: imageUrls.length }
       )
     }
-
-    const uploadBytes = files.reduce((sum, file) => sum + file.size, 0)
-    if (uploadBytes > VERCEL_BODY_LIMIT_BYTES) {
-      return jsonError(
-        `Request entity too large (${Math.ceil(uploadBytes / (1024 * 1024))}MB across ${files.length} photos). Keep all photos and recompress under 4.5MB total.`,
-        413,
-        {
-          code: "payload_too_large",
-          receivedImages: files.length,
-          uploadBytes,
-          limitBytes: VERCEL_BODY_LIMIT_BYTES,
-        }
-      )
+    if (imageUrls.length !== body.imageUrls.length) {
+      return jsonError("imageUrls must contain only non-empty strings.", 400)
     }
 
     if (!isOpenAIConfigured()) {
       return jsonError(
         "OPENAI_API_KEY is required. Add it to your environment to run the production listing engine.",
         503,
-        { receivedImages: files.length }
+        { receivedImages: imageUrls.length }
       )
     }
 
-    const images = await Promise.all(
-      files.map(async (file) => {
-        const buffer = Buffer.from(await file.arrayBuffer())
-        return {
-          mediaType: file.type || "image/jpeg",
-          data: buffer,
-        }
-      })
-    )
+    const images = await resolveAnalyzeImageUrls(imageUrls)
     imagesAnalyzed = images.length
 
     const { draft, model, usage } = await generateListingFromImages(images)
@@ -237,6 +196,9 @@ async function handleGenerate(request: Request) {
       )
     }
 
+    // Best-effort cleanup for ephemeral staging URLs.
+    void cleanupAnalyzeStagingUrls(imageUrls)
+
     return NextResponse.json({
       draft,
       model,
@@ -267,13 +229,6 @@ async function handleGenerate(request: Request) {
         )
       }
     }
-    if (isPayloadTooLargeError(error)) {
-      return jsonError(
-        "Request entity too large. Photo upload exceeded the platform body limit.",
-        413,
-        { code: "payload_too_large", imagesAnalyzed }
-      )
-    }
     if (error instanceof ListingEngineError) {
       return jsonError(error.message, error.status, { imagesAnalyzed })
     }
@@ -292,13 +247,6 @@ export async function POST(request: Request) {
     return await handleGenerate(request)
   } catch (error) {
     console.error("[listing engine] unhandled", error)
-    if (isPayloadTooLargeError(error)) {
-      return jsonError(
-        "Request entity too large. Photo upload exceeded the platform body limit.",
-        413,
-        { code: "payload_too_large" }
-      )
-    }
     return jsonError(
       error instanceof Error
         ? error.message

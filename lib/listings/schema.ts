@@ -6,8 +6,8 @@ export const MIN_LISTING_IMAGES = 1
 /** Analyze every uploaded image; batch for Vision rate/token limits */
 export const VISION_BATCH_SIZE = 4
 /**
- * Stay under Vercel’s 4.5MB serverless request body limit for Analyze Photos
- * multipart uploads (platform returns plain-text 413 above this).
+ * Stay under Vercel’s 4.5MB serverless request body limit for each
+ * single-photo Analyze upload. Generate receives only imageUrls JSON.
  */
 export const ANALYZE_UPLOAD_MAX_BYTES = 4 * 1024 * 1024
 

@@ -9,7 +9,7 @@ import { OneClickPublishBar } from "@/components/listings/one-click-publish-bar"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/components/auth/auth-provider"
 import { readApiJsonResponse } from "@/lib/api/read-json-response"
-import { buildAnalyzeUploadBlobs } from "@/lib/listings/images"
+import { uploadAnalyzeImagesIndividually } from "@/lib/listings/analyze-client"
 import { createEmptyListing, withImages } from "@/lib/listings/local-db"
 import {
   mapDraftToListingFields,
@@ -53,21 +53,20 @@ export function ListingGenerator() {
       const ordered = [...images].sort(
         (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
       )
-      const { blobs, totalBytes } = await buildAnalyzeUploadBlobs(
-        ordered.map((image) => image.url)
-      )
-      setProgress(
-        `Uploading ${blobs.length} photo${blobs.length === 1 ? "" : "s"} (${Math.round(totalBytes / 1024)}KB) and running Vision analysis…`
-      )
 
-      const formData = new FormData()
-      for (const [index, blob] of blobs.entries()) {
-        formData.append("images", blob, `photo-${index + 1}.jpg`)
-      }
+      const imageUrls = await uploadAnalyzeImagesIndividually({
+        dataUrls: ordered.map((image) => image.url),
+        onProgress: setProgress,
+      })
+
+      setProgress(
+        `Analyzing ${imageUrls.length} photo${imageUrls.length === 1 ? "" : "s"} with Vision…`
+      )
 
       const response = await fetch("/api/listings/generate", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrls }),
         credentials: "same-origin",
       })
       const parsed = await readApiJsonResponse<{

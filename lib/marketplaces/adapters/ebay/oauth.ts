@@ -106,6 +106,7 @@ export const EBAY_SCOPE_LIST = [
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
   "https://api.ebay.com/oauth/api_scope/sell.account",
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
+  "https://api.ebay.com/oauth/api_scope/sell.marketing",
 ] as const
 
 export const EBAY_SCOPES = EBAY_SCOPE_LIST.join(" ")

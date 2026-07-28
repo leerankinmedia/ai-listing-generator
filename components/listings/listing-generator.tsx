@@ -20,6 +20,14 @@ import { persistListing } from "@/lib/listings/repository"
 import { listingIsReadyToPublish } from "@/lib/listings/publish"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
 import type { GeneratedListingOutput } from "@/lib/listings/schema"
+import {
+  applyEbaySellerDefaultsToListing,
+  ebaySellerDefaultsAreReady,
+  normalizeEbaySellerDefaults,
+} from "@/lib/seller/ebay-defaults"
+import {
+  readLocalEbaySellerDefaults,
+} from "@/lib/seller/ebay-defaults-local"
 import type { Listing, ListingImage } from "@/lib/types"
 
 type Step = "upload" | "review"
@@ -189,6 +197,37 @@ export function ListingGenerator() {
       // AI employee: fill Taxonomy aspects before the seller sees the edit page.
       const hydrated = await hydrateListingEbayAspects(next)
       next = hydrated.listing
+
+      // Apply saved selling defaults (shipping, returns, offers, promo).
+      let defaultsApplied = false
+      try {
+        const prefsRes = await fetch("/api/seller/ebay-defaults", {
+          credentials: "same-origin",
+        })
+        if (prefsRes.ok) {
+          const prefs = (await prefsRes.json()) as {
+            defaults?: unknown
+            ready?: boolean
+          }
+          if (prefs.defaults && prefs.ready) {
+            next = applyEbaySellerDefaultsToListing(
+              next,
+              normalizeEbaySellerDefaults(prefs.defaults),
+              { onlyIfUnset: false }
+            )
+            defaultsApplied = true
+          }
+        }
+      } catch {
+        const local = readLocalEbaySellerDefaults()
+        if (local && ebaySellerDefaultsAreReady(local.defaults)) {
+          next = applyEbaySellerDefaultsToListing(next, local.defaults, {
+            onlyIfUnset: false,
+          })
+          defaultsApplied = true
+        }
+      }
+
       setProgressPercent(100)
       setProgressMessage("Building your listing")
 
@@ -198,13 +237,19 @@ export function ListingGenerator() {
         setNotice(
           "Partial analysis: some photos could not be read. Review the draft carefully."
         )
+      } else if (!defaultsApplied) {
+        setNotice(
+          "Set your selling defaults once so shipping, returns, and offers fill automatically."
+        )
       } else if (hydrated.ok && hydrated.summary.total > 0) {
         const n = hydrated.summary.needsAttention
         setNotice(
           n === 0
-            ? `AI completed ${hydrated.summary.completed}/${hydrated.summary.total} item specifics.`
+            ? `AI completed ${hydrated.summary.completed}/${hydrated.summary.total} item specifics. Selling preferences applied.`
             : `AI completed ${hydrated.summary.completed}/${hydrated.summary.total} item specifics. Only ${n} need your attention.`
         )
+      } else if (defaultsApplied) {
+        setNotice("Selling preferences applied from your defaults.")
       }
 
       setListing(next)

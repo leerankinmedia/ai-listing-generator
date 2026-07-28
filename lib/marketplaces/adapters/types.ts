@@ -64,6 +64,13 @@ export interface PublishResult {
   listingRef?: MarketplaceListingRef
   error?: string
   externalUrl?: string
+  /** Promoted Listings outcome when requested (honest eBay confirmation only). */
+  promotion?: {
+    status: "off" | "applied" | "skipped" | "failed"
+    mode?: "dynamic" | "custom"
+    percent?: number | null
+    message: string
+  }
 }
 
 export interface MarketplaceAdapter {

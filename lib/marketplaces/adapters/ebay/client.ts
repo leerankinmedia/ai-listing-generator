@@ -189,6 +189,51 @@ export function mapListingToEbayOffer(
     listing.specifics.allowOffers === true ||
     listing.specifics.extras?.allowOffers === "true"
 
+  const listPrice = Number(listing.price) || 0
+  const minAmount = Number(listing.specifics.extras?.minOfferAmount)
+  const minPercent = Number(listing.specifics.extras?.minOfferPercent)
+  const declineAmount = Number(listing.specifics.extras?.autoDeclineAmount)
+  const declinePercent = Number(listing.specifics.extras?.autoDeclinePercent)
+
+  const autoDeclineFromPercent =
+    Number.isFinite(declinePercent) && declinePercent > 0 && listPrice > 0
+      ? Number(((listPrice * declinePercent) / 100).toFixed(2))
+      : null
+  const autoDeclineFromAmount =
+    Number.isFinite(declineAmount) && declineAmount > 0 ? declineAmount : null
+  const autoDeclinePrice =
+    autoDeclineFromAmount != null && autoDeclineFromPercent != null
+      ? Math.max(autoDeclineFromAmount, autoDeclineFromPercent)
+      : (autoDeclineFromAmount ?? autoDeclineFromPercent)
+
+  // Inventory API bestOfferTerms support auto-accept/decline absolute prices.
+  // Min offer % is expressed as autoDeclinePrice floor when provided.
+  const minFromPercent =
+    Number.isFinite(minPercent) && minPercent > 0 && listPrice > 0
+      ? Number(((listPrice * minPercent) / 100).toFixed(2))
+      : null
+  const minFromAmount =
+    Number.isFinite(minAmount) && minAmount > 0 ? minAmount : null
+  const minFloor =
+    minFromAmount != null && minFromPercent != null
+      ? Math.max(minFromAmount, minFromPercent)
+      : (minFromAmount ?? minFromPercent)
+
+  const declineFloor =
+    autoDeclinePrice != null && minFloor != null
+      ? Math.max(autoDeclinePrice, minFloor)
+      : (autoDeclinePrice ?? minFloor)
+
+  const bestOfferTerms: Record<string, unknown> = {
+    bestOfferEnabled: allowOffers,
+  }
+  if (allowOffers && declineFloor != null && declineFloor > 0) {
+    bestOfferTerms.autoDeclinePrice = {
+      value: declineFloor.toFixed(2),
+      currency: listing.currency || "USD",
+    }
+  }
+
   return {
     sku,
     marketplaceId,
@@ -201,9 +246,7 @@ export function mapListingToEbayOffer(
       fulfillmentPolicyId: policies.fulfillmentPolicyId,
       paymentPolicyId: policies.paymentPolicyId,
       returnPolicyId: policies.returnPolicyId,
-      bestOfferTerms: {
-        bestOfferEnabled: allowOffers,
-      },
+      bestOfferTerms,
     },
     merchantLocationKey,
     pricingSummary: {

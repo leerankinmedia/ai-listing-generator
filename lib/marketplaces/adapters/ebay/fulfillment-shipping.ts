@@ -50,7 +50,8 @@ const SERVICE_LABELS: Record<string, string> = {
   USPSParcel: "USPS Parcel Select",
   USPSGroundAdvantage: "USPS Ground Advantage",
   UPSGround: "UPS Ground",
-  FedExHomeDelivery: "FedEx Home Delivery",
+  FedExHomeDelivery: "FedEx Ground / Home Delivery",
+  FedExGround: "FedEx Ground / Home Delivery",
   FreightOtherServices: "Freight",
 }
 

@@ -64,6 +64,15 @@ function getOpenAI(): OpenAIClient {
 type VisionImage = {
   mediaType: string
   data: Uint8Array | Buffer | string
+  /** 1-based photo number for logging */
+  index?: number
+  sourceUrl?: string
+}
+
+export type FailedVisionImage = {
+  index: number
+  sourceUrl?: string
+  error: string
 }
 
 type ContentPart =
@@ -84,7 +93,23 @@ Rules:
 - Category should map to eBay clothing taxonomy when possible.
 - Color: prefer detailed shade wording when visible (e.g. Dark Gray/Charcoal, Heather Gray).
   Do not default to Black when the garment looks charcoal, slate, or dark gray — especially in
-  uneven lighting. Reserve Black for clearly jet-black fabric with no gray/charcoal evidence.`
+  uneven lighting. Reserve Black for clearly jet-black fabric with no gray/charcoal evidence.
+- Seller context (when provided) is HIGH PRIORITY guidance for ambiguous attributes
+  (women's/men's, size, brand, flaws, item type). Use it to fill gaps and disambiguate.
+  NEVER overwrite attributes that are clearly contradicted by strong, visible photo evidence.`
+
+function sellerContextBlock(sellerNotes?: string): string {
+  const notes = sellerNotes?.trim()
+  if (!notes) return ""
+  return `
+
+HIGH-PRIORITY SELLER CONTEXT (from the seller — guide the result, do not invent):
+"""
+${notes.slice(0, 2000)}
+"""
+Use this to clarify ambiguous details (department, size, brand, flaws, item type, etc.).
+If this conflicts with clear visual evidence in the photos, prefer the photos.`
+}
 
 const COPY_SYSTEM = `You are ListWise Copy, an expert eBay clothing listing writer.
 Write conversion-focused, accurate eBay titles and descriptions from verified attributes and photo evidence.
@@ -121,19 +146,66 @@ Estimate sold-comparable pricing in USD for the identified clothing item using r
 Be conservative. Prefer realistic sold ranges over aspirational retail.
 Explain the comps band clearly for the specific brand/style/condition/size when known.`
 
+async function detectSingleImage(
+  openai: OpenAIClient,
+  image: VisionImage,
+  photoNumber: number,
+  totalImages: number,
+  sellerNotes?: string
+): Promise<{ detection: ImageDetection; usage: TokenUsage }> {
+  const content: ContentPart[] = [
+    {
+      type: "text",
+      text: `Analyze photo ${photoNumber} of ${totalImages} individually.
+Return exactly one analysis object for this photo covering brand, category, size, color, material, style, pattern, gender, condition, and flaws.
+For flaws: use "None visible" unless a defect is clearly and strongly evidenced in this photo. Do not invent wrinkles or fading.${sellerContextBlock(sellerNotes)}`,
+    },
+    {
+      type: "image",
+      image: image.data,
+      mediaType: image.mediaType,
+    },
+  ]
+
+  const result = await generateObject({
+    model: listingModel(openai),
+    schema: imageBatchDetectionSchema,
+    system: DETECT_SYSTEM,
+    messages: [{ role: "user", content }],
+  })
+
+  const detection = result.object.images[0]
+  if (!detection) {
+    throw new ListingEngineError(
+      `Vision returned no detection for photo ${photoNumber}.`,
+      502
+    )
+  }
+
+  return {
+    detection,
+    usage: usageFromResult(result),
+  }
+}
+
 async function detectBatch(
   openai: OpenAIClient,
   batch: VisionImage[],
   batchIndex: number,
   totalImages: number,
-  startIndex: number
-): Promise<{ images: ImageDetection[]; usage: TokenUsage }> {
+  startIndex: number,
+  sellerNotes?: string
+): Promise<{
+  images: ImageDetection[]
+  usage: TokenUsage
+  failed: FailedVisionImage[]
+}> {
   const content: ContentPart[] = [
     {
       type: "text",
       text: `Batch ${batchIndex + 1}: analyze EACH of these ${batch.length} photos individually (photos ${startIndex + 1}–${startIndex + batch.length} of ${totalImages}).
 Return one analysis object per photo in the same order. Cover brand, category, size, color, material, style, pattern, gender, condition, and flaws for every image.
-For flaws: use "None visible" unless a defect is clearly and strongly evidenced in that photo. Do not invent wrinkles or fading.`,
+For flaws: use "None visible" unless a defect is clearly and strongly evidenced in that photo. Do not invent wrinkles or fading.${sellerContextBlock(sellerNotes)}`,
     },
   ]
   for (const image of batch) {
@@ -144,23 +216,84 @@ For flaws: use "None visible" unless a defect is clearly and strongly evidenced 
     })
   }
 
-  const result = await generateObject({
-    model: listingModel(openai),
-    schema: imageBatchDetectionSchema,
-    system: DETECT_SYSTEM,
-    messages: [{ role: "user", content }],
-  })
+  try {
+    const result = await generateObject({
+      model: listingModel(openai),
+      schema: imageBatchDetectionSchema,
+      system: DETECT_SYSTEM,
+      messages: [{ role: "user", content }],
+    })
 
-  if (!result.object.images.length) {
-    throw new ListingEngineError(
-      `Vision returned no detections for batch ${batchIndex + 1}.`,
-      502
-    )
-  }
+    if (!result.object.images.length) {
+      throw new ListingEngineError(
+        `Vision returned no detections for batch ${batchIndex + 1}.`,
+        502
+      )
+    }
 
-  return {
-    images: result.object.images,
-    usage: usageFromResult(result),
+    return {
+      images: result.object.images,
+      usage: usageFromResult(result),
+      failed: [],
+    }
+  } catch (batchError) {
+    const batchMessage =
+      batchError instanceof Error ? batchError.message : "Vision batch failed"
+    console.warn("[listing engine] batch vision failed — retrying per photo", {
+      batchIndex: batchIndex + 1,
+      startIndex: startIndex + 1,
+      count: batch.length,
+      error: batchMessage,
+      photos: batch.map((img, offset) => ({
+        index: img.index ?? startIndex + offset + 1,
+        sourceUrl: img.sourceUrl,
+        mediaType: img.mediaType,
+        bytes:
+          typeof img.data === "string"
+            ? img.data.length
+            : (img.data as Buffer).byteLength,
+      })),
+    })
+
+    // Tolerate one (or more) bad images: analyze survivors individually.
+    const images: ImageDetection[] = []
+    const failed: FailedVisionImage[] = []
+    let usage = emptyTokenUsage()
+
+    for (const [offset, image] of batch.entries()) {
+      const photoNumber = image.index ?? startIndex + offset + 1
+      try {
+        const single = await detectSingleImage(
+          openai,
+          image,
+          photoNumber,
+          totalImages,
+          sellerNotes
+        )
+        images.push(single.detection)
+        usage = addTokenUsage(usage, single.usage)
+      } catch (photoError) {
+        const message =
+          photoError instanceof Error ? photoError.message : "Vision failed"
+        console.error("[listing engine] photo analysis failed", {
+          index: photoNumber,
+          sourceUrl: image.sourceUrl,
+          mediaType: image.mediaType,
+          bytes:
+            typeof image.data === "string"
+              ? image.data.length
+              : (image.data as Buffer).byteLength,
+          error: message,
+        })
+        failed.push({
+          index: photoNumber,
+          sourceUrl: image.sourceUrl,
+          error: message,
+        })
+      }
+    }
+
+    return { images, usage, failed }
   }
 }
 
@@ -348,7 +481,8 @@ async function generateCopy(
   openai: OpenAIClient,
   fields: Record<string, FieldConfidence>,
   sampleImages: VisionImage[],
-  totalImages: number
+  totalImages: number,
+  sellerNotes?: string
 ): Promise<{ copy: ListingCopy; usage: TokenUsage }> {
   const searchColor = titleSearchColor(fields.color?.value)
   const content: ContentPart[] = [
@@ -369,7 +503,7 @@ Verified attributes (with confidence) — leave these attribute values unchanged
 The title may use the normalized search color above, but must NOT rewrite specifics/fieldConfidence color
 (e.g. keep Dark Gray/Charcoal in attributes even if the title says Gray).
 ${JSON.stringify(fields, null, 2)}
-Total photos in listing: ${totalImages}. Sample photos attached for visual context.`,
+Total photos in listing: ${totalImages}. Sample photos attached for visual context.${sellerContextBlock(sellerNotes)}`,
     },
   ]
   for (const image of sampleImages.slice(0, 4)) {
@@ -454,17 +588,30 @@ export function createAiCompsProvider(openai: OpenAIClient): CompsProvider {
 /**
  * Production listing engine: analyzes every image, merges detections,
  * writes copy, and prices from sold comps.
+ * Tolerates individual photo failures and continues with remaining photos.
  */
 export async function generateListingFromImages(
   images: VisionImage[],
-  options?: { compsProvider?: CompsProvider }
-): Promise<{ draft: GeneratedListingOutput; model: string; usage: TokenUsage }> {
+  options?: {
+    compsProvider?: CompsProvider
+    sellerNotes?: string
+  }
+): Promise<{
+  draft: GeneratedListingOutput
+  model: string
+  usage: TokenUsage
+  imagesAnalyzed: number
+  imagesFailed: FailedVisionImage[]
+  warnings: string[]
+  partial: boolean
+}> {
   if (images.length === 0) {
     throw new ListingEngineError("At least one image is required.", 400)
   }
 
   const openai = getOpenAI()
   const model = getListingModel()
+  const sellerNotes = options?.sellerNotes?.trim() || undefined
   let usage = emptyTokenUsage()
 
   const batches: VisionImage[][] = []
@@ -472,8 +619,10 @@ export async function generateListingFromImages(
     batches.push(images.slice(i, i + VISION_BATCH_SIZE))
   }
 
-  // Analyze every image in parallel batches (bounded concurrency)
+  // Analyze every image in parallel batches (bounded concurrency).
+  // If a batch fails (e.g. one corrupt/oversized photo), fall back per-image.
   const detections: ImageDetection[] = []
+  const imagesFailed: FailedVisionImage[] = []
   const concurrency = 2
   for (let i = 0; i < batches.length; i += concurrency) {
     const slice = batches.slice(i, i + concurrency)
@@ -481,19 +630,63 @@ export async function generateListingFromImages(
       slice.map((batch, offset) => {
         const batchIndex = i + offset
         const startIndex = batchIndex * VISION_BATCH_SIZE
-        return detectBatch(openai, batch, batchIndex, images.length, startIndex)
+        return detectBatch(
+          openai,
+          batch,
+          batchIndex,
+          images.length,
+          startIndex,
+          sellerNotes
+        )
       })
     )
     for (const batchResult of results) {
       detections.push(...batchResult.images)
+      imagesFailed.push(...batchResult.failed)
       usage = addTokenUsage(usage, batchResult.usage)
     }
   }
 
+  if (detections.length === 0) {
+    const failedSummary = imagesFailed
+      .map((f) => `photo ${f.index}${f.sourceUrl ? ` (${f.sourceUrl})` : ""}`)
+      .join(", ")
+    throw new ListingEngineError(
+      `Could not analyze any photos.${failedSummary ? ` Failed: ${failedSummary}.` : ""}`,
+      502
+    )
+  }
+
+  const warnings: string[] = []
+  if (imagesFailed.length > 0) {
+    const labels = imagesFailed
+      .map((f) => `photo ${f.index}`)
+      .join(", ")
+    warnings.push(
+      `Partial analysis: ${labels} could not be read. Listing was built from the remaining ${detections.length} photo${detections.length === 1 ? "" : "s"}.`
+    )
+    console.warn("[listing engine] partial analysis", {
+      analyzed: detections.length,
+      failed: imagesFailed,
+    })
+  }
+
   const { fields, perImage } = mergeDetections(detections)
+  const survivingImages = images.filter(
+    (img, idx) =>
+      !imagesFailed.some(
+        (f) => f.index === (img.index ?? idx + 1)
+      )
+  )
 
   const [copyResult, comps] = await Promise.all([
-    generateCopy(openai, fields, images, images.length),
+    generateCopy(
+      openai,
+      fields,
+      survivingImages.length > 0 ? survivingImages : images,
+      detections.length,
+      sellerNotes
+    ),
     (options?.compsProvider ?? createAiCompsProvider(openai)).estimate(fields),
   ])
   usage = addTokenUsage(usage, copyResult.usage)
@@ -566,5 +759,13 @@ export async function generateListingFromImages(
     perImage,
   }
 
-  return { draft, model, usage }
+  return {
+    draft,
+    model,
+    usage,
+    imagesAnalyzed: detections.length,
+    imagesFailed,
+    warnings,
+    partial: imagesFailed.length > 0,
+  }
 }

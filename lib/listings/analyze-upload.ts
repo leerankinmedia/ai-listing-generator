@@ -112,6 +112,9 @@ export async function storeAnalyzeImage(input: {
 export type VisionImagePayload = {
   mediaType: string
   data: Buffer
+  /** 1-based photo number for failure logging */
+  index: number
+  sourceUrl: string
 }
 
 const FETCH_IMAGE_MAX_BYTES = 5 * 1024 * 1024
@@ -125,9 +128,10 @@ export async function resolveAnalyzeImageUrls(
 ): Promise<VisionImagePayload[]> {
   const out: VisionImagePayload[] = []
   for (const [index, url] of urls.entries()) {
+    const photoNumber = index + 1
     if (!isAllowedAnalyzeImageUrl(url)) {
       throw new Error(
-        `Photo ${index + 1} URL is not an allowed analyze upload URL.`
+        `Photo ${photoNumber} URL is not an allowed analyze upload URL.`
       )
     }
 
@@ -136,10 +140,15 @@ export async function resolveAnalyzeImageUrls(
       const staged = getStagingImage(stagingMatch[1])
       if (!staged) {
         throw new Error(
-          `Photo ${index + 1} expired or was uploaded on a different server instance. Re-upload and analyze again (Supabase Storage is required on Vercel).`
+          `Photo ${photoNumber} expired or was uploaded on a different server instance. Re-upload and analyze again (Supabase Storage is required on Vercel).`
         )
       }
-      out.push({ mediaType: staged.contentType, data: staged.buffer })
+      out.push({
+        mediaType: staged.contentType,
+        data: staged.buffer,
+        index: photoNumber,
+        sourceUrl: url,
+      })
       continue
     }
 
@@ -150,7 +159,7 @@ export async function resolveAnalyzeImageUrls(
     })
     if (!response.ok) {
       throw new Error(
-        `Photo ${index + 1} could not be fetched (HTTP ${response.status}).`
+        `Photo ${photoNumber} could not be fetched (HTTP ${response.status}).`
       )
     }
     const contentType =
@@ -158,14 +167,19 @@ export async function resolveAnalyzeImageUrls(
       "image/jpeg"
     const buffer = Buffer.from(await response.arrayBuffer())
     if (buffer.byteLength === 0) {
-      throw new Error(`Photo ${index + 1} fetched empty.`)
+      throw new Error(`Photo ${photoNumber} fetched empty.`)
     }
     if (buffer.byteLength > FETCH_IMAGE_MAX_BYTES) {
       throw new Error(
-        `Photo ${index + 1} is too large after upload (${Math.ceil(buffer.byteLength / (1024 * 1024))}MB).`
+        `Photo ${photoNumber} is too large after upload (${Math.ceil(buffer.byteLength / (1024 * 1024))}MB).`
       )
     }
-    out.push({ mediaType: contentType, data: buffer })
+    out.push({
+      mediaType: contentType,
+      data: buffer,
+      index: photoNumber,
+      sourceUrl: url,
+    })
   }
   return out
 }

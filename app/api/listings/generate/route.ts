@@ -56,6 +56,7 @@ function jsonError(
 type GenerateBody = {
   imageUrls?: unknown
   listingId?: unknown
+  sellerNotes?: unknown
 }
 
 async function handleGenerate(request: Request) {
@@ -154,6 +155,9 @@ async function handleGenerate(request: Request) {
       return jsonError("imageUrls must contain only non-empty strings.", 400)
     }
 
+    const sellerNotes =
+      typeof body.sellerNotes === "string" ? body.sellerNotes.trim() : ""
+
     if (!isOpenAIConfigured()) {
       return jsonError(
         "OPENAI_API_KEY is required. Add it to your environment to run the production listing engine.",
@@ -163,9 +167,18 @@ async function handleGenerate(request: Request) {
     }
 
     const images = await resolveAnalyzeImageUrls(imageUrls)
-    imagesAnalyzed = images.length
-
-    const { draft, model, usage } = await generateListingFromImages(images)
+    const {
+      draft,
+      model,
+      usage,
+      imagesAnalyzed: analyzedCount,
+      imagesFailed,
+      warnings,
+      partial,
+    } = await generateListingFromImages(images, {
+      sellerNotes: sellerNotes || undefined,
+    })
+    imagesAnalyzed = analyzedCount
 
     let usageRecorded = false
     let usageRecordId: string | null = null
@@ -203,6 +216,9 @@ async function handleGenerate(request: Request) {
       draft,
       model,
       imagesAnalyzed,
+      imagesFailed,
+      warnings,
+      partial,
       openaiConfigured: true,
       usageRecorded,
       usageRecordId,

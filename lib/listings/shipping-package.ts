@@ -35,6 +35,8 @@ export interface ShippingPackagePreset extends ShippingPackage {
 }
 
 export const SHIPPING_PRESET_STORAGE_KEY = "listwise.shippingPackagePresets"
+/** Last complete package used (auto-remembered — one tap next listing). */
+export const LAST_SHIPPING_PACKAGE_KEY = "listwise.lastShippingPackage"
 
 const FIELD_LABELS: Record<string, string> = {
   weightPounds: "weight pounds",
@@ -92,12 +94,16 @@ export function missingShippingPackageFields(
 
   const missing: string[] = []
   const pounds = asFiniteNumber(pkg.weightPounds)
-  const ounces = asFiniteNumber(pkg.weightOunces)
+  // Ounces may be blank when pounds are set — treat as 0 (saves a tap).
+  const ouncesRaw = asFiniteNumber(pkg.weightOunces)
+  const ounces = ouncesRaw == null && pounds != null && pounds >= 0 ? 0 : ouncesRaw
+
   if (pounds == null || pounds < 0 || !Number.isFinite(pounds)) {
     missing.push(FIELD_LABELS.weightPounds)
   }
   if (ounces == null || ounces < 0 || !Number.isFinite(ounces)) {
-    missing.push(FIELD_LABELS.weightOunces)
+    // Only require ounces when pounds aren't set yet (seller must enter some weight).
+    if (pounds == null) missing.push(FIELD_LABELS.weightOunces)
   }
   if (
     pounds != null &&
@@ -224,4 +230,86 @@ export function saveShippingPreset(
   )
   writeShippingPresets(updated)
   return updated
+}
+
+function readLastShippingPackage(): ShippingPackage | null {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = window.localStorage.getItem(LAST_SHIPPING_PACKAGE_KEY)
+    if (!raw) return null
+    const row = JSON.parse(raw) as Record<string, unknown>
+    if (!row || typeof row !== "object") return null
+    const pkg: ShippingPackage = {
+      weightPounds: asFiniteNumber(row.weightPounds),
+      weightOunces: asFiniteNumber(row.weightOunces),
+      lengthInches: asFiniteNumber(row.lengthInches),
+      widthInches: asFiniteNumber(row.widthInches),
+      heightInches: asFiniteNumber(row.heightInches),
+      packageType: String(row.packageType || DEFAULT_EBAY_PACKAGE_TYPE),
+    }
+    return shippingPackageIsComplete(pkg) ? pkg : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Remember the last complete package so the next listing needs zero shipping taps
+ * (beats Vendoo defaults / Nifty similar-listing prefills on mobile).
+ */
+export function rememberLastShippingPackage(pkg: ShippingPackage): void {
+  if (typeof window === "undefined") return
+  if (!shippingPackageIsComplete(pkg)) return
+  const normalized: ShippingPackage = {
+    weightPounds: asFiniteNumber(pkg.weightPounds) ?? 0,
+    weightOunces: asFiniteNumber(pkg.weightOunces) ?? 0,
+    lengthInches: asFiniteNumber(pkg.lengthInches) ?? 0,
+    widthInches: asFiniteNumber(pkg.widthInches) ?? 0,
+    heightInches: asFiniteNumber(pkg.heightInches) ?? 0,
+    packageType: String(pkg.packageType || "").trim() || DEFAULT_EBAY_PACKAGE_TYPE,
+  }
+  window.localStorage.setItem(LAST_SHIPPING_PACKAGE_KEY, JSON.stringify(normalized))
+}
+
+/** Most recently used/saved package (Vendoo/Nifty-style defaultable shipping). */
+export function getLastShippingPreset(): ShippingPackagePreset | null {
+  const last = readLastShippingPackage()
+  if (last) {
+    return {
+      id: "last-used",
+      name: "Last used",
+      ...last,
+    }
+  }
+  const presets = readShippingPresets()
+  return presets[0] || null
+}
+
+/**
+ * Apply the last shipping package when the listing has none complete.
+ * Returns the listing unchanged when a complete package already exists.
+ */
+export function applyLastShippingPresetToListing<
+  T extends {
+    specifics: { shippingPackage?: ShippingPackage | null }
+    updatedAt?: string
+  },
+>(listing: T): T {
+  if (shippingPackageIsComplete(listing.specifics.shippingPackage)) {
+    return listing
+  }
+  const last = getLastShippingPreset()
+  if (!last) return listing
+  const { id: _id, name: _name, ...pkg } = last
+  return {
+    ...listing,
+    specifics: {
+      ...listing.specifics,
+      shippingPackage: {
+        ...pkg,
+        packageType: pkg.packageType || DEFAULT_EBAY_PACKAGE_TYPE,
+      },
+    },
+    updatedAt: new Date().toISOString(),
+  }
 }

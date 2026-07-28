@@ -2,12 +2,11 @@
 
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
-import { Loader2, Sparkles, Save, Camera } from "lucide-react"
+import { Loader2, Sparkles, Save, Camera, Rocket } from "lucide-react"
 import { ImageUploader } from "@/components/listings/image-uploader"
 import { ListingEditorForm } from "@/components/listings/listing-editor-form"
 import { OneClickPublishBar } from "@/components/listings/one-click-publish-bar"
 import { Button } from "@/components/ui/button"
-import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/components/auth/auth-provider"
 import { readApiJsonResponse } from "@/lib/api/read-json-response"
@@ -16,6 +15,7 @@ import { ensureDurableOriginalImageUrls } from "@/lib/listings/durable-images"
 import { createEmptyListing, withImages } from "@/lib/listings/local-db"
 import { mapDraftToListingFields } from "@/lib/listings/map-draft"
 import { hydrateListingEbayAspects } from "@/lib/listings/hydrate-ebay-aspects"
+import { applyLastShippingPresetToListing } from "@/lib/listings/shipping-package"
 import { persistListing } from "@/lib/listings/repository"
 import { listingIsReadyToPublish } from "@/lib/listings/publish"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
@@ -70,6 +70,7 @@ export function ListingGenerator() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [sellerNotes, setSellerNotes] = useState("")
+  const [sellerNotesOpen, setSellerNotesOpen] = useState(false)
   const [progressPercent, setProgressPercent] = useState(0)
   const [progressMessage, setProgressMessage] = useState(ROTATING_MESSAGES[0])
   const [aspectMeta, setAspectMeta] = useState<{
@@ -169,7 +170,14 @@ export function ListingGenerator() {
         price: mapped.price,
         currency: mapped.currency,
         keywords: mapped.keywords,
-        specifics: mapped.specifics,
+        specifics: {
+          ...base.specifics,
+          ...mapped.specifics,
+          extras: {
+            ...(base.specifics.extras || {}),
+            ...(mapped.specifics.extras || {}),
+          },
+        },
         fieldConfidence: mapped.fieldConfidence,
         comps: mapped.comps,
         aiGenerated: true,
@@ -188,7 +196,7 @@ export function ListingGenerator() {
 
       // AI employee: fill Taxonomy aspects before the seller sees the edit page.
       const hydrated = await hydrateListingEbayAspects(next)
-      next = hydrated.listing
+      next = applyLastShippingPresetToListing(hydrated.listing)
       setProgressPercent(100)
       setProgressMessage("Building your listing")
 
@@ -200,10 +208,13 @@ export function ListingGenerator() {
         )
       } else if (hydrated.ok && hydrated.summary.total > 0) {
         const n = hydrated.summary.needsAttention
+        const shippingNote = next.specifics.shippingPackage
+          ? " Shipping package reused from your last listing."
+          : ""
         setNotice(
           n === 0
-            ? `AI completed ${hydrated.summary.completed}/${hydrated.summary.total} item specifics.`
-            : `AI completed ${hydrated.summary.completed}/${hydrated.summary.total} item specifics. Only ${n} need your attention.`
+            ? `AI completed ${hydrated.summary.completed}/${hydrated.summary.total} item specifics.${shippingNote}`
+            : `AI completed ${hydrated.summary.completed}/${hydrated.summary.total} item specifics. Only ${n} need your attention.${shippingNote}`
         )
       }
 
@@ -306,15 +317,35 @@ export function ListingGenerator() {
                 disabled={generating}
               />
               <div className="space-y-2">
-                <Label htmlFor="seller-notes">Help the AI</Label>
-                <Textarea
-                  id="seller-notes"
-                  value={sellerNotes}
-                  onChange={(event) => setSellerNotes(event.target.value)}
-                  placeholder="Add anything the photos may not show — women’s, size, flaws, brand, item type, etc."
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between text-left text-sm"
+                  onClick={() => setSellerNotesOpen((o) => !o)}
                   disabled={generating}
-                  className="min-h-[96px]"
-                />
+                >
+                  <span className="font-medium">
+                    Help the AI
+                    {!sellerNotes.trim() && (
+                      <span className="font-normal text-muted-foreground">
+                        {" "}
+                        (optional)
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {sellerNotesOpen ? "Hide" : sellerNotes.trim() ? "Edit notes" : "Add notes"}
+                  </span>
+                </button>
+                {sellerNotesOpen && (
+                  <Textarea
+                    id="seller-notes"
+                    value={sellerNotes}
+                    onChange={(event) => setSellerNotes(event.target.value)}
+                    placeholder="Add anything the photos may not show — women’s, size, flaws, brand, item type, etc."
+                    disabled={generating}
+                    className="min-h-[96px]"
+                  />
+                )}
               </div>
               {error && (
                 <p
@@ -391,32 +422,39 @@ export function ListingGenerator() {
               {error}
             </p>
           )}
-          <div className="sticky bottom-3 z-20 flex flex-wrap gap-3 rounded-2xl border border-border bg-background/90 p-3 backdrop-blur-xl sm:static sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none">
+          <div className="sticky bottom-3 z-20 flex flex-wrap gap-2 rounded-2xl border border-border bg-background/90 p-3 backdrop-blur-xl sm:static sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none">
             <Button
               variant="outline"
+              className="flex-1 sm:flex-none"
               disabled={saving || generating}
               onClick={() => {
                 setStep("upload")
                 setError(null)
               }}
             >
-              Back to photos
+              Back
             </Button>
             <Button
               variant="secondary"
+              className="flex-1 sm:flex-none"
               disabled={saving}
               onClick={() => void handleSave("draft")}
             >
               {saving ? <Loader2 className="animate-spin" /> : <Save />}
-              Save as draft
+              Draft
             </Button>
             <Button
               variant="accent"
+              className="min-w-[44%] flex-[1.4] sm:flex-none"
               disabled={saving}
-              onClick={() => void handleSave("ready")}
+              onClick={() => {
+                document
+                  .getElementById("listwise-publish")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }}
             >
-              {saving ? <Loader2 className="animate-spin" /> : <Save />}
-              Save listing
+              <Rocket />
+              Publish
             </Button>
           </div>
         </div>

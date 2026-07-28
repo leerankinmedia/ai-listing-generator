@@ -19,7 +19,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { GripVertical, ImagePlus, Star, X } from "lucide-react"
+import { Camera, GripVertical, ImagePlus, Star, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
 import {
@@ -181,7 +181,8 @@ function PhotoPreview({
 }
 
 export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps) {
-  const inputRef = useRef<HTMLInputElement>(null)
+  const galleryInputRef = useRef<HTMLInputElement>(null)
+  const cameraInputRef = useRef<HTMLInputElement>(null)
   const [fileDragging, setFileDragging] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -308,6 +309,56 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
 
   return (
     <div className="space-y-3">
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        disabled={disabled || busy}
+        onChange={(e) => {
+          if (e.target.files) void addFiles(e.target.files)
+          e.target.value = ""
+        }}
+      />
+      <input
+        ref={galleryInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        disabled={disabled || busy}
+        onChange={(e) => {
+          if (e.target.files) void addFiles(e.target.files)
+          e.target.value = ""
+        }}
+      />
+
+      {/* Mobile-first: Take photo is primary (SellRaze-style camera speed) */}
+      <div className="grid gap-2 sm:hidden">
+        <button
+          type="button"
+          disabled={disabled || busy}
+          onClick={() => cameraInputRef.current?.click()}
+          className="flex h-12 items-center justify-center gap-2 rounded-xl border border-accent/40 bg-accent/15 text-sm font-semibold disabled:opacity-50"
+        >
+          <Camera className="h-4 w-4" />
+          {busy ? "Processing…" : "Take photo"}
+        </button>
+        <button
+          type="button"
+          disabled={disabled || busy}
+          onClick={() => galleryInputRef.current?.click()}
+          className="flex h-11 items-center justify-center gap-2 rounded-xl border border-border bg-card text-sm font-medium disabled:opacity-50"
+        >
+          <ImagePlus className="h-4 w-4" />
+          Choose from gallery
+        </button>
+        <p className="text-center text-xs text-muted-foreground">
+          {ordered.length} / {MAX_LISTING_IMAGES} uploaded
+        </p>
+      </div>
+
       <div
         onDragEnter={(e) => {
           e.preventDefault()
@@ -327,31 +378,19 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
           if (!disabled) void addFiles(e.dataTransfer.files)
         }}
         className={cn(
-          "relative flex min-h-[180px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-4 py-8 text-center transition-colors",
+          "relative hidden min-h-[180px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-4 py-8 text-center transition-colors sm:flex",
           fileDragging
             ? "border-accent bg-accent/10"
             : "border-border bg-card/50 hover:border-accent/50 hover:bg-card/80",
           disabled && "pointer-events-none opacity-60"
         )}
-        onClick={() => inputRef.current?.click()}
+        onClick={() => galleryInputRef.current?.click()}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") inputRef.current?.click()
+          if (e.key === "Enter" || e.key === " ") galleryInputRef.current?.click()
         }}
       >
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          className="hidden"
-          disabled={disabled || busy}
-          onChange={(e) => {
-            if (e.target.files) void addFiles(e.target.files)
-            e.target.value = ""
-          }}
-        />
         <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-accent/15 text-accent">
           <ImagePlus className="h-5 w-5" />
         </div>
@@ -359,7 +398,7 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
           {busy ? "Processing photos…" : "Drop photos here"}
         </p>
         <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-          Drag and drop 1–{MAX_LISTING_IMAGES} clothing photos, or tap to browse.
+          Drag and drop 1–{MAX_LISTING_IMAGES} clothing photos, or click to browse.
           Hold the handle on a photo to reorder before saving.
         </p>
         <p className="mt-3 text-xs font-medium text-muted-foreground">

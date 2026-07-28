@@ -94,6 +94,8 @@ export function mapDraftToListingFields(draft: GeneratedListingOutput): {
       : asKeywords(conf.keywords?.value)
 
   const specificsSource = draft.specifics ?? {}
+  // Zero-tap defaults: sellers should not re-set shipping, offers, qty, or condition
+  // on every listing when AI/photos already imply a normal clothing draft.
   const specifics: ListingSpecifics = {
     brand: asString(specificsSource.brand) || asString(conf.brand) || undefined,
     size: asString(specificsSource.size) || asString(conf.size) || undefined,
@@ -108,12 +110,16 @@ export function mapDraftToListingFields(draft: GeneratedListingOutput): {
     condition:
       asString(specificsSource.condition) ||
       asString(conf.condition) ||
-      undefined,
+      "Good",
     category:
       asString(specificsSource.category) ||
       asString(conf.category) ||
       undefined,
     flaws: asString(specificsSource.flaws) || asString(conf.flaws) || undefined,
+    shippingMode: "calculated",
+    handlingTimeDays: 1,
+    allowOffers: false,
+    extras: { quantity: "1" },
   }
 
   const fieldKeys: DetectedFieldKey[] = [

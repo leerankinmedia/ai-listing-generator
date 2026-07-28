@@ -60,6 +60,7 @@ export function ListingEditorForm({
   onAspectMetaChange,
 }: ListingEditorFormProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [moreDetailsOpen, setMoreDetailsOpen] = useState(false)
   const [hasEbayAspects, setHasEbayAspects] = useState(false)
   const keywordsText = useMemo(
     () => (listing.keywords ?? []).join(", "),
@@ -109,14 +110,21 @@ export function ListingEditorForm({
     })
   }
 
+  const descriptionPreview =
+    listing.description.trim().length > 0
+      ? `${listing.description.trim().slice(0, 90)}${
+          listing.description.trim().length > 90 ? "…" : ""
+        }`
+      : "No description yet"
+
   return (
     <div className="space-y-8">
       <section className="space-y-4">
         <div>
           <h2 className="font-display text-lg font-semibold">Listing details</h2>
           <p className="text-sm text-muted-foreground">
-            Edit title, description, price, and item details before saving. Confidence
-            shows Vision certainty.
+            Title and price stay up front. AI-filled description and category stay
+            collapsed until you need them.
           </p>
         </div>
 
@@ -153,52 +161,6 @@ export function ListingEditorForm({
               ? ` · ${listing.fieldConfidence.title.rationale}`
               : ""}
           </p>
-        </div>
-
-        <div className="space-y-2">
-          <FieldHeader
-            label="Description"
-            htmlFor="description"
-            fieldKey="description"
-            listing={listing}
-          />
-          <Textarea
-            id="description"
-            value={listing.description}
-            disabled={disabled}
-            rows={10}
-            onChange={(e) => {
-              const value = e.target.value
-              const prev = listing.fieldConfidence?.description
-              update({
-                description: value,
-                fieldConfidence: {
-                  ...listing.fieldConfidence,
-                  description: prev
-                    ? { ...prev, value }
-                    : { value, confidence: 1, rationale: "Edited manually" },
-                },
-              })
-            }}
-            placeholder="Clothing listing description"
-            className="min-h-[200px]"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <FieldHeader
-            label="Category"
-            htmlFor="category"
-            fieldKey="category"
-            listing={listing}
-          />
-          <Input
-            id="category"
-            value={listing.specifics.category ?? ""}
-            disabled={disabled}
-            onChange={(e) => updateSpecific("category", e.target.value, "category")}
-            placeholder="Clothing, Shoes & Accessories > Men > Men's Clothing > Jeans"
-          />
         </div>
       </section>
 
@@ -289,104 +251,176 @@ export function ListingEditorForm({
             </select>
           </div>
         </div>
-
-        <div className="space-y-2">
-          <FieldHeader
-            label="Flaws"
-            htmlFor="flaws"
-            fieldKey="flaws"
-            listing={listing}
-          />
-          <Textarea
-            id="flaws"
-            value={listing.specifics.flaws ?? ""}
-            disabled={disabled}
-            rows={3}
-            onChange={(e) => updateSpecific("flaws", e.target.value, "flaws")}
-            placeholder="Stains, wear, repairs, missing parts…"
-          />
-        </div>
       </section>
 
-      <section className="space-y-3">
-        <FieldHeader
-          label="Keywords"
-          htmlFor="keywords"
-          fieldKey="keywords"
-          listing={listing}
-        />
-        <Textarea
-          id="keywords"
-          value={keywordsText}
-          disabled={disabled}
-          rows={3}
-          onChange={(e) => {
-            const keywords = e.target.value
-              .split(",")
-              .map((k) => k.trim())
-              .filter(Boolean)
-            const prev = listing.fieldConfidence?.keywords
-            update({
-              keywords,
-              fieldConfidence: {
-                ...listing.fieldConfidence,
-                keywords: prev
-                  ? { ...prev, value: keywords.join(", ") }
-                  : {
-                      value: keywords.join(", "),
-                      confidence: 1,
-                      rationale: "Edited manually",
-                    },
-              },
-            })
-          }}
-        />
-      </section>
+      <section className="space-y-3 rounded-xl border border-border bg-secondary/20 p-4">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-3 text-left"
+          onClick={() => setMoreDetailsOpen((o) => !o)}
+        >
+          <div className="min-w-0">
+            <h2 className="font-display text-lg font-semibold">More details</h2>
+            <p className="truncate text-sm text-muted-foreground">
+              {moreDetailsOpen
+                ? "Description, category, flaws, keywords, publish targets"
+                : descriptionPreview}
+            </p>
+          </div>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {moreDetailsOpen ? "Hide" : "Show"}
+          </span>
+        </button>
 
-      <section className="space-y-3">
-        <div>
-          <h2 className="font-display text-lg font-semibold">Publish targets</h2>
-          <p className="text-sm text-muted-foreground">
-            Prefer connected Phase 5 markets (eBay, Vinted, Whatnot). Others are
-            reserved for future adapters.
-          </p>
-        </div>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {MARKETPLACES.map((marketplace) => {
-            const active = listing.targetMarketplaces.includes(marketplace.id)
-            const live =
-              marketplace.id === "ebay" ||
-              marketplace.id === "vinted" ||
-              marketplace.id === "whatnot"
-            return (
-              <button
-                key={marketplace.id}
-                type="button"
+        {moreDetailsOpen && (
+          <div className="space-y-6 pt-2">
+            <div className="space-y-2">
+              <FieldHeader
+                label="Description"
+                htmlFor="description"
+                fieldKey="description"
+                listing={listing}
+              />
+              <Textarea
+                id="description"
+                value={listing.description}
                 disabled={disabled}
-                onClick={() => toggleMarketplace(marketplace.id)}
-                className={cn(
-                  "flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-sm transition-colors",
-                  active
-                    ? "border-accent/50 bg-accent/10"
-                    : "border-border bg-card/60 hover:border-accent/30"
-                )}
-              >
-                <span
-                  className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ backgroundColor: marketplace.color }}
-                />
-                <span className="min-w-0 flex-1 truncate font-medium">
-                  {marketplace.shortName}
-                </span>
-                {!live && (
-                  <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Soon
-                  </span>
-                )}
-              </button>
-            )
-          })}
-        </div>
+                rows={8}
+                onChange={(e) => {
+                  const value = e.target.value
+                  const prev = listing.fieldConfidence?.description
+                  update({
+                    description: value,
+                    fieldConfidence: {
+                      ...listing.fieldConfidence,
+                      description: prev
+                        ? { ...prev, value }
+                        : { value, confidence: 1, rationale: "Edited manually" },
+                    },
+                  })
+                }}
+                placeholder="Clothing listing description"
+                className="min-h-[160px]"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <FieldHeader
+                label="Category"
+                htmlFor="category"
+                fieldKey="category"
+                listing={listing}
+              />
+              <Input
+                id="category"
+                value={listing.specifics.category ?? ""}
+                disabled={disabled}
+                onChange={(e) =>
+                  updateSpecific("category", e.target.value, "category")
+                }
+                placeholder="Clothing, Shoes & Accessories > Men > Men's Clothing > Jeans"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <FieldHeader
+                label="Flaws"
+                htmlFor="flaws"
+                fieldKey="flaws"
+                listing={listing}
+              />
+              <Textarea
+                id="flaws"
+                value={listing.specifics.flaws ?? ""}
+                disabled={disabled}
+                rows={3}
+                onChange={(e) => updateSpecific("flaws", e.target.value, "flaws")}
+                placeholder="Stains, wear, repairs, missing parts…"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <FieldHeader
+                label="Keywords"
+                htmlFor="keywords"
+                fieldKey="keywords"
+                listing={listing}
+              />
+              <Textarea
+                id="keywords"
+                value={keywordsText}
+                disabled={disabled}
+                rows={3}
+                onChange={(e) => {
+                  const keywords = e.target.value
+                    .split(",")
+                    .map((k) => k.trim())
+                    .filter(Boolean)
+                  const prev = listing.fieldConfidence?.keywords
+                  update({
+                    keywords,
+                    fieldConfidence: {
+                      ...listing.fieldConfidence,
+                      keywords: prev
+                        ? { ...prev, value: keywords.join(", ") }
+                        : {
+                            value: keywords.join(", "),
+                            confidence: 1,
+                            rationale: "Edited manually",
+                          },
+                    },
+                  })
+                }}
+              />
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <h3 className="text-sm font-semibold">Publish targets</h3>
+                <p className="text-xs text-muted-foreground">
+                  Defaults to eBay. Extra markets are optional — Publish also lets you
+                  choose connected accounts.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {MARKETPLACES.map((marketplace) => {
+                  const active = listing.targetMarketplaces.includes(marketplace.id)
+                  const live =
+                    marketplace.id === "ebay" ||
+                    marketplace.id === "vinted" ||
+                    marketplace.id === "whatnot"
+                  return (
+                    <button
+                      key={marketplace.id}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => toggleMarketplace(marketplace.id)}
+                      className={cn(
+                        "flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-sm transition-colors",
+                        active
+                          ? "border-accent/50 bg-accent/10"
+                          : "border-border bg-card/60 hover:border-accent/30"
+                      )}
+                    >
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: marketplace.color }}
+                      />
+                      <span className="min-w-0 flex-1 truncate font-medium">
+                        {marketplace.shortName}
+                      </span>
+                      {!live && (
+                        <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
+                          Soon
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="space-y-3 rounded-xl border border-border bg-secondary/20 p-4">

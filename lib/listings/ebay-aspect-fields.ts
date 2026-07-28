@@ -1,5 +1,6 @@
 /**
  * Shared helpers for eBay item-specific fields in the listing editor / publish UI.
+ * SEO clothing priorities + primary vs collapsed form layout.
  */
 
 import {
@@ -25,6 +26,79 @@ export type EbayAspectFormField = {
   allowedValues?: string[]
   suggestedValue?: string
   value?: string
+  /** Show on the main page (not inside "More item specifics"). */
+  primary?: boolean
+}
+
+/**
+ * High-search clothing specifics — populate when confidently known.
+ * Order matters for title/SEO preference.
+ */
+export const EBAY_SEO_ASPECT_PRIORITY = [
+  "Brand",
+  "Size Type",
+  "Size",
+  "Style",
+  "Color",
+  "Department",
+  "Type",
+  "Pattern",
+  "Material",
+  "Fabric Wash",
+  "Waist Size",
+  "Fit",
+  "Features",
+  "Inseam",
+  "Rise",
+  "Fabric Type",
+  "Closure",
+  "Vintage",
+  "Theme",
+  "Season",
+  "Pocket Type",
+  "Country of Origin",
+] as const
+
+/** Most important editable fields kept visible on the main listing page. */
+export const EBAY_PRIMARY_VISIBLE_ASPECTS = [
+  "Brand",
+  "Size Type",
+  "Size",
+  "Style",
+  "Color",
+  "Department",
+  "Type",
+] as const
+
+/**
+ * Measurement / uncertain aspects — never invent; only fill from explicit data.
+ */
+export const EBAY_MEASUREMENT_ASPECTS = new Set([
+  "waist size",
+  "inseam",
+  "rise",
+  "chest size",
+  "length",
+  "sleeve length",
+  "hip size",
+  "neck size",
+])
+
+/** @deprecated Use EBAY_SEO_ASPECT_PRIORITY */
+export const EBAY_FORM_ASPECT_PRIORITY = [...EBAY_SEO_ASPECT_PRIORITY]
+
+export function isMeasurementAspect(name: string): boolean {
+  return EBAY_MEASUREMENT_ASPECTS.has(name.trim().toLowerCase())
+}
+
+export function isPrimaryVisibleAspect(name: string): boolean {
+  const key = name.trim().toLowerCase()
+  return EBAY_PRIMARY_VISIBLE_ASPECTS.some((n) => n.toLowerCase() === key)
+}
+
+export function isSeoPriorityAspect(name: string): boolean {
+  const key = name.trim().toLowerCase()
+  return EBAY_SEO_ASPECT_PRIORITY.some((n) => n.toLowerCase() === key)
 }
 
 export function mapAspectToListingField(
@@ -149,6 +223,12 @@ export function resolveSelectValue(
 export function readAspectValue(listing: Listing, name: string): string {
   const fromExtras = listing.specifics.extras?.[name]
   if (fromExtras?.trim()) return fromExtras
+  // Case-insensitive extras lookup
+  const extras = listing.specifics.extras || {}
+  const hit = Object.entries(extras).find(
+    ([k]) => k.toLowerCase() === name.trim().toLowerCase()
+  )
+  if (hit?.[1]?.trim()) return hit[1]
   const target = mapAspectToListingField(name)
   if (target === "extras") return ""
   return (listing.specifics[target] as string | undefined) ?? ""
@@ -184,21 +264,98 @@ export function writeAspectValue(
   }
 }
 
-/** Preferred clothing aspect order in the main listing form. */
-export const EBAY_FORM_ASPECT_PRIORITY = [
-  "Brand",
-  "Size",
-  "Color",
-  "Material",
-  "Pattern",
-  "Department",
-  "Type",
-  "Style",
-  "Size Type",
-  "Fit",
-  "Rise",
-  "Wash",
-  "Fabric Wash",
-  "Closure",
-  "Vintage",
-]
+/**
+ * Split form fields into primary (main page) vs more (collapsed).
+ * Missing required always stay primary so the seller sees them early.
+ */
+export function splitAspectFieldsForDisplay(
+  fields: EbayAspectFormField[],
+  listing: Listing
+): { primary: EbayAspectFormField[]; more: EbayAspectFormField[] } {
+  const primary: EbayAspectFormField[] = []
+  const more: EbayAspectFormField[] = []
+
+  for (const field of fields) {
+    const raw = readAspectValue(listing, field.name)
+    const options = field.allowedValues || []
+    const value =
+      options.length > 0
+        ? resolveSelectValue(
+            field.name,
+            raw,
+            options,
+            field.suggestedValue || field.value
+          )
+        : raw
+    const empty = !value.trim()
+    const forcePrimary =
+      field.primary === true ||
+      isPrimaryVisibleAspect(field.name) ||
+      (field.required && empty)
+
+    if (forcePrimary) primary.push(field)
+    else more.push(field)
+  }
+
+  return { primary, more }
+}
+
+export function countCompletedAspects(
+  fields: EbayAspectFormField[],
+  listing: Listing
+): { completed: number; total: number } {
+  let completed = 0
+  for (const field of fields) {
+    const raw = readAspectValue(listing, field.name)
+    const options = field.allowedValues || []
+    const value =
+      options.length > 0
+        ? resolveSelectValue(
+            field.name,
+            raw,
+            options,
+            field.suggestedValue || field.value
+          )
+        : raw.trim() || field.value || ""
+    if (value.trim()) completed += 1
+  }
+  return { completed, total: fields.length }
+}
+
+/**
+ * Silently drop values that are not exact eBay options (selection lists).
+ * Returns listing with invalid extras cleared + list of still-missing required names.
+ */
+export function validateAspectsAgainstOptions(
+  listing: Listing,
+  fields: EbayAspectFormField[]
+): { listing: Listing; missingRequired: string[]; cleared: string[] } {
+  let next = listing
+  const cleared: string[] = []
+  const missingRequired: string[] = []
+
+  for (const field of fields) {
+    const options = field.allowedValues || []
+    const raw = readAspectValue(next, field.name).trim()
+    if (!raw) {
+      if (field.required) missingRequired.push(field.name)
+      continue
+    }
+    if (options.length === 0) continue
+    if (isExactOption(raw, options)) {
+      // Normalize casing to exact option
+      const exact =
+        options.find((o) => o.toLowerCase() === raw.toLowerCase()) || raw
+      if (exact !== raw) {
+        next = writeAspectValue(next, field.name, exact)
+      }
+      continue
+    }
+    // Invalid for fixed list — clear silently; only ask if required.
+    next = writeAspectValue(next, field.name, "")
+    cleared.push(field.name)
+    if (field.required) missingRequired.push(field.name)
+  }
+
+  return { listing: next, missingRequired, cleared }
+}

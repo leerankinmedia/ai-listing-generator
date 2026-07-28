@@ -213,9 +213,8 @@ export function ListingEditorForm({
         <div>
           <h2 className="font-display text-lg font-semibold">Item specifics</h2>
           <p className="text-sm text-muted-foreground">
-            Brand, Size, Color, Material, Pattern, Department, Type, Style, and other
-            required eBay attributes for this category. Missing required fields show a
-            red Required label before you reach Publish.
+            High-search fields stay visible. Populated details fold under More item
+            specifics. Missing required values show a red Required label before Publish.
           </p>
         </div>
 

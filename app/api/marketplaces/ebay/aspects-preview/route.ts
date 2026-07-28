@@ -7,9 +7,11 @@ import {
 import { mapListingToEbayInventory } from "@/lib/marketplaces/adapters/ebay/client"
 import { resolveEbayLeafCategoryId } from "@/lib/marketplaces/adapters/ebay/taxonomy"
 import {
-  EBAY_FORM_ASPECT_PRIORITY,
+  EBAY_SEO_ASPECT_PRIORITY,
+  isPrimaryVisibleAspect,
   type EbayAspectFormField,
 } from "@/lib/listings/ebay-aspect-fields"
+import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
 import { getServerAuthUser } from "@/lib/supabase/index"
 import type { Listing } from "@/lib/types"
 
@@ -24,8 +26,9 @@ function allowedValues(aspect: {
 }
 
 /**
- * Prefetch eBay category aspects and return exact mapped values for the listing.
- * Used by the listing editor to show required item specifics before Publish.
+ * After AI analysis / category selection: call Taxonomy getItemAspectsForCategory,
+ * populate confidently known required + recommended specifics with exact values,
+ * and return a compact form field set for the listing editor.
  */
 export async function POST(request: Request) {
   try {
@@ -70,9 +73,7 @@ export async function POST(request: Request) {
         .map(([k]) => k.toLowerCase())
     )
 
-    const priorityKeys = new Set(
-      EBAY_FORM_ASPECT_PRIORITY.map((n) => n.toLowerCase())
-    )
+    const seoKeys = new Set(EBAY_SEO_ASPECT_PRIORITY.map((n) => n.toLowerCase()))
     const formFieldsByKey = new Map<string, EbayAspectFormField>()
 
     for (const aspect of taxonomyAspects) {
@@ -80,8 +81,8 @@ export async function POST(request: Request) {
       if (!name) continue
       const key = name.toLowerCase()
       const required = Boolean(aspect.aspectConstraint?.aspectRequired)
-      const isPriority = priorityKeys.has(key)
-      if (!required && !isPriority) continue
+      const isSeo = seoKeys.has(key)
+      if (!required && !isSeo) continue
 
       const allowed = allowedValues(aspect)
       const resolved = applied.aspects[name]?.[0]?.trim()
@@ -91,29 +92,30 @@ export async function POST(request: Request) {
       formFieldsByKey.set(key, {
         name,
         required,
+        primary: isPrimaryVisibleAspect(name),
         allowedValues: allowed.length > 0 ? allowed.slice(0, 80) : undefined,
         suggestedValue: missingEntry?.suggestedValue,
         value: resolved || undefined,
       })
     }
 
-    // Ensure every still-missing required field is present even if taxonomy miss.
     for (const missing of applied.missingRequired) {
       const key = missing.name.toLowerCase()
       if (formFieldsByKey.has(key)) continue
       formFieldsByKey.set(key, {
         name: missing.name,
         required: true,
+        primary: true,
         allowedValues: missing.allowedValues,
         suggestedValue: missing.suggestedValue,
       })
     }
 
     const formFields = [...formFieldsByKey.values()].sort((a, b) => {
-      const ai = EBAY_FORM_ASPECT_PRIORITY.findIndex(
+      const ai = EBAY_SEO_ASPECT_PRIORITY.findIndex(
         (n) => n.toLowerCase() === a.name.toLowerCase()
       )
-      const bi = EBAY_FORM_ASPECT_PRIORITY.findIndex(
+      const bi = EBAY_SEO_ASPECT_PRIORITY.findIndex(
         (n) => n.toLowerCase() === b.name.toLowerCase()
       )
       const aRank = ai === -1 ? 1000 : ai
@@ -127,6 +129,23 @@ export async function POST(request: Request) {
       .filter((f) => f.required && !f.value?.trim())
       .map((f) => f.name)
 
+    const seoTotal = formFields.length
+    const seoCompleted = formFields.filter((f) => f.value?.trim()).length
+
+    // Apply resolved extras onto a draft listing for SEO title generation.
+    const extras = { ...(listing.specifics.extras || {}) }
+    for (const field of applied.resolvedFields) {
+      if (field.value?.trim()) extras[field.name] = field.value.trim()
+    }
+    const listingForTitle: Listing = {
+      ...listing,
+      specifics: { ...listing.specifics, extras },
+    }
+    const suggestedTitle = enrichEbayTitleTowardLimit(
+      listing.title,
+      listingForTitle
+    )
+
     return NextResponse.json({
       categoryId,
       formFields,
@@ -136,6 +155,9 @@ export async function POST(request: Request) {
       missingRequiredNames: missingNames,
       aspectFilledCount: filledNames.size,
       aspectTotalCount: relevant.length,
+      seoCompleted,
+      seoTotal,
+      suggestedTitle,
       aspectsPreview: Object.fromEntries(
         Object.entries(applied.aspects).map(([k, v]) => [k, v[0]])
       ),

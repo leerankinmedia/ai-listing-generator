@@ -9,6 +9,11 @@ import {
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import { ebayFetch } from "@/lib/marketplaces/adapters/ebay/client"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
+import {
+  EBAY_SEO_ASPECT_PRIORITY,
+  isMeasurementAspect,
+  isSeoPriorityAspect,
+} from "@/lib/listings/ebay-aspect-fields"
 
 export type EbayAspectValue = {
   localizedValue?: string
@@ -96,11 +101,13 @@ function confidenceForAspect(listing: Listing, aspectName: string): number | und
   const name = aspectName.toLowerCase()
   const fc = listing.fieldConfidence || {}
   if (name === "brand") return fc.brand?.confidence
-  if (name === "size") return fc.size?.confidence
+  if (name === "size" || name === "waist size") return fc.size?.confidence
   if (name === "color" || name === "colour") return fc.color?.confidence
-  if (name === "material") return fc.material?.confidence
-  if (name === "style") return fc.style?.confidence
-  if (name === "pattern") return fc.pattern?.confidence
+  if (name === "material" || name === "fabric type") return fc.material?.confidence
+  if (name === "style" || name === "fit" || name === "type" || name === "item type") {
+    return fc.style?.confidence
+  }
+  if (name === "pattern" || name === "theme") return fc.pattern?.confidence
   if (name === "department" || name === "gender") return fc.gender?.confidence
   if (name === "size type") return fc.size?.confidence
   return undefined
@@ -118,15 +125,28 @@ function listingCandidatesForAspect(
 
   switch (nameKey) {
     case "brand":
-      return [fromExtras, listing.specifics.brand, "Unbranded"]
+      // Never invent Unbranded — only use when AI/detected brand exists.
+      return [fromExtras, listing.specifics.brand]
     case "size":
       return [fromExtras, listing.specifics.size]
+    case "waist size":
+      // Measurement — explicit only, never invent from garment size letters.
+      return [
+        fromExtras,
+        extras["Waist Size"],
+        extras.waist,
+        // Numeric waist in size like "32x32" or "W32"
+        extractNumericWaist(listing.specifics.size || listing.title || ""),
+      ]
+    case "inseam":
+      return [
+        fromExtras,
+        extras.Inseam,
+        extras.inseam,
+        extractNumericInseam(listing.specifics.size || listing.title || ""),
+      ]
     case "color":
     case "colour":
-      // Prefer detected listing color before extras so a stale auto-mapped
-      // extras value (e.g. Black) cannot override Dark Gray → Gray.
-      // fieldConfidence keeps the original Vision color when specifics were
-      // overwritten by a prior bad aspect sync (e.g. Black).
       return [
         listing.fieldConfidence?.color?.value,
         listing.specifics.color,
@@ -134,30 +154,31 @@ function listingCandidatesForAspect(
       ]
     case "material":
       return [fromExtras, listing.specifics.material]
+    case "fabric type":
+      return [fromExtras, extras["Fabric Type"], listing.specifics.material]
     case "style":
-      return [fromExtras, listing.specifics.style]
+      return [
+        fromExtras,
+        listing.fieldConfidence?.style?.value,
+        listing.specifics.style,
+      ]
     case "pattern":
       return [fromExtras, listing.specifics.pattern]
     case "department":
     case "gender":
       return [fromExtras, listing.specifics.gender]
     case "size type":
-      return [
-        fromExtras,
-        inferSizeTypeFromListing(listing),
-        "Regular",
-        "Regular Size",
-      ]
+      // Only when size/title implies a type — never default to Regular.
+      return [fromExtras, inferSizeTypeFromListing(listing)]
     case "type":
     case "item type":
       return [
         fromExtras,
         listing.specifics.style,
-        listing.specifics.category,
-        listing.title,
+        inferGarmentType(listing),
       ]
     case "theme":
-      return [fromExtras, listing.specifics.pattern, listing.specifics.style]
+      return [fromExtras, listing.specifics.pattern]
     case "rise":
       return [fromExtras, extras.Rise, extras.rise]
     case "fit":
@@ -165,26 +186,64 @@ function listingCandidatesForAspect(
     case "fabric wash":
     case "wash":
       return [fromExtras, extras["Fabric Wash"], extras.Wash]
-    case "accents":
-      return [fromExtras, extras.Accents, listing.specifics.pattern]
     case "features":
       return [fromExtras, extras.Features]
     case "closure":
       return [fromExtras, extras.Closure]
     case "vintage":
-      return [fromExtras, extras.Vintage, "No"]
-    case "fabric type":
-      return [fromExtras, extras["Fabric Type"], listing.specifics.material]
+      // Only when explicitly known — never invent "No".
+      return [fromExtras, extras.Vintage]
+    case "season":
+      return [fromExtras, extras.Season]
+    case "pocket type":
+      return [fromExtras, extras["Pocket Type"], extras.Pocket]
+    case "country of origin":
+      return [fromExtras, extras["Country of Origin"], extras.Country]
     default:
       return [
         fromExtras,
         listing.specifics.extras?.[aspectName],
-        // Fall back to any extras key that case-insensitively matches.
         ...Object.entries(extras)
           .filter(([k]) => k.toLowerCase() === nameKey)
           .map(([, v]) => v),
       ]
   }
+}
+
+function extractNumericWaist(text: string): string | undefined {
+  const m =
+    text.match(/\b(?:w\s*)?(\d{2})\s*[x×\/]\s*\d{2}\b/i) ||
+    text.match(/\bw(?:aist)?[:\s-]*(\d{2})\b/i)
+  if (!m) return undefined
+  const n = Number(m[1])
+  if (n >= 22 && n <= 60) return String(n)
+  return undefined
+}
+
+function extractNumericInseam(text: string): string | undefined {
+  const m =
+    text.match(/\b\d{2}\s*[x×\/]\s*(\d{2})\b/i) ||
+    text.match(/\b(?:l|inseam)[:\s-]*(\d{2})\b/i)
+  if (!m) return undefined
+  const n = Number(m[1])
+  if (n >= 24 && n <= 38) return String(n)
+  return undefined
+}
+
+function inferGarmentType(listing: Listing): string | undefined {
+  const hay =
+    `${listing.specifics.category || ""} ${listing.title || ""} ${listing.specifics.style || ""}`.toLowerCase()
+  if (/\bjeans?\b/.test(hay)) return "Jeans"
+  if (/\bt-?shirts?\b|\btees?\b/.test(hay)) return "T-Shirt"
+  if (/\bhoodies?\b/.test(hay)) return "Hoodie"
+  if (/\bsweatshirts?\b/.test(hay)) return "Sweatshirt"
+  if (/\bjackets?\b/.test(hay)) return "Jacket"
+  if (/\bdresses?\b/.test(hay)) return "Dress"
+  if (/\bshorts?\b/.test(hay)) return "Shorts"
+  if (/\bskirts?\b/.test(hay)) return "Skirt"
+  if (/\bleggings?\b/.test(hay)) return "Leggings"
+  if (/\bpants?\b|\btrousers?\b/.test(hay)) return "Pants"
+  return undefined
 }
 
 /** True when Vision/detected color or form state still indicates gray-family. */
@@ -306,7 +365,11 @@ export function applyRequiredEbayAspects(
       name,
       listingCandidatesForAspect(listing, name),
       allowed,
-      { selectionOnly, highConfidence }
+      {
+        selectionOnly,
+        // Measurements: exact match only — never fuzzy-invent inches.
+        highConfidence: isMeasurementAspect(name) ? false : highConfidence,
+      }
     )
 
     if (inferred) {
@@ -318,12 +381,14 @@ export function applyRequiredEbayAspects(
 
     // Still missing — if AI had a near candidate, surface suggestedValue only when
     // it resolves to an exact allowed option (should be rare after match above).
-    const suggestedValue = matchExactEbayAspectValue(
-      name,
-      listingCandidatesForAspect(listing, name),
-      allowed,
-      { selectionOnly: true, highConfidence }
-    )
+    const suggestedValue = isMeasurementAspect(name)
+      ? undefined
+      : matchExactEbayAspectValue(
+          name,
+          listingCandidatesForAspect(listing, name),
+          allowed,
+          { selectionOnly: true, highConfidence }
+        )
 
     missingRequired.push({
       name,
@@ -332,27 +397,48 @@ export function applyRequiredEbayAspects(
     })
   }
 
-  // Also normalize non-required but commonly mapped aspects already present so
-  // publish never sends AI wording against a fixed selection list.
+  // Populate recommended / high-search clothing specifics with exact allowed
+  // values when confidently known. Never invent measurements or uncertain data.
+  const seoPriorityKeys = new Set(
+    EBAY_SEO_ASPECT_PRIORITY.map((n) => n.toLowerCase())
+  )
   for (const aspect of taxonomyAspects) {
     const name = aspect.localizedAspectName?.trim()
     if (!name || aspect.aspectConstraint?.aspectRequired) continue
+    const key = name.toLowerCase()
     const allowed = allowedValues(aspect)
-    if (allowed.length === 0) continue
     const selectionOnly =
       (aspect.aspectConstraint?.aspectMode || "").toUpperCase() ===
       "SELECTION_ONLY"
+    const isSeo = seoPriorityKeys.has(key) || isSeoPriorityAspect(name)
+    const highConfidence = isHighConfidenceField(
+      confidenceForAspect(listing, name)
+    )
     const current = aspects[name]?.[0]
+
+    // Skip inventing measurement aspects without an explicit candidate.
+    if (isMeasurementAspect(name)) {
+      const candidates = listingCandidatesForAspect(listing, name).filter(
+        (c) => c?.trim()
+      )
+      if (candidates.length === 0) {
+        if (current && allowed.length > 0 && !isExactAllowed(current, allowed)) {
+          delete aspects[name]
+        }
+        continue
+      }
+    }
+
     if (!current) {
+      // Only auto-fill SEO / recommended clothing aspects (or free-text with signal).
+      if (!isSeo && allowed.length > 0) continue
       const inferred = matchExactEbayAspectValue(
         name,
         listingCandidatesForAspect(listing, name),
         allowed,
         {
-          selectionOnly,
-          highConfidence: isHighConfidenceField(
-            confidenceForAspect(listing, name)
-          ),
+          selectionOnly: selectionOnly || allowed.length > 0,
+          highConfidence: isMeasurementAspect(name) ? false : highConfidence,
         }
       )
       if (inferred) {
@@ -361,6 +447,7 @@ export function applyRequiredEbayAspects(
       }
       continue
     }
+    if (allowed.length === 0) continue
     if (isExactAllowed(current, allowed)) {
       const exact =
         allowed.find((a) => a.toLowerCase() === current.toLowerCase()) ||
@@ -374,9 +461,7 @@ export function applyRequiredEbayAspects(
       allowed,
       {
         selectionOnly,
-        highConfidence: isHighConfidenceField(
-          confidenceForAspect(listing, name)
-        ),
+        highConfidence: isMeasurementAspect(name) ? false : highConfidence,
       }
     )
     if (normalized) {

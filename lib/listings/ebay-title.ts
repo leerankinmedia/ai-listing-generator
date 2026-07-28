@@ -1,5 +1,5 @@
 /**
- * Build / extend eBay titles toward 80 characters using known attributes.
+ * Build / extend eBay titles toward 70–80 characters using known attributes.
  * No filler keywords — only real Brand, Department, Size, Color, Style, Type, Material.
  */
 
@@ -7,6 +7,7 @@ import { splitPrimaryColorAndDetails } from "@/lib/marketplaces/adapters/ebay/as
 import type { Listing } from "@/lib/types"
 
 export const EBAY_TITLE_MAX = 80
+export const EBAY_TITLE_TARGET_MIN = 70
 
 function cleanPart(value: string | undefined | null): string {
   return (value || "").replace(/\s+/g, " ").trim()
@@ -34,23 +35,37 @@ function primaryColor(raw: string): string {
   return split.primaryLabel || raw.split(/[/,|]/)[0]?.trim() || raw
 }
 
+function enoughSeoKeywords(listing: Listing): boolean {
+  const s = listing.specifics
+  const extras = s.extras || {}
+  const signals = [
+    s.brand,
+    s.gender || extras.Department,
+    s.size,
+    extras.Color || extras.Colour || s.color,
+    s.style || extras.Type || extras.type,
+  ].filter((v) => cleanPart(v) && !isUnknown(cleanPart(v)))
+  return signals.length >= 3
+}
+
 /**
- * Assemble a search-optimized title from listing attributes, up to 80 chars.
+ * Assemble a search-optimized title from listing attributes, targeting 70–80 chars
+ * when enough accurate keywords are available. Never adds irrelevant filler.
  */
 export function buildEbayOptimizedTitle(listing: Listing): string {
   const s = listing.specifics
   const extras = s.extras || {}
   const brand = cleanPart(s.brand)
   const dept = cleanPart(s.gender || extras.Department || extras.department)
-  const size = cleanPart(s.size)
-  const colorRaw = cleanPart(
-    extras.Color || extras.Colour || s.color
-  )
+  const size = cleanPart(s.size || extras.Size)
+  const colorRaw = cleanPart(extras.Color || extras.Colour || s.color)
   const color = colorRaw && !isUnknown(colorRaw) ? primaryColor(colorRaw) : ""
-  const style = cleanPart(s.style)
+  const style = cleanPart(s.style || extras.Style)
   const type = cleanPart(extras.Type || extras.type || extras["Item Type"])
-  const material = cleanPart(s.material)
-  const pattern = cleanPart(s.pattern)
+  const material = cleanPart(s.material || extras.Material)
+  const pattern = cleanPart(s.pattern || extras.Pattern)
+  const fit = cleanPart(extras.Fit)
+  const sizeType = cleanPart(extras["Size Type"])
 
   const parts: string[] = []
   const push = (part: string) => {
@@ -61,16 +76,32 @@ export function buildEbayOptimizedTitle(listing: Listing): string {
 
   push(brand && !isUnknown(brand) ? brand : "")
   if (dept && !isUnknown(dept)) push(titleCaseDept(dept))
+  if (sizeType && !/^regular$/i.test(sizeType)) push(sizeType)
   push(size)
   push(color)
+
   // Prefer type then style; avoid duplicating similar tokens.
   if (type && !isUnknown(type)) push(type)
   else if (style && !isUnknown(style)) push(style)
-  else push(style)
 
-  // Use remaining space for material / pattern / style if not already used.
-  const joined = parts.join(" ")
-  if (joined.length < 55) {
+  if (
+    parts.join(" ").length < 60 &&
+    fit &&
+    !parts.some((p) => p.toLowerCase() === fit.toLowerCase())
+  ) {
+    push(fit)
+  }
+
+  if (
+    parts.join(" ").length < 65 &&
+    style &&
+    type &&
+    !parts.some((p) => p.toLowerCase() === style.toLowerCase())
+  ) {
+    push(style)
+  }
+
+  if (parts.join(" ").length < 70) {
     if (
       material &&
       !isUnknown(material) &&
@@ -80,25 +111,27 @@ export function buildEbayOptimizedTitle(listing: Listing): string {
       push(material)
     }
   }
-  if (parts.join(" ").length < 65 && pattern && !isUnknown(pattern) && !/^solid$/i.test(pattern)) {
-    push(pattern)
-  }
   if (
-    parts.join(" ").length < 70 &&
-    style &&
-    !isUnknown(style) &&
-    type &&
-    !parts.some((p) => p.toLowerCase() === style.toLowerCase())
+    parts.join(" ").length < 75 &&
+    pattern &&
+    !isUnknown(pattern) &&
+    !/^solid$/i.test(pattern)
   ) {
-    push(style)
+    push(pattern)
   }
 
   let title = parts.join(" ").replace(/\s+/g, " ").trim()
   if (!title) title = cleanPart(listing.title).slice(0, EBAY_TITLE_MAX)
 
-  // If AI title is longer/richer and already within 80, prefer extending from it
-  // when our structured build is much shorter.
   const existing = cleanPart(listing.title).slice(0, EBAY_TITLE_MAX)
+  // Prefer structured SEO build when it reaches the 70–80 target window.
+  if (
+    title.length >= EBAY_TITLE_TARGET_MIN &&
+    title.length <= EBAY_TITLE_MAX
+  ) {
+    return title
+  }
+  // If structured build is short but existing AI title is richer and still ≤80, keep it.
   if (existing.length >= title.length + 8 && existing.length <= EBAY_TITLE_MAX) {
     return existing
   }
@@ -106,17 +139,35 @@ export function buildEbayOptimizedTitle(listing: Listing): string {
   return title.slice(0, EBAY_TITLE_MAX)
 }
 
-/** Extend an existing title toward 80 chars with unused known attributes. */
+/**
+ * Generate / extend an SEO-focused eBay title toward 70–80 chars when enough
+ * accurate keywords exist. Never pads with irrelevant filler.
+ */
 export function enrichEbayTitleTowardLimit(
   title: string,
   listing: Listing
 ): string {
-  let current = cleanPart(title).slice(0, EBAY_TITLE_MAX)
-  if (current.length >= 75) return current
+  const current = cleanPart(title).slice(0, EBAY_TITLE_MAX)
+  if (current.length >= EBAY_TITLE_TARGET_MIN && current.length <= EBAY_TITLE_MAX) {
+    return current
+  }
+
+  if (!enoughSeoKeywords(listing) && current.length >= 40) {
+    // Not enough accurate keywords to safely rebuild — keep current, no filler.
+    return current
+  }
 
   const built = buildEbayOptimizedTitle({ ...listing, title: current })
+  if (
+    built.length >= EBAY_TITLE_TARGET_MIN &&
+    built.length <= EBAY_TITLE_MAX
+  ) {
+    return built
+  }
   if (built.length > current.length) return built.slice(0, EBAY_TITLE_MAX)
 
+  // Extend existing with unused known attributes only (no filler words).
+  let nextTitle = current
   const extras = listing.specifics.extras || {}
   const candidates = [
     listing.specifics.brand,
@@ -125,15 +176,17 @@ export function enrichEbayTitleTowardLimit(
     primaryColor(extras.Color || listing.specifics.color || ""),
     extras.Type || extras.type,
     listing.specifics.style,
+    extras.Fit,
     listing.specifics.pattern,
   ]
     .map(cleanPart)
     .filter((p) => p && !isUnknown(p))
 
   for (const part of candidates) {
-    if (current.toLowerCase().includes(part.toLowerCase())) continue
-    const next = `${current} ${part}`.replace(/\s+/g, " ").trim()
-    if (next.length <= EBAY_TITLE_MAX) current = next
+    if (nextTitle.length >= EBAY_TITLE_TARGET_MIN) break
+    if (nextTitle.toLowerCase().includes(part.toLowerCase())) continue
+    const next = `${nextTitle} ${part}`.replace(/\s+/g, " ").trim()
+    if (next.length <= EBAY_TITLE_MAX) nextTitle = next
   }
-  return current.slice(0, EBAY_TITLE_MAX)
+  return nextTitle.slice(0, EBAY_TITLE_MAX)
 }

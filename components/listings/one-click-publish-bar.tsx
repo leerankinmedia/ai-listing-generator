@@ -20,6 +20,10 @@ import { ShippingPackageFields } from "@/components/listings/shipping-package-fi
 import { PrePublishReviewCard } from "@/components/listings/pre-publish-review"
 import { ensureListingInventorySku } from "@/lib/listings/sku"
 import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
+import {
+  applyExactAspectsToListing,
+  validateAspectsAgainstOptions,
+} from "@/lib/listings/ebay-aspect-fields"
 import { persistListing } from "@/lib/listings/repository"
 import { ensureDurableOriginalImageUrls } from "@/lib/listings/durable-images"
 import { readApiJsonResponse } from "@/lib/api/read-json-response"
@@ -135,32 +139,119 @@ export function OneClickPublishBar({
         throw new Error("Sign in required to publish.")
       }
 
+      let listingForChecks = listing
+
       if (selected.includes("ebay")) {
-        const packageBlock = ebayShippingPackageBlockMessage(listing)
+        const packageBlock = ebayShippingPackageBlockMessage(listingForChecks)
         if (packageBlock) {
           setError(packageBlock)
           setPublishing(false)
           return
         }
-        const freeBlock = ebayFreeShippingBlockMessage(listing)
+        const freeBlock = ebayFreeShippingBlockMessage(listingForChecks)
         if (freeBlock) {
           setError(freeBlock)
           setPublishing(false)
           return
         }
-        if (aspectMeta?.missing && aspectMeta.missing.length > 0) {
-          setError(
-            `Complete required item specifics in the form above: ${aspectMeta.missing.join(", ")}.`
+
+        // Silently re-validate specifics against eBay exact options; only ask
+        // about required fields that still cannot be determined confidently.
+        try {
+          const previewRes = await fetch(
+            "/api/marketplaces/ebay/aspects-preview",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ listing: listingForChecks }),
+            }
           )
-          setPublishing(false)
-          return
+          if (previewRes.ok) {
+            const preview = (await previewRes.json()) as {
+              formFields?: Array<{
+                name: string
+                required: boolean
+                allowedValues?: string[]
+                value?: string
+                suggestedValue?: string
+              }>
+              resolvedFields?: Array<{ name: string; value: string }>
+              missingRequiredNames?: string[]
+              suggestedTitle?: string
+            }
+            const optionsByName = new Map<string, string[]>()
+            for (const field of preview.formFields || []) {
+              if (field.allowedValues?.length) {
+                optionsByName.set(field.name.toLowerCase(), field.allowedValues)
+              }
+            }
+            const merged = [
+              ...(preview.resolvedFields || []),
+              ...((preview.formFields || [])
+                .filter((f) => f.value || f.suggestedValue)
+                .map((f) => ({
+                  name: f.name,
+                  value: (f.value || f.suggestedValue || "").trim(),
+                }))
+                .filter((f) => f.value) as Array<{ name: string; value: string }>),
+            ]
+            listingForChecks = applyExactAspectsToListing(
+              listingForChecks,
+              merged,
+              optionsByName
+            )
+            const validated = validateAspectsAgainstOptions(
+              listingForChecks,
+              preview.formFields || []
+            )
+            listingForChecks = validated.listing
+            if (
+              preview.suggestedTitle &&
+              preview.suggestedTitle.length >= 70 &&
+              preview.suggestedTitle.length <= 80
+            ) {
+              listingForChecks = {
+                ...listingForChecks,
+                title: preview.suggestedTitle,
+              }
+            }
+            onListingChange?.(listingForChecks)
+            const missing =
+              validated.missingRequired.length > 0
+                ? validated.missingRequired
+                : preview.missingRequiredNames || []
+            if (missing.length > 0) {
+              setError(
+                `Complete required item specifics in the form above: ${missing.join(", ")}.`
+              )
+              setPublishing(false)
+              return
+            }
+          } else if (aspectMeta?.missing && aspectMeta.missing.length > 0) {
+            setError(
+              `Complete required item specifics in the form above: ${aspectMeta.missing.join(", ")}.`
+            )
+            setPublishing(false)
+            return
+          }
+        } catch {
+          if (aspectMeta?.missing && aspectMeta.missing.length > 0) {
+            setError(
+              `Complete required item specifics in the form above: ${aspectMeta.missing.join(", ")}.`
+            )
+            setPublishing(false)
+            return
+          }
         }
       }
 
       // Assign inventory SKU only when automatic SKU generation is enabled.
       const prepared = ensureListingInventorySku({
-        ...listing,
-        title: enrichEbayTitleTowardLimit(listing.title, listing),
+        ...listingForChecks,
+        title: enrichEbayTitleTowardLimit(
+          listingForChecks.title,
+          listingForChecks
+        ),
       })
 
       const durableImages = await ensureDurableOriginalImageUrls(

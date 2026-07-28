@@ -83,4 +83,33 @@ describe("ebay title enrichment", () => {
     assert.match(title, /Nike/)
     assert.match(title, /XL|Gray|Graphic/i)
   })
+
+  it("targets 70–80 characters when enough SEO keywords exist", () => {
+    const listing = baseListing({
+      title: "Levi's",
+      specifics: {
+        brand: "Levi's",
+        gender: "Men",
+        size: "32x32",
+        color: "Blue",
+        style: "Straight",
+        material: "Denim",
+        pattern: "Solid",
+        extras: {
+          Type: "Jeans",
+          Department: "Men",
+          Color: "Blue",
+          Style: "Straight",
+          Fit: "Regular",
+        },
+      },
+    })
+    const title = enrichEbayTitleTowardLimit(listing.title, listing)
+    assert.ok(title.length <= 80)
+    assert.ok(
+      title.length >= 70 || title.split(" ").length >= 4,
+      `expected SEO-rich title, got (${title.length}): ${title}`
+    )
+    assert.ok(!/best|deal|nice|awesome|quality/i.test(title))
+  })
 })

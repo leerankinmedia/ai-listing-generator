@@ -1,20 +1,24 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import { Check, ChevronDown, ChevronRight } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
   applyExactAspectsToListing,
+  autoFillHighConfidenceAspects,
   countCompletedAspects,
   readAspectValue,
   resolveSelectValue,
   splitAspectFieldsForDisplay,
   validateAspectsAgainstOptions,
   writeAspectValue,
+  type AspectFieldView,
   type EbayAspectFormField,
 } from "@/lib/listings/ebay-aspect-fields"
 import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
 import type { Listing } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
 type AspectsMeta = {
   missing: string[]
@@ -31,21 +35,13 @@ function computeMissing(
       if (!f.required) return false
       const raw = readAspectValue(listing, f.name)
       const options = f.allowedValues || []
-      const nameKey = f.name.trim().toLowerCase()
-      const detected =
-        nameKey === "color" || nameKey === "colour"
-          ? listing.fieldConfidence?.color?.value
-          : nameKey === "style"
-            ? listing.fieldConfidence?.style?.value || listing.specifics.style
-            : undefined
       const value =
         options.length > 0
           ? resolveSelectValue(
               f.name,
               raw,
               options,
-              f.suggestedValue || f.value,
-              detected
+              f.suggestedValue || f.value
             )
           : raw
       return !value.trim()
@@ -53,50 +49,50 @@ function computeMissing(
     .map((f) => f.name)
 }
 
+function StatusBadge({
+  status,
+}: {
+  status: AspectFieldView["status"]
+}) {
+  if (status === "auto_filled") {
+    return (
+      <span className="inline-flex items-center gap-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+        Auto-filled
+        <Check className="h-3 w-3" aria-hidden />
+      </span>
+    )
+  }
+  if (status === "needs_input" || status === "needs_review") {
+    return (
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-destructive">
+        Needs Review
+      </span>
+    )
+  }
+  return null
+}
+
+/** Editable control — only used when the seller must act. */
 function AspectFieldEditor({
-  field,
+  view,
   listing,
   onChange,
   disabled,
 }: {
-  field: EbayAspectFormField
+  view: AspectFieldView
   listing: Listing
   onChange: (listing: Listing) => void
   disabled?: boolean
 }) {
+  const { field } = view
   const options = field.allowedValues || []
-  const raw = readAspectValue(listing, field.name)
-  const nameKey = field.name.trim().toLowerCase()
-  const detected =
-    nameKey === "color" || nameKey === "colour"
-      ? listing.fieldConfidence?.color?.value
-      : nameKey === "style"
-        ? listing.fieldConfidence?.style?.value || listing.specifics.style
-        : undefined
-  const value =
-    options.length > 0
-      ? resolveSelectValue(
-          field.name,
-          raw,
-          options,
-          field.suggestedValue || field.value,
-          detected
-        )
-      : raw
-  const empty = !value.trim()
-  const showRequired = field.required && empty
+  const value = view.value
 
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-2">
         <Label htmlFor={`ebay-form-aspect-${field.name}`}>{field.name}</Label>
-        {showRequired ? (
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-destructive">
-            Required
-          </span>
-        ) : field.required ? (
-          <span className="text-[11px] text-muted-foreground">Required</span>
-        ) : null}
+        <StatusBadge status={view.status} />
       </div>
       {options.length > 0 ? (
         <select
@@ -130,9 +126,52 @@ function AspectFieldEditor({
   )
 }
 
+/** Compact read-only row for auto-filled values inside More. */
+function AutoFilledRow({
+  view,
+  listing,
+  onChange,
+  disabled,
+  editing,
+  onEdit,
+}: {
+  view: AspectFieldView
+  listing: Listing
+  onChange: (listing: Listing) => void
+  disabled?: boolean
+  editing: boolean
+  onEdit: () => void
+}) {
+  if (editing) {
+    return (
+      <AspectFieldEditor
+        view={{ ...view, status: "needs_review" }}
+        listing={listing}
+        onChange={onChange}
+        disabled={disabled}
+      />
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onEdit}
+      className="flex w-full items-center justify-between gap-2 rounded-lg border border-transparent px-1 py-1.5 text-left hover:border-border hover:bg-card/60"
+    >
+      <div className="min-w-0">
+        <p className="text-xs text-muted-foreground">{view.field.name}</p>
+        <p className="truncate text-sm font-medium">{view.value}</p>
+      </div>
+      <StatusBadge status="auto_filled" />
+    </button>
+  )
+}
+
 /**
- * Required + SEO clothing item specifics in the main listing editor.
- * Primary fields stay visible; the rest collapse under “More item specifics.”
+ * One-minute listing UX: only ask for required fields AI cannot determine.
+ * High-confidence (≥90%) values auto-select exact eBay options and collapse.
  */
 export function EbayItemSpecificsFields({
   listing,
@@ -149,6 +188,7 @@ export function EbayItemSpecificsFields({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
+  const [editingNames, setEditingNames] = useState<Set<string>>(new Set())
   const appliedKeyRef = useRef<string>("")
   const onMetaChangeRef = useRef(onMetaChange)
   const onChangeRef = useRef(onChange)
@@ -184,8 +224,6 @@ export function EbayItemSpecificsFields({
           formFields?: EbayAspectFormField[]
           resolvedFields?: Array<{ name: string; value: string }>
           missingRequiredNames?: string[]
-          aspectFilledCount?: number
-          aspectTotalCount?: number
           seoCompleted?: number
           seoTotal?: number
           suggestedTitle?: string
@@ -213,20 +251,11 @@ export function EbayItemSpecificsFields({
           const options = f.allowedValues || []
           if (options.length === 0) return []
           const raw = readAspectValue(listing, f.name)
-          const detected =
-            f.name.trim().toLowerCase() === "color" ||
-            f.name.trim().toLowerCase() === "colour"
-              ? listing.fieldConfidence?.color?.value
-              : f.name.trim().toLowerCase() === "style"
-                ? listing.fieldConfidence?.style?.value ||
-                  listing.specifics.style
-                : undefined
           const exact = resolveSelectValue(
             f.name,
             raw,
             options,
-            f.suggestedValue || f.value,
-            detected
+            f.suggestedValue || f.value
           )
           return exact ? [{ name: f.name, value: exact }] : []
         })
@@ -246,34 +275,29 @@ export function EbayItemSpecificsFields({
           )
         }
 
-        // Silently normalize any invalid selection-list values.
+        // ≥90% confidence → force exact eBay selection without user interaction.
+        nextListing = autoFillHighConfidenceAspects(nextListing, formFields)
+
         const validated = validateAspectsAgainstOptions(nextListing, formFields)
         nextListing = validated.listing
 
-        // SEO title 70–80 when enough accurate keywords are available.
         const suggested =
           json.suggestedTitle ||
           enrichEbayTitleTowardLimit(nextListing.title, nextListing)
         if (
           suggested &&
           suggested !== nextListing.title &&
-          suggested.length >= 70 &&
           suggested.length <= 80
         ) {
-          nextListing = {
-            ...nextListing,
-            title: suggested,
-            updatedAt: new Date().toISOString(),
-          }
-        } else if (
-          suggested &&
-          suggested.length > nextListing.title.length &&
-          suggested.length <= 80
-        ) {
-          nextListing = {
-            ...nextListing,
-            title: suggested,
-            updatedAt: new Date().toISOString(),
+          if (
+            (suggested.length >= 70 && suggested.length <= 80) ||
+            suggested.length > nextListing.title.length
+          ) {
+            nextListing = {
+              ...nextListing,
+              title: suggested,
+              updatedAt: new Date().toISOString(),
+            }
           }
         }
 
@@ -308,7 +332,6 @@ export function EbayItemSpecificsFields({
     return () => {
       cancelled = true
     }
-    // Prefetch once per listing / category — title enrichment must not re-trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listing.id, listing.specifics.category])
 
@@ -329,7 +352,7 @@ export function EbayItemSpecificsFields({
   if (loading && fields.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        Loading eBay item specifics…
+        Matching eBay item specifics…
       </p>
     )
   }
@@ -337,7 +360,7 @@ export function EbayItemSpecificsFields({
   if (error && fields.length === 0) {
     return (
       <p className="text-sm text-muted-foreground" role="status">
-        {error} You can still edit Brand, Size, Color, and Style below.
+        {error} You can still edit core attributes below.
       </p>
     )
   }
@@ -346,22 +369,36 @@ export function EbayItemSpecificsFields({
     return null
   }
 
-  const { primary, more } = splitAspectFieldsForDisplay(fields, listing)
+  const { primary, more, autoFilledCount } = splitAspectFieldsForDisplay(
+    fields,
+    listing
+  )
   const counts = countCompletedAspects(fields, listing)
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2">
-        {primary.map((field) => (
-          <AspectFieldEditor
-            key={field.name}
-            field={field}
-            listing={listing}
-            onChange={onChange}
-            disabled={disabled}
-          />
-        ))}
-      </div>
+      {primary.length > 0 ? (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Only fields AI couldn&apos;t determine with high confidence:
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {primary.map((view) => (
+              <AspectFieldEditor
+                key={view.field.name}
+                view={view}
+                listing={listing}
+                onChange={onChange}
+                disabled={disabled}
+              />
+            ))}
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          All required item specifics were auto-filled from your photos.
+        </p>
+      )}
 
       {more.length > 0 && (
         <div className="rounded-xl border border-border bg-secondary/20">
@@ -370,27 +407,55 @@ export function EbayItemSpecificsFields({
             className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left"
             onClick={() => setMoreOpen((o) => !o)}
           >
-            <div>
-              <p className="text-sm font-semibold">More item specifics</p>
-              <p className="text-xs text-muted-foreground">
-                {counts.completed} of {counts.total} completed
-              </p>
+            <div className="flex items-start gap-2">
+              {moreOpen ? (
+                <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
+              <div>
+                <p className="text-sm font-semibold">More item specifics</p>
+                <p className="text-xs text-muted-foreground">
+                  {counts.completed} of {counts.total} completed
+                  {autoFilledCount > 0
+                    ? ` · ${autoFilledCount} auto-filled`
+                    : ""}
+                </p>
+              </div>
             </div>
             <span className="text-xs text-muted-foreground">
               {moreOpen ? "Hide" : "Show"}
             </span>
           </button>
           {moreOpen && (
-            <div className="grid gap-4 border-t border-border p-3 sm:grid-cols-2">
-              {more.map((field) => (
-                <AspectFieldEditor
-                  key={field.name}
-                  field={field}
-                  listing={listing}
-                  onChange={onChange}
-                  disabled={disabled}
-                />
-              ))}
+            <div
+              className={cn(
+                "grid gap-2 border-t border-border p-3 sm:grid-cols-2"
+              )}
+            >
+              {more.map((view) =>
+                view.status === "auto_filled" ? (
+                  <AutoFilledRow
+                    key={view.field.name}
+                    view={view}
+                    listing={listing}
+                    onChange={onChange}
+                    disabled={disabled}
+                    editing={editingNames.has(view.field.name)}
+                    onEdit={() =>
+                      setEditingNames((prev) => new Set(prev).add(view.field.name))
+                    }
+                  />
+                ) : (
+                  <AspectFieldEditor
+                    key={view.field.name}
+                    view={view}
+                    listing={listing}
+                    onChange={onChange}
+                    disabled={disabled}
+                  />
+                )
+              )}
             </div>
           )}
         </div>

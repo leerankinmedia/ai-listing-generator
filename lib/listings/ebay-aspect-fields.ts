@@ -1,6 +1,6 @@
 /**
  * Shared helpers for eBay item-specific fields in the listing editor / publish UI.
- * SEO clothing priorities + primary vs collapsed form layout.
+ * High-confidence AI auto-fill + compact one-minute listing UX.
  */
 
 import {
@@ -20,19 +20,34 @@ const KNOWN_SPECIFIC_KEYS = new Set([
   "gender",
 ])
 
+/** Auto-select eBay values without user interaction at this confidence. */
+export const ASPECT_AUTO_FILL_CONFIDENCE = 0.9
+
 export type EbayAspectFormField = {
   name: string
   required: boolean
   allowedValues?: string[]
   suggestedValue?: string
   value?: string
-  /** Show on the main page (not inside "More item specifics"). */
+  /** @deprecated Primary visibility is derived from needs-input state. */
   primary?: boolean
+}
+
+export type AspectFieldStatus =
+  | "auto_filled"
+  | "needs_input"
+  | "needs_review"
+  | "optional_blank"
+
+export type AspectFieldView = {
+  field: EbayAspectFormField
+  value: string
+  status: AspectFieldStatus
+  confidence?: number
 }
 
 /**
  * High-search clothing specifics — populate when confidently known.
- * Order matters for title/SEO preference.
  */
 export const EBAY_SEO_ASPECT_PRIORITY = [
   "Brand",
@@ -59,7 +74,7 @@ export const EBAY_SEO_ASPECT_PRIORITY = [
   "Country of Origin",
 ] as const
 
-/** Most important editable fields kept visible on the main listing page. */
+/** @deprecated Visibility is based on needs-input, not a fixed primary list. */
 export const EBAY_PRIMARY_VISIBLE_ASPECTS = [
   "Brand",
   "Size Type",
@@ -70,9 +85,6 @@ export const EBAY_PRIMARY_VISIBLE_ASPECTS = [
   "Type",
 ] as const
 
-/**
- * Measurement / uncertain aspects — never invent; only fill from explicit data.
- */
 export const EBAY_MEASUREMENT_ASPECTS = new Set([
   "waist size",
   "inseam",
@@ -101,6 +113,35 @@ export function isSeoPriorityAspect(name: string): boolean {
   return EBAY_SEO_ASPECT_PRIORITY.some((n) => n.toLowerCase() === key)
 }
 
+/** Map Taxonomy aspect names onto listing.fieldConfidence keys. */
+export function confidenceForListingAspect(
+  listing: Listing,
+  aspectName: string
+): number | undefined {
+  const name = aspectName.trim().toLowerCase()
+  const fc = listing.fieldConfidence || {}
+  if (name === "brand") return fc.brand?.confidence
+  if (name === "size" || name === "waist size") return fc.size?.confidence
+  if (name === "color" || name === "colour") return fc.color?.confidence
+  if (name === "material" || name === "fabric type") return fc.material?.confidence
+  if (
+    name === "style" ||
+    name === "fit" ||
+    name === "type" ||
+    name === "item type"
+  ) {
+    return fc.style?.confidence
+  }
+  if (name === "pattern" || name === "theme") return fc.pattern?.confidence
+  if (name === "department" || name === "gender") return fc.gender?.confidence
+  if (name === "size type") return fc.size?.confidence
+  return undefined
+}
+
+export function isAutoFillConfidence(confidence: number | undefined): boolean {
+  return typeof confidence === "number" && confidence >= ASPECT_AUTO_FILL_CONFIDENCE
+}
+
 export function mapAspectToListingField(
   aspectName: string
 ): keyof Listing["specifics"] | "extras" {
@@ -114,6 +155,35 @@ export function mapAspectToListingField(
 export function isExactOption(value: string, options: string[]): boolean {
   const key = value.trim().toLowerCase()
   return options.some((o) => o.trim().toLowerCase() === key)
+}
+
+export function detectedValueForAspect(
+  listing: Listing,
+  aspectName: string
+): string | undefined {
+  const name = aspectName.trim().toLowerCase()
+  const fc = listing.fieldConfidence || {}
+  if (name === "brand") return fc.brand?.value || listing.specifics.brand
+  if (name === "size" || name === "waist size") {
+    return fc.size?.value || listing.specifics.size
+  }
+  if (name === "color" || name === "colour") {
+    return fc.color?.value || listing.specifics.color
+  }
+  if (name === "material" || name === "fabric type") {
+    return fc.material?.value || listing.specifics.material
+  }
+  if (name === "style" || name === "fit" || name === "type" || name === "item type") {
+    return fc.style?.value || listing.specifics.style
+  }
+  if (name === "pattern" || name === "theme") {
+    return fc.pattern?.value || listing.specifics.pattern
+  }
+  if (name === "department" || name === "gender") {
+    return fc.gender?.value || listing.specifics.gender
+  }
+  if (name === "size type") return fc.size?.value || listing.specifics.size
+  return undefined
 }
 
 /** Apply exact eBay values into listing state without overwriting manual exact picks. */
@@ -158,7 +228,6 @@ export function applyExactAspectsToListing(
       changed = true
     }
 
-    // Color: keep AI-detected wording in specifics.color.
     if (target !== "extras" && !isColorAspect) {
       const current = (specifics[target] as string | undefined)?.trim()
       if (
@@ -223,7 +292,6 @@ export function resolveSelectValue(
 export function readAspectValue(listing: Listing, name: string): string {
   const fromExtras = listing.specifics.extras?.[name]
   if (fromExtras?.trim()) return fromExtras
-  // Case-insensitive extras lookup
   const extras = listing.specifics.extras || {}
   const hit = Object.entries(extras).find(
     ([k]) => k.toLowerCase() === name.trim().toLowerCase()
@@ -264,40 +332,104 @@ export function writeAspectValue(
   }
 }
 
+export function resolveAspectFieldValue(
+  field: EbayAspectFormField,
+  listing: Listing
+): string {
+  const options = field.allowedValues || []
+  const raw = readAspectValue(listing, field.name)
+  const detected = detectedValueForAspect(listing, field.name)
+  if (options.length > 0) {
+    return resolveSelectValue(
+      field.name,
+      raw,
+      options,
+      field.suggestedValue || field.value,
+      detected
+    )
+  }
+  return raw.trim() || field.value?.trim() || ""
+}
+
 /**
- * Split form fields into primary (main page) vs more (collapsed).
- * Missing required always stay primary so the seller sees them early.
+ * Classify each aspect for the one-minute listing UI.
+ * Auto-filled (≥90% + exact eBay match, or already resolved) never needs a main-page dropdown.
+ */
+export function classifyAspectField(
+  field: EbayAspectFormField,
+  listing: Listing
+): AspectFieldView {
+  const confidence = confidenceForListingAspect(listing, field.name)
+  const value = resolveAspectFieldValue(field, listing)
+  const empty = !value.trim()
+
+  if (!empty) {
+    return {
+      field,
+      value,
+      status: "auto_filled",
+      confidence,
+    }
+  }
+
+  if (field.required) {
+    // Required + empty: seller must provide input (AI uncertain / no exact match).
+    return {
+      field,
+      value: "",
+      status: "needs_input",
+      confidence,
+    }
+  }
+
+  // Optional + empty — hide from UI (no empty dropdowns).
+  return { field, value: "", status: "optional_blank", confidence }
+}
+
+/**
+ * Main page: only required fields that genuinely need user input.
+ * Everything else (auto-filled + optional) goes under More item specifics.
+ * Empty optional fields are omitted entirely (no empty dropdowns).
  */
 export function splitAspectFieldsForDisplay(
   fields: EbayAspectFormField[],
   listing: Listing
-): { primary: EbayAspectFormField[]; more: EbayAspectFormField[] } {
-  const primary: EbayAspectFormField[] = []
-  const more: EbayAspectFormField[] = []
+): {
+  primary: AspectFieldView[]
+  more: AspectFieldView[]
+  autoFilledCount: number
+  hiddenBlankOptional: number
+} {
+  const primary: AspectFieldView[] = []
+  const more: AspectFieldView[] = []
+  let autoFilledCount = 0
+  let hiddenBlankOptional = 0
 
   for (const field of fields) {
-    const raw = readAspectValue(listing, field.name)
-    const options = field.allowedValues || []
-    const value =
-      options.length > 0
-        ? resolveSelectValue(
-            field.name,
-            raw,
-            options,
-            field.suggestedValue || field.value
-          )
-        : raw
-    const empty = !value.trim()
-    const forcePrimary =
-      field.primary === true ||
-      isPrimaryVisibleAspect(field.name) ||
-      (field.required && empty)
+    const view = classifyAspectField(field, listing)
 
-    if (forcePrimary) primary.push(field)
-    else more.push(field)
+    if (view.status === "optional_blank") {
+      // Never show empty optional dropdowns.
+      hiddenBlankOptional += 1
+      continue
+    }
+
+    if (view.status === "auto_filled") {
+      autoFilledCount += 1
+      more.push(view)
+      continue
+    }
+
+    // needs_input / needs_review on required → main page.
+    // Optional needs_review (rare) → more with badge, editable when expanded.
+    if (field.required && (view.status === "needs_input" || view.status === "needs_review")) {
+      primary.push(view)
+    } else {
+      more.push(view)
+    }
   }
 
-  return { primary, more }
+  return { primary, more, autoFilledCount, hiddenBlankOptional }
 }
 
 export function countCompletedAspects(
@@ -305,26 +437,62 @@ export function countCompletedAspects(
   listing: Listing
 ): { completed: number; total: number } {
   let completed = 0
+  let total = 0
   for (const field of fields) {
-    const raw = readAspectValue(listing, field.name)
-    const options = field.allowedValues || []
-    const value =
-      options.length > 0
-        ? resolveSelectValue(
-            field.name,
-            raw,
-            options,
-            field.suggestedValue || field.value
-          )
-        : raw.trim() || field.value || ""
-    if (value.trim()) completed += 1
+    const view = classifyAspectField(field, listing)
+    // Don't count hidden blank optionals toward the total sellers care about.
+    if (view.status === "optional_blank") continue
+    total += 1
+    if (view.value.trim()) completed += 1
   }
-  return { completed, total: fields.length }
+  // If everything is blank optional, fall back to full field count for the label.
+  if (total === 0) {
+    return {
+      completed: fields.filter((f) => resolveAspectFieldValue(f, listing).trim())
+        .length,
+      total: fields.length,
+    }
+  }
+  return { completed, total }
+}
+
+/**
+ * When confidence ≥ 90% and an exact eBay option exists, force-apply it.
+ */
+export function autoFillHighConfidenceAspects(
+  listing: Listing,
+  fields: EbayAspectFormField[]
+): Listing {
+  const optionsByName = new Map<string, string[]>()
+  const toApply: Array<{ name: string; value: string }> = []
+
+  for (const field of fields) {
+    const confidence = confidenceForListingAspect(listing, field.name)
+    if (!isAutoFillConfidence(confidence)) continue
+    const options = field.allowedValues || []
+    const detected = detectedValueForAspect(listing, field.name)
+    const raw = readAspectValue(listing, field.name)
+    if (options.length === 0) {
+      const free = (raw || detected || field.suggestedValue || field.value || "").trim()
+      if (free) toApply.push({ name: field.name, value: free })
+      continue
+    }
+    const exact = resolveSelectValue(
+      field.name,
+      raw,
+      options,
+      field.suggestedValue || field.value,
+      detected
+    )
+    if (exact) toApply.push({ name: field.name, value: exact })
+    optionsByName.set(field.name.toLowerCase(), options)
+  }
+
+  return applyExactAspectsToListing(listing, toApply, optionsByName)
 }
 
 /**
  * Silently drop values that are not exact eBay options (selection lists).
- * Returns listing with invalid extras cleared + list of still-missing required names.
  */
 export function validateAspectsAgainstOptions(
   listing: Listing,
@@ -343,7 +511,6 @@ export function validateAspectsAgainstOptions(
     }
     if (options.length === 0) continue
     if (isExactOption(raw, options)) {
-      // Normalize casing to exact option
       const exact =
         options.find((o) => o.toLowerCase() === raw.toLowerCase()) || raw
       if (exact !== raw) {
@@ -351,7 +518,6 @@ export function validateAspectsAgainstOptions(
       }
       continue
     }
-    // Invalid for fixed list — clear silently; only ask if required.
     next = writeAspectValue(next, field.name, "")
     cleared.push(field.name)
     if (field.required) missingRequired.push(field.name)

@@ -10,6 +10,7 @@ import {
 import { ebayFetch } from "@/lib/marketplaces/adapters/ebay/client"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import {
+  ASPECT_AUTO_FILL_CONFIDENCE,
   EBAY_SEO_ASPECT_PRIORITY,
   isMeasurementAspect,
   isSeoPriorityAspect,
@@ -314,6 +315,10 @@ export function applyRequiredEbayAspects(
     const highConfidence = isHighConfidenceField(
       confidenceForAspect(listing, name)
     )
+    // ≥90% AI confidence enables fuzzy shade maps onto exact eBay options.
+    const autoFillReady =
+      (confidenceForAspect(listing, name) ?? 0) >= ASPECT_AUTO_FILL_CONFIDENCE ||
+      highConfidence
 
     // Preserve exact manual / already-valid selections — never overwrite them.
     // Exception: Color — do not keep a stale Black when any gray-family signal
@@ -368,7 +373,8 @@ export function applyRequiredEbayAspects(
       {
         selectionOnly,
         // Measurements: exact match only — never fuzzy-invent inches.
-        highConfidence: isMeasurementAspect(name) ? false : highConfidence,
+        // Other aspects: fuzzy only when AI confidence is high (≥90% preferred).
+        highConfidence: isMeasurementAspect(name) ? false : autoFillReady,
       }
     )
 
@@ -411,9 +417,10 @@ export function applyRequiredEbayAspects(
       (aspect.aspectConstraint?.aspectMode || "").toUpperCase() ===
       "SELECTION_ONLY"
     const isSeo = seoPriorityKeys.has(key) || isSeoPriorityAspect(name)
-    const highConfidence = isHighConfidenceField(
-      confidenceForAspect(listing, name)
-    )
+    const conf = confidenceForAspect(listing, name)
+    const highConfidence =
+      (conf ?? 0) >= ASPECT_AUTO_FILL_CONFIDENCE ||
+      isHighConfidenceField(conf)
     const current = aspects[name]?.[0]
 
     // Skip inventing measurement aspects without an explicit candidate.
@@ -432,13 +439,17 @@ export function applyRequiredEbayAspects(
     if (!current) {
       // Only auto-fill SEO / recommended clothing aspects (or free-text with signal).
       if (!isSeo && allowed.length > 0) continue
+      // Exact/synonym match always OK; fuzzy shade only at ≥90% confidence.
+      const allowFuzzy =
+        !isMeasurementAspect(name) &&
+        (conf ?? 0) >= ASPECT_AUTO_FILL_CONFIDENCE
       const inferred = matchExactEbayAspectValue(
         name,
         listingCandidatesForAspect(listing, name),
         allowed,
         {
           selectionOnly: selectionOnly || allowed.length > 0,
-          highConfidence: isMeasurementAspect(name) ? false : highConfidence,
+          highConfidence: allowFuzzy,
         }
       )
       if (inferred) {
@@ -461,7 +472,9 @@ export function applyRequiredEbayAspects(
       allowed,
       {
         selectionOnly,
-        highConfidence: isMeasurementAspect(name) ? false : highConfidence,
+        highConfidence:
+          !isMeasurementAspect(name) &&
+          ((conf ?? 0) >= ASPECT_AUTO_FILL_CONFIDENCE || highConfidence),
       }
     )
     if (normalized) {

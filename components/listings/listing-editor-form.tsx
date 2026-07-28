@@ -213,8 +213,8 @@ export function ListingEditorForm({
         <div>
           <h2 className="font-display text-lg font-semibold">Item specifics</h2>
           <p className="text-sm text-muted-foreground">
-            High-search fields stay visible. Populated details fold under More item
-            specifics. Missing required values show a red Required label before Publish.
+            High-confidence values auto-fill from your photos. You only review fields
+            AI couldn&apos;t determine — everything else folds under More item specifics.
           </p>
         </div>
 

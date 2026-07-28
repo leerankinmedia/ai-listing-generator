@@ -8,7 +8,6 @@ import {
   getStagingImage,
   putStagingImage,
 } from "@/lib/marketplaces/images/staging-store"
-import { getServerAuthUser } from "@/lib/supabase/index"
 import { ANALYZE_UPLOAD_MAX_BYTES } from "@/lib/listings/schema"
 
 export { isAllowedAnalyzeImageUrl } from "@/lib/listings/analyze-url"
@@ -176,13 +175,4 @@ export async function cleanupAnalyzeStagingUrls(urls: string[]) {
     const stagingMatch = url.match(/\/api\/media\/staging\/([a-f0-9]{32})$/i)
     if (stagingMatch) deleteStagingImage(stagingMatch[1])
   }
-}
-
-/** Optional auth helper for upload route messaging. */
-export async function requireAnalyzeUploadUser() {
-  const user = await getServerAuthUser()
-  if (!user?.id) {
-    throw new Error("Sign in required to upload photos for analysis.")
-  }
-  return user
 }

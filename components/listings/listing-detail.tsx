@@ -12,17 +12,20 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { useAuth } from "@/components/auth/auth-provider"
 import { fetchListing, persistListing, removeListing } from "@/lib/listings/repository"
 import { listingIsReadyToPublish } from "@/lib/listings/publish"
+import { normalizeListingImageStorage } from "@/lib/listings/upload-session"
 import type { Listing } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 function normalizeListing(row: Listing): Listing {
-  const images = [...(row.images ?? [])]
-    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
-    .map((img, index) => ({
-      ...img,
-      sortOrder: index,
-      isPrimary: index === 0,
-    }))
+  const images = normalizeListingImageStorage(
+    [...(row.images ?? [])]
+      .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+      .map((img, index) => ({
+        ...img,
+        sortOrder: index,
+        isPrimary: index === 0,
+      }))
+  )
 
   return {
     ...row,
@@ -233,6 +236,7 @@ export function ListingDetail({ listingId }: { listingId: string }) {
           images={listing.images}
           onChange={(images) => setListing({ ...listing, images })}
           disabled={saving || readOnly}
+          userId={user?.id}
         />
       </section>
 

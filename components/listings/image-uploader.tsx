@@ -19,8 +19,9 @@ import {
   useSortable,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { GripVertical, ImagePlus, Star, X } from "lucide-react"
+import { AlertCircle, Check, GripVertical, ImagePlus, Loader2, Star, X } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { uploadListingOriginalToStorage } from "@/lib/listings/durable-images"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
 import {
   createListingImageFromFile,
@@ -32,6 +33,8 @@ interface ImageUploaderProps {
   images: ListingImage[]
   onChange: (images: ListingImage[]) => void
   disabled?: boolean
+  /** Required for durable Supabase uploads */
+  userId?: string | null
 }
 
 function normalizeImages(images: ListingImage[]): ListingImage[] {
@@ -42,18 +45,54 @@ function normalizeImages(images: ListingImage[]): ListingImage[] {
   }))
 }
 
+function storageBadge(image: ListingImage): {
+  label: string
+  className: string
+  icon: "loading" | "ok" | "error" | "pending"
+} {
+  switch (image.storageStatus) {
+    case "uploaded":
+      return {
+        label: "Saved",
+        className: "bg-emerald-600/90 text-white",
+        icon: "ok",
+      }
+    case "uploading":
+      return {
+        label: "Uploading…",
+        className: "bg-foreground/85 text-background",
+        icon: "loading",
+      }
+    case "error":
+      return {
+        label: "Upload failed",
+        className: "bg-destructive/95 text-destructive-foreground",
+        icon: "error",
+      }
+    case "pending":
+    default:
+      return {
+        label: "Waiting…",
+        className: "bg-foreground/70 text-background",
+        icon: "pending",
+      }
+  }
+}
+
 function SortablePhoto({
   image,
   index,
   disabled,
   onSetCover,
   onRemove,
+  onRetry,
 }: {
   image: ListingImage
   index: number
   disabled?: boolean
   onSetCover: (id: string) => void
   onRemove: (id: string) => void
+  onRetry: (id: string) => void
 }) {
   const {
     attributes,
@@ -69,6 +108,7 @@ function SortablePhoto({
   })
 
   const isCover = Boolean(image.isPrimary) || index === 0
+  const badge = storageBadge(image)
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -82,6 +122,7 @@ function SortablePhoto({
         // No touch-none on the card — vertical swipes must scroll the page
         "relative aspect-square overflow-hidden rounded-xl border bg-secondary",
         isCover ? "border-accent ring-1 ring-accent/40" : "border-border",
+        image.storageStatus === "error" && "border-destructive/60",
         isDragging && "z-20 opacity-40"
       )}
     >
@@ -92,10 +133,38 @@ function SortablePhoto({
         className="pointer-events-none h-full w-full object-cover"
         draggable={false}
       />
+      <span
+        className={cn(
+          "pointer-events-none absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold",
+          badge.className
+        )}
+      >
+        {badge.icon === "loading" && (
+          <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+        )}
+        {badge.icon === "ok" && <Check className="h-3 w-3" aria-hidden />}
+        {badge.icon === "error" && (
+          <AlertCircle className="h-3 w-3" aria-hidden />
+        )}
+        {badge.label}
+      </span>
       {isCover && (
-        <span className="pointer-events-none absolute left-1.5 top-1.5 rounded-md bg-foreground/85 px-1.5 py-0.5 text-[10px] font-semibold text-background">
+        <span className="pointer-events-none absolute right-12 top-1.5 rounded-md bg-foreground/85 px-1.5 py-0.5 text-[10px] font-semibold text-background">
           Cover
         </span>
+      )}
+      {image.storageStatus === "error" && (
+        <button
+          type="button"
+          className="absolute inset-x-2 top-1/2 z-10 -translate-y-1/2 rounded-md bg-background/95 px-2 py-1.5 text-[11px] font-semibold text-foreground shadow"
+          disabled={disabled}
+          onClick={(e) => {
+            e.stopPropagation()
+            onRetry(image.id)
+          }}
+        >
+          Retry upload
+        </button>
       )}
       <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/70 to-transparent p-1.5 pt-6">
         <button
@@ -180,8 +249,36 @@ function PhotoPreview({
   )
 }
 
-export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps) {
+const UPLOAD_CONCURRENCY = 3
+
+async function mapPool<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  let next = 0
+  const runners = Array.from(
+    { length: Math.min(concurrency, Math.max(1, items.length)) },
+    async () => {
+      while (next < items.length) {
+        const index = next
+        next += 1
+        await worker(items[index])
+      }
+    }
+  )
+  await Promise.all(runners)
+}
+
+export function ImageUploader({
+  images,
+  onChange,
+  disabled,
+  userId,
+}: ImageUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const imagesRef = useRef(images)
+  imagesRef.current = images
   const [fileDragging, setFileDragging] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -191,6 +288,10 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
     () => [...images].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
     [images]
   )
+
+  const uploadedCount = ordered.filter(
+    (img) => img.storageStatus === "uploaded"
+  ).length
 
   // Drag only starts from the handle; long-press on touch avoids scroll fights
   const sensors = useSensors(
@@ -220,6 +321,89 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
     }
   }, [activeId])
 
+  const patchImages = useCallback(
+    (mutate: (current: ListingImage[]) => ListingImage[]) => {
+      const next = normalizeImages(mutate(imagesRef.current))
+      imagesRef.current = next
+      onChange(next)
+    },
+    [onChange]
+  )
+
+  const persistOriginal = useCallback(
+    async (imageId: string) => {
+      if (!userId) {
+        patchImages((current) =>
+          current.map((img) =>
+            img.id === imageId
+              ? {
+                  ...img,
+                  storageStatus: "error",
+                  storageError: "Sign in required to save photos.",
+                }
+              : img
+          )
+        )
+        return
+      }
+
+      patchImages((current) =>
+        current.map((img) =>
+          img.id === imageId
+            ? {
+                ...img,
+                storageStatus: "uploading",
+                storageError: undefined,
+              }
+            : img
+        )
+      )
+
+      try {
+        const uploaded = await uploadListingOriginalToStorage({
+          imageId,
+          userId,
+        })
+        patchImages((current) =>
+          current.map((img) => {
+            if (img.id !== imageId) return img
+            // Drop temporary blob: preview — durable Supabase URL is source of truth.
+            if (img.url.startsWith("blob:")) {
+              try {
+                URL.revokeObjectURL(img.url)
+              } catch {
+                /* ignore */
+              }
+            }
+            return {
+              ...img,
+              url: uploaded.url,
+              storagePath: uploaded.storagePath,
+              storageStatus: "uploaded",
+              storageError: undefined,
+            }
+          })
+        )
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Could not save photo to storage."
+        patchImages((current) =>
+          current.map((img) =>
+            img.id === imageId
+              ? {
+                  ...img,
+                  storageStatus: "error",
+                  storageError: message,
+                }
+              : img
+          )
+        )
+        setError(message)
+      }
+    },
+    [userId, patchImages]
+  )
+
   const addFiles = useCallback(
     async (fileList: FileList | File[]) => {
       setError(null)
@@ -228,6 +412,11 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
       )
       if (incoming.length === 0) {
         setError("Please drop image files only.")
+        return
+      }
+
+      if (!userId) {
+        setError("Sign in required before uploading photos.")
         return
       }
 
@@ -251,32 +440,46 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
           )
           next.push(image)
         }
-        onChange(normalizeImages([...ordered, ...next]))
+        const merged = normalizeImages([...ordered, ...next])
+        imagesRef.current = merged
+        onChange(merged)
         if (incoming.length > remaining) {
           setError(
             `Only ${remaining} more photo${remaining === 1 ? "" : "s"} could be added.`
           )
         }
+
+        // Immediately persist every original to Supabase Storage.
+        await mapPool(next, UPLOAD_CONCURRENCY, async (image) => {
+          await persistOriginal(image.id)
+        })
       } catch {
         setError("Could not process one or more images.")
       } finally {
         setBusy(false)
       }
     },
-    [ordered, onChange]
+    [ordered, onChange, userId, persistOriginal]
   )
 
   function removeImage(id: string) {
     removeListingImageOriginal(id)
-    onChange(normalizeImages(ordered.filter((img) => img.id !== id)))
+    const current = imagesRef.current.find((img) => img.id === id)
+    if (current?.url.startsWith("blob:")) {
+      try {
+        URL.revokeObjectURL(current.url)
+      } catch {
+        /* ignore */
+      }
+    }
+    patchImages((imgs) => imgs.filter((img) => img.id !== id))
   }
 
   function setCover(id: string) {
-    const target = ordered.find((img) => img.id === id)
+    const current = imagesRef.current
+    const target = current.find((img) => img.id === id)
     if (!target) return
-    onChange(
-      normalizeImages([target, ...ordered.filter((img) => img.id !== id)])
-    )
+    patchImages(() => [target, ...current.filter((img) => img.id !== id)])
   }
 
   function handleDragStart(event: DragStartEvent) {
@@ -288,11 +491,12 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
     setActiveId(null)
     if (!over || active.id === over.id) return
 
-    const oldIndex = ordered.findIndex((img) => img.id === active.id)
-    const newIndex = ordered.findIndex((img) => img.id === over.id)
+    const current = imagesRef.current
+    const oldIndex = current.findIndex((img) => img.id === active.id)
+    const newIndex = current.findIndex((img) => img.id === over.id)
     if (oldIndex < 0 || newIndex < 0) return
 
-    onChange(normalizeImages(arrayMove(ordered, oldIndex, newIndex)))
+    patchImages(() => arrayMove(current, oldIndex, newIndex))
   }
 
   function handleDragCancel() {
@@ -356,14 +560,15 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
           <ImagePlus className="h-5 w-5" />
         </div>
         <p className="font-display text-base font-semibold">
-          {busy ? "Processing photos…" : "Drop photos here"}
+          {busy ? "Saving photos to storage…" : "Drop photos here"}
         </p>
         <p className="mt-1 max-w-sm text-sm text-muted-foreground">
           Drag and drop 1–{MAX_LISTING_IMAGES} clothing photos, or tap to browse.
-          Hold the handle on a photo to reorder before saving.
+          Each photo is saved to cloud storage immediately at full resolution.
         </p>
         <p className="mt-3 text-xs font-medium text-muted-foreground">
-          {ordered.length} / {MAX_LISTING_IMAGES} uploaded
+          {uploadedCount} / {ordered.length || 0} saved · {ordered.length} /{" "}
+          {MAX_LISTING_IMAGES} selected
         </p>
       </div>
 
@@ -399,6 +604,7 @@ export function ImageUploader({ images, onChange, disabled }: ImageUploaderProps
                     disabled={disabled}
                     onSetCover={setCover}
                     onRemove={removeImage}
+                    onRetry={(id) => void persistOriginal(id)}
                   />
                 ))}
               </div>

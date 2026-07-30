@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2, Sparkles, Save, Camera } from "lucide-react"
 import { ImageUploader } from "@/components/listings/image-uploader"
@@ -20,6 +20,13 @@ import { persistListing } from "@/lib/listings/repository"
 import { listingIsReadyToPublish } from "@/lib/listings/publish"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
 import type { GeneratedListingOutput } from "@/lib/listings/schema"
+import {
+  allListingImagesUploaded,
+  clearUploadSession,
+  listingImagesStillUploading,
+  readUploadSession,
+  writeUploadSession,
+} from "@/lib/listings/upload-session"
 import {
   applyEbaySellerDefaultsToListing,
   ebaySellerDefaultsAreReady,
@@ -85,6 +92,33 @@ export function ListingGenerator() {
     filled: number
     total: number
   }>({ missing: [], filled: 0, total: 0 })
+  const [sessionHydrated, setSessionHydrated] = useState(false)
+
+  const photosReady = useMemo(
+    () => allListingImagesUploaded(images),
+    [images]
+  )
+  const photosUploading = useMemo(
+    () => listingImagesStillUploading(images),
+    [images]
+  )
+
+  // Restore durable photo URLs after refresh / new Vercel instance.
+  useEffect(() => {
+    if (!user?.id || sessionHydrated) return
+    const draft = readUploadSession(user.id)
+    if (draft) {
+      setImages(draft.images)
+      if (draft.sellerNotes) setSellerNotes(draft.sellerNotes)
+    }
+    setSessionHydrated(true)
+  }, [user?.id, sessionHydrated])
+
+  // Persist only uploaded Supabase URLs so Analyze survives refresh.
+  useEffect(() => {
+    if (!user?.id || !sessionHydrated) return
+    writeUploadSession(user.id, { images, sellerNotes })
+  }, [user?.id, images, sellerNotes, sessionHydrated])
 
   useEffect(() => {
     if (!generating) return
@@ -115,6 +149,12 @@ export function ListingGenerator() {
       setError(`Upload between 1 and ${MAX_LISTING_IMAGES} photos.`)
       return
     }
+    if (!allListingImagesUploaded(images)) {
+      setError(
+        "Wait until every photo shows Saved before analyzing. Re-upload any that failed."
+      )
+      return
+    }
 
     setError(null)
     setNotice(null)
@@ -125,6 +165,7 @@ export function ListingGenerator() {
         (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
       )
 
+      // Temporary resized copies for AI only — originals stay at full resolution.
       const imageUrls = await uploadAnalyzeImagesIndividually({
         images: ordered,
       })
@@ -297,6 +338,7 @@ export function ListingGenerator() {
         throw new Error("Title is required before saving.")
       }
       const saved = await persistListing(toSave)
+      clearUploadSession(user.id)
       router.push(`/dashboard/listings/${saved.id}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save listing")
@@ -349,6 +391,7 @@ export function ListingGenerator() {
                 images={images}
                 onChange={setImages}
                 disabled={generating}
+                userId={user?.id}
               />
               <div className="space-y-2">
                 <Label htmlFor="seller-notes">Help the AI</Label>
@@ -373,7 +416,7 @@ export function ListingGenerator() {
                 <Button
                   variant="accent"
                   size="lg"
-                  disabled={images.length === 0 || generating}
+                  disabled={!photosReady || generating}
                   onClick={() => void handleGenerate()}
                 >
                   <Sparkles />
@@ -382,7 +425,13 @@ export function ListingGenerator() {
                 </Button>
                 <p className="flex items-center gap-1.5 self-center text-xs text-muted-foreground">
                   <Camera className="h-3.5 w-3.5" />
-                  Creates a draft title, description, details, and price for you to edit
+                  {photosUploading
+                    ? "Saving photos to cloud storage…"
+                    : photosReady
+                      ? "Creates a draft title, description, details, and price for you to edit"
+                      : images.length === 0
+                        ? "Upload photos to continue"
+                        : "Analyze unlocks when every photo shows Saved"}
                 </p>
               </div>
             </>
@@ -415,6 +464,7 @@ export function ListingGenerator() {
               setListing({ ...listing, images: next })
             }}
             disabled={saving}
+            userId={user?.id}
           />
           <ListingEditorForm
             listing={{ ...listing, images }}

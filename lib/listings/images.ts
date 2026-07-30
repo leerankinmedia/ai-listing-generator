@@ -190,6 +190,7 @@ export async function createListingImageFromFile(
     url: objectUrl,
     sortOrder,
     isPrimary,
+    storageStatus: "pending",
   }
 }
 

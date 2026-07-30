@@ -1,5 +1,6 @@
 import type { Listing, ListingImage } from "@/lib/types"
 import { isSupabaseConfigured, createClient } from "@/lib/supabase/client"
+import { normalizeListingImageStorage } from "@/lib/listings/upload-session"
 
 type SupabaseLike = {
   from: (table: string) => any
@@ -38,7 +39,7 @@ function rowToListing(row: ListingRow): Listing {
     specifics: row.specifics ?? {},
     fieldConfidence: row.field_confidence ?? {},
     comps: row.comps ?? undefined,
-    images: row.images ?? [],
+    images: normalizeListingImageStorage(row.images ?? []),
     status: row.status,
     marketplaceListings: row.marketplace_listings ?? [],
     targetMarketplaces: row.target_marketplaces ?? [],

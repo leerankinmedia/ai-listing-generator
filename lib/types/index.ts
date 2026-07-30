@@ -66,10 +66,25 @@ export interface MarketplaceConnection {
   errorMessage?: string
 }
 
+/** Durable storage lifecycle for listing originals (Supabase is source of truth). */
+export type ListingImageStorageStatus =
+  | "pending"
+  | "uploading"
+  | "uploaded"
+  | "error"
+
 export interface ListingImage {
   id: string
+  /** Permanent public/signed Supabase URL once storageStatus is uploaded. */
   url: string
   storagePath?: string
+  /**
+   * Upload lifecycle. Analyze Photos must wait until every image is `uploaded`
+   * with a durable http(s) URL — never blob:, File, or staging paths.
+   */
+  storageStatus?: ListingImageStorageStatus
+  /** Last upload failure message when storageStatus is error */
+  storageError?: string
   sortOrder: number
   isPrimary?: boolean
   /** Per-image Vision summary after analysis */

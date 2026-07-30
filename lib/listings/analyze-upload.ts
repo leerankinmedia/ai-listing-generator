@@ -69,7 +69,8 @@ export async function storeAnalyzeImage(input: {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!.trim()
     const bucket = listingImagesBucket()
-    const path = `analyze/${input.userId}/${Date.now()}-${input.index ?? 0}-${randomBytes(6).toString("hex")}.${ext}`
+    // Store under the user's folder so paths stay consistent with originals.
+    const path = `${input.userId}/analyze/${Date.now()}-${input.index ?? 0}-${randomBytes(6).toString("hex")}.${ext}`
     const supabase = createClient(url, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     })
@@ -97,7 +98,14 @@ export async function storeAnalyzeImage(input: {
     }
   }
 
-  // Local/dev fallback — in-memory staging (not durable across Vercel isolates).
+  // Never use in-memory staging on Vercel — isolates do not share memory.
+  if (process.env.VERCEL || process.env.NODE_ENV === "production") {
+    throw new Error(
+      "Supabase Storage is required for Analyze Photos. Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY so photos survive across server instances."
+    )
+  }
+
+  // Local/dev fallback only — in-memory staging (not durable across isolates).
   const id = putStagingImage({ contentType, buffer: input.buffer })
   const appUrl = getAppBaseUrl()
   return {

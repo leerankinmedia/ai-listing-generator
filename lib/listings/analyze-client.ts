@@ -4,6 +4,7 @@
  */
 import { readApiJsonResponse } from "@/lib/api/read-json-response"
 import { createAnalyzeCopyFromListingImage } from "@/lib/listings/images"
+import { allListingImagesUploaded } from "@/lib/listings/upload-session"
 import type { ListingImage } from "@/lib/types"
 
 export type AnalyzeUploadResult = {
@@ -22,6 +23,16 @@ async function uploadOneAnalyzeCopy(input: {
   total: number
   onProgress?: (label: string) => void
 }): Promise<AnalyzeUploadResult> {
+  if (
+    input.image.storageStatus !== "uploaded" ||
+    !/^https?:\/\//i.test(input.image.url) ||
+    /\/api\/media\/staging\//i.test(input.image.url)
+  ) {
+    throw new Error(
+      `Photo ${input.index + 1} is not saved to cloud storage yet. Wait for Saved status, then analyze again.`
+    )
+  }
+
   input.onProgress?.(
     `Preparing analysis copy ${input.index + 1} of ${input.total}…`
   )
@@ -58,6 +69,11 @@ async function uploadOneAnalyzeCopy(input: {
     }
     if (!parsed.data.url) {
       throw new Error(`Photo ${input.index + 1} analysis upload returned no URL.`)
+    }
+    if (parsed.data.storage === "staging") {
+      throw new Error(
+        `Photo ${input.index + 1} was stored in temporary server memory. Supabase Storage is required — check SUPABASE_SERVICE_ROLE_KEY and try again.`
+      )
     }
     return {
       url: parsed.data.url,
@@ -110,10 +126,19 @@ export async function uploadAnalyzeImagesIndividually(input: {
           url,
           sortOrder: index,
           isPrimary: index === 0,
+          storageStatus: /^https?:\/\//i.test(url)
+            ? ("uploaded" as const)
+            : ("pending" as const),
         }))
 
   if (images.length === 0) {
     throw new Error("Upload at least one product photo.")
+  }
+
+  if (!allListingImagesUploaded(images)) {
+    throw new Error(
+      "Every photo must finish uploading to cloud storage (Saved) before Analyze Photos can run."
+    )
   }
 
   let completed = 0

@@ -311,11 +311,17 @@ export async function applyEbayPromotedListing(
       listingId,
       message: message.slice(0, 240),
     })
+    const needsReconnect =
+      /scope|invalid_scope|insufficient|unauthorized|401|403|access.?denied|marketing/i.test(
+        message
+      )
     return {
       status: "failed",
       mode,
       percent: mode === "custom" ? percent : null,
-      message,
+      message: needsReconnect
+        ? "Listing published, but promotion requires reconnecting eBay."
+        : message,
     }
   }
 }

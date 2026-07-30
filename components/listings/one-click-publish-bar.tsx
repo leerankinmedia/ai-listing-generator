@@ -173,6 +173,22 @@ export function OneClickPublishBar({
           return
         }
 
+        // Never allow "Ready" with 0/0 — wait until eBay specifics have loaded.
+        if (!aspectMeta || aspectMeta.total <= 0) {
+          setError(
+            "eBay item specifics are still loading or failed to load. Wait for specifics to appear above, then publish."
+          )
+          setPublishing(false)
+          return
+        }
+        if (aspectMeta.missing.length > 0) {
+          setError(
+            `Complete required item specifics in the form above: ${aspectMeta.missing.join(", ")}.`
+          )
+          setPublishing(false)
+          return
+        }
+
         // Silently re-validate specifics against eBay exact options; only ask
         // about required fields that still cannot be determined confidently.
         try {
@@ -327,6 +343,9 @@ export function OneClickPublishBar({
 
   const available = MARKETPLACES.filter((m) => PHASE5_IDS.includes(m.id))
   const unresolved = aspectMeta?.missing || []
+  const aspectsLoaded = Boolean(aspectMeta && aspectMeta.total > 0)
+  const publishBlockedForAspects =
+    ebaySelected && (!aspectsLoaded || unresolved.length > 0)
 
   return (
     <section className="space-y-4 rounded-2xl border border-border bg-card/70 p-4 sm:p-5">
@@ -401,11 +420,13 @@ export function OneClickPublishBar({
             missingAspects={unresolved}
             aspectFilledCount={aspectMeta?.filled}
             aspectTotalCount={aspectMeta?.total}
+            aspectsLoaded={aspectsLoaded}
           />
-          {unresolved.length > 0 && (
+          {publishBlockedForAspects && (
             <p className="text-sm text-destructive" role="status">
-              Unresolved requirements — fix in Item specifics above:{" "}
-              {unresolved.join(", ")}.
+              {!aspectsLoaded
+                ? "Item specifics must finish loading before publish (cannot show 0/0 as ready)."
+                : `Unresolved requirements — fix in Item specifics above: ${unresolved.join(", ")}.`}
             </p>
           )}
         </div>
@@ -417,6 +438,7 @@ export function OneClickPublishBar({
           missingAspects={unresolved}
           aspectFilledCount={aspectMeta?.filled}
           aspectTotalCount={aspectMeta?.total}
+          aspectsLoaded={aspectsLoaded}
         />
       )}
 
@@ -427,7 +449,8 @@ export function OneClickPublishBar({
             disabled ||
             publishing ||
             selected.length === 0 ||
-            loadingConnections
+            loadingConnections ||
+            publishBlockedForAspects
           }
           onClick={() => void handlePublish()}
         >

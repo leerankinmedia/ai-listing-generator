@@ -229,7 +229,12 @@ export async function GET(request: NextRequest) {
     }
 
     const { urlState, cookieValue } = createOAuthState("ebay")
-    const authorizeUrl = buildEbayAuthorizeUrl(urlState)
+    // Default: inventory publish scopes only. ?marketing=1 adds sell.marketing
+    // when the seller reconnects specifically for Promoted Listings.
+    const includeMarketing =
+      request.nextUrl.searchParams.get("marketing") === "1" ||
+      request.nextUrl.searchParams.get("includeMarketing") === "1"
+    const authorizeUrl = buildEbayAuthorizeUrl(urlState, { includeMarketing })
 
     // Credentialed fetch() + redirect:manual cannot read a cross-origin 302
     // Location (browser reports status 0 / opaqueredirect). Return the eBay

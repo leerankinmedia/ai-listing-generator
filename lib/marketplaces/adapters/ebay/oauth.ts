@@ -100,16 +100,41 @@ export function ebayRuName(): string {
   return ebayRedirectUri()
 }
 
-/** Official eBay sell scopes used for user consent + refresh. */
-export const EBAY_SCOPE_LIST = [
+/** Official eBay sell scopes for inventory publish (Production keyset defaults). */
+export const EBAY_PUBLISH_SCOPE_LIST = [
   "https://api.ebay.com/oauth/api_scope",
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
   "https://api.ebay.com/oauth/api_scope/sell.account",
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
-  "https://api.ebay.com/oauth/api_scope/sell.marketing",
 ] as const
 
-export const EBAY_SCOPES = EBAY_SCOPE_LIST.join(" ")
+/**
+ * Optional Marketing API scope — only requested when reconnecting for Promoted Listings.
+ * Never include in default authorize/refresh: many Production keysets reject it and that
+ * used to block all inventory publishing ("requested scope is invalid…").
+ */
+export const EBAY_MARKETING_SCOPE =
+  "https://api.ebay.com/oauth/api_scope/sell.marketing" as const
+
+/** @deprecated Prefer EBAY_PUBLISH_SCOPE_LIST — kept for callers that expect the name. */
+export const EBAY_SCOPE_LIST = EBAY_PUBLISH_SCOPE_LIST
+
+export const EBAY_SCOPES = EBAY_PUBLISH_SCOPE_LIST.join(" ")
+
+export function ebayScopesForAuthorize(options?: {
+  /** Include sell.marketing only when the seller is reconnecting for Promoted Listings. */
+  includeMarketing?: boolean
+}): string[] {
+  const scopes: string[] = [...EBAY_PUBLISH_SCOPE_LIST]
+  if (options?.includeMarketing) {
+    scopes.push(EBAY_MARKETING_SCOPE)
+  }
+  return scopes
+}
+
+export function ebayScopesJoined(options?: { includeMarketing?: boolean }): string {
+  return ebayScopesForAuthorize(options).join(" ")
+}
 
 function createEbayAuthClient() {
   const env = ebayEnv() === "sandbox" ? "SANDBOX" : "PRODUCTION"
@@ -133,6 +158,7 @@ export type EbayAuthorizeStartCheck = {
   clientIdRedacted: string
   clientIdPresent: boolean
   scopes: string[]
+  includeMarketing: boolean
   scopeEncoding: "literal_%20_between_uris"
   scopeEncodingOk: boolean
   statePresent: boolean
@@ -147,7 +173,11 @@ function redactClientId(clientId: string) {
   return `***${clientId.slice(-6)}`
 }
 
-function inspectAuthorizeUrl(url: string, state: string): EbayAuthorizeStartCheck {
+function inspectAuthorizeUrl(
+  url: string,
+  state: string,
+  expectedScopes: string[]
+): EbayAuthorizeStartCheck {
   const parsed = new URL(url)
   const redirectUri = ebayRedirectUri()
   const clientId = ebayClientId()
@@ -175,13 +205,14 @@ function inspectAuthorizeUrl(url: string, state: string): EbayAuthorizeStartChec
     expectedSandboxRuName: EXPECTED_SANDBOX_RUNAME,
     clientIdRedacted: redactClientId(clientId),
     clientIdPresent: Boolean(clientId),
-    scopes: [...EBAY_SCOPE_LIST],
+    scopes: [...expectedScopes],
+    includeMarketing: expectedScopes.includes(EBAY_MARKETING_SCOPE),
     scopeEncoding: "literal_%20_between_uris",
     scopeEncodingOk:
       rawScope.includes("%20") &&
       !rawScope.includes("%253A") &&
       !rawScope.includes("+") &&
-      scopeParam.split(" ").filter(Boolean).length === EBAY_SCOPE_LIST.length,
+      scopeParam.split(" ").filter(Boolean).length === expectedScopes.length,
     statePresent: Boolean(parsed.searchParams.get("state") || state),
     stateLength: (parsed.searchParams.get("state") || state).length,
     builder: "ebay-oauth-nodejs-client",
@@ -195,8 +226,12 @@ function inspectAuthorizeUrl(url: string, state: string): EbayAuthorizeStartChec
 /**
  * Build authorize URL via official ebay-oauth-nodejs-client
  * (same format as eBay's authorization-code grant docs).
+ * Default: inventory publish scopes only. Pass includeMarketing for Promoted Listings reconnect.
  */
-export function buildEbayAuthorizeUrl(state: string) {
+export function buildEbayAuthorizeUrl(
+  state: string,
+  options?: { includeMarketing?: boolean }
+) {
   if (!isEbayConfigured()) {
     throw new Error(
       "eBay is not configured. Set EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, and EBAY_REDIRECT_URI."
@@ -208,6 +243,9 @@ export function buildEbayAuthorizeUrl(state: string) {
 
   const envName = ebayEnv() === "sandbox" ? "SANDBOX" : "PRODUCTION"
   const redirectUri = ebayRedirectUri()
+  const scopes = ebayScopesForAuthorize({
+    includeMarketing: Boolean(options?.includeMarketing),
+  })
 
   if (ebayEnv() === "sandbox" && redirectUri !== EXPECTED_SANDBOX_RUNAME) {
     throw new Error(
@@ -219,30 +257,32 @@ export function buildEbayAuthorizeUrl(state: string) {
   // Developer Portal / official client use prompt=login so Sandbox always
   // completes a fresh authorization-code grant and returns ?code=&state=
   // on the Auth Accepted URL (without it, eBay may bounce with no OAuth params).
-  const url = client.generateUserAuthorizationUrl(
-    envName,
-    [...EBAY_SCOPE_LIST],
-    { state, prompt: "login" }
-  )
+  const url = client.generateUserAuthorizationUrl(envName, scopes, {
+    state,
+    prompt: "login",
+  })
 
-  const check = inspectAuthorizeUrl(url, state)
+  const check = inspectAuthorizeUrl(url, state, scopes)
   console.info("[ebay/oauth] start authorize check", check)
 
   // TEMPORARY: full consent URL for eBay support (Client ID redacted only; no secrets).
   const rawQuery = url.split("?")[1] || ""
   const rawScopeMatch = rawQuery.match(/(?:^|&)scope=([^&]*)/)
-  const rawScopeExact = rawScopeMatch ? decodeURIComponent(rawScopeMatch[1].replace(/\+/g, "%20")) : ""
+  const rawScopeExact = rawScopeMatch
+    ? decodeURIComponent(rawScopeMatch[1].replace(/\+/g, "%20"))
+    : ""
   // Prefer the exact scope substring as it appears in the authorize URL (keep %20).
   const scopeExactInUrl = rawScopeMatch ? rawScopeMatch[1] : ""
   console.info("[ebay/oauth] TEMP consent request URL (client_id redacted)", {
     temporary: true,
-    purpose: "eBay support Sandbox consent URL inspection",
+    purpose: "eBay support consent URL inspection",
     completeAuthorizeUrlRedacted: check.authorizeUrlRedacted,
     endpoint: check.authorizationEndpoint,
     redirect_uri: check.redirectUri,
     response_type: check.responseType,
     scope_exact: scopeExactInUrl,
     scope_decoded: rawScopeExact,
+    include_marketing: check.includeMarketing,
     prompt: new URL(url).searchParams.get("prompt"),
     state_present: check.statePresent,
     state_length: check.stateLength,
@@ -353,7 +393,10 @@ export async function exchangeEbayCode(code: string) {
   }
 }
 
-export async function refreshEbayToken(refreshToken: string) {
+export async function refreshEbayToken(
+  refreshToken: string,
+  options?: { includeMarketing?: boolean }
+) {
   if (!isEbayConfigured()) {
     throw new Error("eBay app credentials are not configured.")
   }
@@ -362,10 +405,15 @@ export async function refreshEbayToken(refreshToken: string) {
     `${ebayClientId()}:${ebayClientSecret()}`
   ).toString("base64")
 
+  // Always refresh with publish scopes only by default. Requesting sell.marketing
+  // here when the app/user never granted it caused "requested scope is invalid"
+  // and blocked every inventory publish.
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: refreshToken,
-    scope: EBAY_SCOPES,
+    scope: ebayScopesJoined({
+      includeMarketing: Boolean(options?.includeMarketing),
+    }),
   })
 
   const response = await fetch(`${apiBase}/identity/v1/oauth2/token`, {

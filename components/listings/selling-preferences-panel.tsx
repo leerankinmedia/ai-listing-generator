@@ -64,11 +64,13 @@ function PrefRow({
   value,
   onEdit,
   disabled,
+  editing,
 }: {
   label: string
   value: string
   onEdit: () => void
   disabled?: boolean
+  editing?: boolean
 }) {
   return (
     <div className="flex items-start justify-between gap-3 border-b border-border/60 py-2.5 last:border-0">
@@ -79,10 +81,11 @@ function PrefRow({
       <button
         type="button"
         disabled={disabled}
+        aria-expanded={editing}
         onClick={onEdit}
-        className="shrink-0 text-xs font-medium text-accent-foreground underline-offset-2 hover:underline disabled:opacity-40"
+        className="shrink-0 rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground hover:bg-secondary disabled:opacity-40"
       >
-        Edit
+        {editing ? "Done" : "Edit"}
       </button>
     </div>
   )
@@ -361,7 +364,8 @@ export function SellingPreferencesPanel({
         <div className="mb-1">
           <h3 className="text-sm font-semibold">Selling preferences</h3>
           <p className="text-xs text-muted-foreground">
-            Returns, offers, payment, and promoted listings for this item.
+            Tap Edit to change Returns, Offers, Immediate payment, or Promoted
+            listing for this item only — stays on this page.
           </p>
         </div>
 
@@ -369,10 +373,11 @@ export function SellingPreferencesPanel({
           label="Returns"
           value={returnsSummary}
           disabled={disabled}
+          editing={edit === "returns"}
           onEdit={() => setEdit(edit === "returns" ? null : "returns")}
         />
         {edit === "returns" && (
-          <div className="space-y-3 pb-3">
+          <div className="mb-2 space-y-3 rounded-lg border border-border bg-card p-3">
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -426,10 +431,11 @@ export function SellingPreferencesPanel({
           label="Offers"
           value={offersSummary}
           disabled={disabled}
+          editing={edit === "offers"}
           onEdit={() => setEdit(edit === "offers" ? null : "offers")}
         />
         {edit === "offers" && (
-          <div className="space-y-3 pb-3">
+          <div className="mb-2 space-y-3 rounded-lg border border-border bg-card p-3">
             <div className="flex gap-2">
               {([true, false] as const).map((yes) => (
                 <button
@@ -537,32 +543,36 @@ export function SellingPreferencesPanel({
           label="Immediate payment"
           value={immediate ? "Required" : "Off"}
           disabled={disabled}
+          editing={edit === "payment"}
           onEdit={() => setEdit(edit === "payment" ? null : "payment")}
         />
         {edit === "payment" && (
-          <label className="flex items-center gap-2 pb-3 text-sm">
-            <input
-              type="checkbox"
-              disabled={disabled}
-              checked={immediate}
-              onChange={(e) =>
-                patchSpecifics(listing, onChange, {
-                  requireImmediatePayment: e.target.checked,
-                })
-              }
-            />
-            Require immediate payment
-          </label>
+          <div className="mb-2 rounded-lg border border-border bg-card p-3">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                disabled={disabled}
+                checked={immediate}
+                onChange={(e) =>
+                  patchSpecifics(listing, onChange, {
+                    requireImmediatePayment: e.target.checked,
+                  })
+                }
+              />
+              Require immediate payment
+            </label>
+          </div>
         )}
 
         <PrefRow
           label="Promoted listing"
           value={promoSummary}
           disabled={disabled}
+          editing={edit === "promoted"}
           onEdit={() => setEdit(edit === "promoted" ? null : "promoted")}
         />
         {edit === "promoted" && (
-          <div className="space-y-3 pb-3">
+          <div className="mb-2 space-y-3 rounded-lg border border-border bg-card p-3">
             <div className="grid gap-2 sm:grid-cols-3">
               {(
                 [
@@ -608,6 +618,20 @@ export function SellingPreferencesPanel({
                   }
                 />
               </div>
+            )}
+            {promo !== "off" && (
+              <p className="text-xs text-muted-foreground">
+                Promotion uses eBay Marketing separately from listing creation. If
+                permission is missing, the listing still publishes — reconnect eBay
+                with marketing from{" "}
+                <Link
+                  href="/dashboard/connections?marketing=1"
+                  className="underline underline-offset-2"
+                >
+                  Connections
+                </Link>
+                .
+              </p>
             )}
           </div>
         )}

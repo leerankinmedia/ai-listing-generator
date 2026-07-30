@@ -14,11 +14,14 @@ export function PrePublishReviewCard({
   missingAspects = [],
   aspectFilledCount,
   aspectTotalCount,
+  aspectsLoaded,
 }: {
   listing: Listing
   missingAspects?: string[]
   aspectFilledCount?: number
   aspectTotalCount?: number
+  /** False until eBay item specifics have been hydrated (total > 0). */
+  aspectsLoaded?: boolean
 }) {
   const cover =
     listing.images.find((i) => i.isPrimary) ||
@@ -31,6 +34,14 @@ export function PrePublishReviewCard({
   const pkg = listing.specifics.shippingPackage
   const packageBlock = ebayShippingPackageBlockMessage(listing)
   const freeBlock = ebayFreeShippingBlockMessage(listing)
+  const filled =
+    typeof aspectFilledCount === "number" ? aspectFilledCount : undefined
+  const total =
+    typeof aspectTotalCount === "number" ? aspectTotalCount : undefined
+  const loaded =
+    aspectsLoaded === true ||
+    (typeof total === "number" && total > 0)
+
   const missing = useMemo(() => {
     const out: string[] = []
     if (!listing.title.trim()) out.push("title")
@@ -38,16 +49,22 @@ export function PrePublishReviewCard({
     if (listing.images.length === 0) out.push("photos")
     if (packageBlock) out.push("shipping package")
     if (freeBlock) out.push("free shipping confirmation")
+    if (!loaded) out.push("item specifics (still loading)")
     for (const name of missingAspects) out.push(name)
     return out
-  }, [listing, packageBlock, freeBlock, missingAspects])
+  }, [listing, packageBlock, freeBlock, missingAspects, loaded])
 
-  const specificsLabel =
-    typeof aspectFilledCount === "number" && typeof aspectTotalCount === "number"
-      ? `${aspectFilledCount}/${aspectTotalCount} specifics filled`
+  const specificsLabel = !loaded
+    ? typeof total === "number"
+      ? `${filled ?? 0}/${total} item specifics — still loading`
+      : "Item specifics still loading"
+    : typeof filled === "number" && typeof total === "number"
+      ? `${filled}/${total} item specifics filled`
       : missingAspects.length > 0
         ? `${missingAspects.length} required specific(s) still missing`
-        : "Item specifics ready or will map on publish"
+        : "Item specifics ready"
+
+  const ready = missing.length === 0 && loaded
 
   return (
     <div className="space-y-3 rounded-xl border border-border bg-card/80 p-3 sm:p-4">
@@ -103,14 +120,22 @@ export function PrePublishReviewCard({
             ? `${listing.specifics.handlingTimeDays} day(s)`
             : "1 day (default)"}
         </li>
+        <li>
+          Promoted:{" "}
+          {listing.specifics.promotedListings === "dynamic"
+            ? "Dynamic"
+            : listing.specifics.promotedListings === "custom"
+              ? `Custom ${listing.specifics.promotedListingsPercent ?? "—"}%`
+              : "Off"}
+        </li>
       </ul>
 
-      {missing.length > 0 ? (
-        <p className="text-sm text-amber-800 dark:text-amber-200" role="status">
-          Missing before publish: {missing.join(", ")}.
-        </p>
-      ) : (
+      {ready ? (
         <p className="text-xs text-muted-foreground">Ready to publish.</p>
+      ) : (
+        <p className="text-sm text-amber-800 dark:text-amber-200" role="status">
+          Missing before publish: {missing.join(", ") || "item specifics"}.
+        </p>
       )}
     </div>
   )

@@ -159,7 +159,14 @@ export function MarketplaceConnectionsPanel() {
     setBusyId(marketplaceId)
     setError(null)
     try {
-      const oauthPath = `/api/marketplaces/${marketplaceId}/oauth/start?format=json`
+      const marketing =
+        typeof window !== "undefined" &&
+        (window.location.search.includes("marketing=1") ||
+          window.location.search.includes("includeMarketing=1"))
+      const oauthPath =
+        marketplaceId === "ebay" && marketing
+          ? `/api/marketplaces/ebay/oauth/start?format=json&marketing=1`
+          : `/api/marketplaces/${marketplaceId}/oauth/start?format=json`
       let res: Response
       try {
         res = await fetch(oauthPath, {

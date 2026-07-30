@@ -357,14 +357,63 @@ export const ebayAdapter: MarketplaceAdapter = {
       listing.specifics.promotedListings === "custom"
         ? listing.specifics.promotedListings
         : "off"
-    const promotion = await applyEbayPromotedListing(
-      withLocation.accessToken,
-      listingId,
-      {
-        mode: promoMode,
-        percent: listing.specifics.promotedListingsPercent,
+
+    // Promoted Listings is optional and separate from inventory publish.
+    // Never call Marketing API when Off, and never let promotion failure
+    // undo a successful listing.
+    let promotion: {
+      status: "off" | "applied" | "skipped" | "failed"
+      mode?: "dynamic" | "custom"
+      percent?: number | null
+      message: string
+    } = {
+      status: "off",
+      message: "Promoted listings off.",
+    }
+
+    if (promoMode !== "off") {
+      try {
+        promotion = await applyEbayPromotedListing(
+          withLocation.accessToken,
+          listingId,
+          {
+            mode: promoMode,
+            percent: listing.specifics.promotedListingsPercent,
+          }
+        )
+      } catch (promoErr) {
+        const raw =
+          promoErr instanceof Error ? promoErr.message : "Promotion failed"
+        const needsReconnect =
+          /scope|invalid_scope|insufficient|unauthorized|401|403|marketing/i.test(
+            raw
+          )
+        promotion = {
+          status: "failed",
+          mode: promoMode,
+          percent:
+            promoMode === "custom"
+              ? listing.specifics.promotedListingsPercent ?? null
+              : null,
+          message: needsReconnect
+            ? "Listing published, but promotion requires reconnecting eBay."
+            : `Listing published, but promotion failed: ${raw}`,
+        }
       }
-    )
+      if (
+        promotion.status === "failed" &&
+        /scope|invalid_scope|insufficient|unauthorized|reconnect/i.test(
+          promotion.message
+        ) &&
+        !/Listing published/.test(promotion.message)
+      ) {
+        promotion = {
+          ...promotion,
+          message:
+            "Listing published, but promotion requires reconnecting eBay.",
+        }
+      }
+    }
 
     return {
       ok: true,

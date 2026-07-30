@@ -294,11 +294,20 @@ export function EbayItemSpecificsFields({
 
       if (!result.ok && result.skippedReason === "ebay_not_connected") {
         setFields([])
-        onMetaChangeRef.current?.({ missing: [], filled: 0, total: 0 })
+        onMetaChangeRef.current?.({
+          missing: ["Connect eBay to load item specifics"],
+          filled: 0,
+          total: 0,
+        })
         return
       }
       if (!result.ok && result.formFields.length === 0) {
         setError("Could not load eBay item specifics.")
+        onMetaChangeRef.current?.({
+          missing: ["Item specifics failed to load"],
+          filled: 0,
+          total: 0,
+        })
         return
       }
 

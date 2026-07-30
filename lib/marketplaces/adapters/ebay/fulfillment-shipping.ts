@@ -203,3 +203,154 @@ export function formatHandlingTime(
   if (u.startsWith("day")) return days === 1 ? "1 business day" : `${days} business days`
   return `${days} ${unit || "DAY"}`
 }
+
+/** Map ListWise / eBay shipping service codes to Account API carrier codes. */
+export function shippingCarrierForService(serviceCode: string): string {
+  const code = serviceCode.trim()
+  if (/^USPS/i.test(code) || /^US_eBay/i.test(code)) return "USPS"
+  if (/^UPS/i.test(code)) return "UPS"
+  if (/^FedEx/i.test(code)) return "FedEx"
+  if (/^Freight/i.test(code)) return "OTHER"
+  return "USPS"
+}
+
+export type FulfillmentPolicyCreateRequest = {
+  name: string
+  marketplaceId: string
+  categoryTypes: Array<{ name: string; default?: boolean }>
+  handlingTime: { value: number; unit: "DAY" }
+  localPickup: false
+  freightShipping: false
+  globalShipping: false
+  pickupDropOff: false
+  shippingOptions: Array<{
+    optionType: "DOMESTIC"
+    costType: "CALCULATED" | "FLAT_RATE"
+    shippingServices: Array<{
+      sortOrder: number
+      shippingCarrierCode: string
+      shippingServiceCode: string
+      freeShipping: boolean
+      shippingCost?: { value: string; currency: string }
+    }>
+  }>
+}
+
+/**
+ * Build a createFulfillmentPolicy body matching what eBay.com / Account API
+ * returns for a normal US domestic calculated/flat/free policy.
+ *
+ * Important (errorId 20403 / LOGISTICS_INFO):
+ * - localPickup must be explicit false (eBay Dev Support).
+ * - Do NOT set buyerResponsibleForShipping=true (Motors-only; invalid logistics
+ *   for apparel and causes LOGISTICS_INFO rejection).
+ * - Include shippingCarrierCode with shippingServiceCode.
+ * - CALCULATED must omit shippingCost; FLAT/FREE include it.
+ *
+ * When a template policy from the seller's eBay account exists, reuse its
+ * logistics shape (costType/carrier/service) instead of inventing values.
+ */
+export function buildFulfillmentPolicyCreateRequest(args: {
+  marketplaceId: string
+  mode: EbayShippingMode
+  name: string
+  handlingDays: number
+  shippingServiceCode: string
+  flatAmount?: number
+  /** Existing seller policy to copy logistics shape from (eBay.com-created preferred). */
+  template?: EbayFulfillmentPolicyRaw | null
+}): FulfillmentPolicyCreateRequest {
+  const days = Math.max(0, Math.min(30, Math.floor(args.handlingDays || 1)))
+  const service =
+    String(args.shippingServiceCode || "").trim() || "USPSGroundAdvantage"
+  const amount = Math.max(0.01, Number(args.flatAmount) || 5.99).toFixed(2)
+
+  const templateOption = args.template
+    ? domesticOption(args.template)
+    : null
+  const templateService = templateOption
+    ? primaryService(templateOption)
+    : null
+
+  // Prefer service/carrier already present on the seller's eBay.com policy when
+  // that template matches the requested shipping mode.
+  const templateMode = args.template
+    ? classifyFulfillmentShippingMode(args.template)
+    : null
+  const resolvedService =
+    templateMode === args.mode && templateService?.shippingServiceCode?.trim()
+      ? templateService.shippingServiceCode.trim()
+      : service
+
+  const carrier =
+    (templateMode === args.mode &&
+      templateService?.shippingCarrierCode?.trim()) ||
+    shippingCarrierForService(resolvedService)
+
+  const costType: "CALCULATED" | "FLAT_RATE" =
+    args.mode === "calculated" ? "CALCULATED" : "FLAT_RATE"
+
+  const shippingService: FulfillmentPolicyCreateRequest["shippingOptions"][0]["shippingServices"][0] =
+    {
+      sortOrder: 1,
+      shippingCarrierCode: carrier,
+      shippingServiceCode: resolvedService,
+      freeShipping: args.mode === "free",
+    }
+
+  if (args.mode === "flat") {
+    shippingService.shippingCost = { value: amount, currency: "USD" }
+  } else if (args.mode === "free") {
+    shippingService.shippingCost = { value: "0.0", currency: "USD" }
+  }
+  // CALCULATED: no shippingCost — eBay computes from package weight/dims.
+
+  return {
+    name: args.name,
+    marketplaceId: args.marketplaceId,
+    categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
+    handlingTime: { value: days, unit: "DAY" },
+    // Explicit flags matching eBay.com Account API policies (Dev Support: localPickup false).
+    localPickup: false,
+    freightShipping: false,
+    globalShipping: false,
+    pickupDropOff: false,
+    shippingOptions: [
+      {
+        optionType: "DOMESTIC",
+        costType,
+        shippingServices: [shippingService],
+      },
+    ],
+  }
+}
+
+/** Extract rejected field name from eBay 20403 parameters (e.g. LOGISTICS_INFO). */
+export function rejectedEbayFieldFromErrors(
+  errors: Array<{
+    errorId?: number
+    message?: string
+    longMessage?: string
+    parameters?: Array<{ name?: string; value?: string }>
+  }>
+): string | null {
+  for (const err of errors) {
+    const params = err.parameters || []
+    const fieldName = params.find(
+      (p) => (p.name || "").toUpperCase() === "FIELDNAME"
+    )?.value
+    if (fieldName) return fieldName
+    const xpath = params.find((p) => (p.name || "").toUpperCase() === "XPATH")
+      ?.value
+    if (xpath) return xpath
+    const shipElig = params.find(
+      (p) => (p.name || "").toUpperCase() === "SHIPELIG_ERROR_CODE_NAME"
+    )?.value
+    if (shipElig) return shipElig
+    // Some responses put the token directly in message/longMessage.
+    const hay = `${err.message || ""} ${err.longMessage || ""}`
+    const m = hay.match(/\b(LOGISTICS_INFO|localPickup|shippingServiceCode|costType)\b/i)
+    if (m) return m[1]
+  }
+  return null
+}

@@ -4,6 +4,7 @@ import { useState } from "react"
 import { CreditCard, Loader2, RefreshCw, XCircle } from "lucide-react"
 import { startCheckout, useBillingStatus } from "@/components/billing/paywall"
 import { PlanFeaturesList } from "@/components/billing/plan-features"
+import { StorageHealthCheck } from "@/components/admin/storage-health-check"
 import { Button } from "@/components/ui/button"
 import {
   BILLING_TRIAL_DAYS,
@@ -224,6 +225,7 @@ export function BillingPanel() {
           <RefreshCw />
           Refresh
         </Button>
+        <StorageHealthCheck />
       </div>
     )
   }

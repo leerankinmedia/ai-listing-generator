@@ -4,6 +4,11 @@ import { randomBytes } from "crypto"
 import { getAppBaseUrl } from "@/lib/app-url"
 import { isAllowedAnalyzeImageUrl } from "@/lib/listings/analyze-url"
 import {
+  diagnoseSupabaseStorageConfig,
+  listingImagesBucketName,
+} from "@/lib/listings/storage-config"
+import { ensureAnalyzeStorageReady } from "@/lib/listings/storage-health"
+import {
   deleteStagingImage,
   getStagingImage,
   putStagingImage,
@@ -11,24 +16,16 @@ import {
 import { ANALYZE_UPLOAD_MAX_BYTES } from "@/lib/listings/schema"
 
 export { isAllowedAnalyzeImageUrl } from "@/lib/listings/analyze-url"
-
-/** Bucket created by supabase/migrations/003_production_schema.sql */
-export const DEFAULT_LISTING_IMAGES_BUCKET = "listing-images"
+export {
+  DEFAULT_LISTING_IMAGES_BUCKET,
+  diagnoseSupabaseStorageConfig,
+  listingImagesBucketName,
+} from "@/lib/listings/storage-config"
 
 export const ANALYZE_SINGLE_UPLOAD_MAX_BYTES = ANALYZE_UPLOAD_MAX_BYTES
 
 function listingImagesBucket() {
-  return (
-    process.env.SUPABASE_STORAGE_BUCKET?.trim() || DEFAULT_LISTING_IMAGES_BUCKET
-  )
-}
-
-function supabaseStorageConfigured() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
-  return Boolean(
-    url && serviceKey && url !== "https://your-project.supabase.co"
-  )
+  return listingImagesBucketName()
 }
 
 export type AnalyzeUploadedImage = {
@@ -65,11 +62,20 @@ export async function storeAnalyzeImage(input: {
       ? "webp"
       : "jpg"
 
-  if (supabaseStorageConfigured()) {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
+  const diagnosis = diagnoseSupabaseStorageConfig({ requireServiceRole: true })
+  if (diagnosis.ok) {
+    const ready = await ensureAnalyzeStorageReady()
+    if (!ready.ok) {
+      console.error("[analyze-upload] storage not ready", ready)
+      throw new Error(
+        ready.error ||
+          `Supabase Storage bucket "${ready.bucket}" is not ready for Analyze Photos.`
+      )
+    }
+
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!.trim()
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!.trim()
     const bucket = listingImagesBucket()
-    // Store under the user's folder so paths stay consistent with originals.
     const path = `${input.userId}/analyze/${Date.now()}-${input.index ?? 0}-${randomBytes(6).toString("hex")}.${ext}`
     const supabase = createClient(url, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
@@ -79,16 +85,33 @@ export async function storeAnalyzeImage(input: {
       upsert: false,
     })
     if (error) {
+      console.error("[analyze-upload] supabase upload failed", {
+        bucket,
+        path,
+        bytes: input.buffer.byteLength,
+        contentType,
+        message: error.message,
+        name: error.name,
+        // Supabase StorageError may include statusCode / error
+        ...(error as unknown as Record<string, unknown>),
+      })
       throw new Error(
-        `Failed to store analyze photo in "${bucket}": ${error.message}`
+        `Failed to store analyze photo in "${bucket}" at "${path}": ${error.message}`
       )
     }
     const { data } = supabase.storage.from(bucket).getPublicUrl(path)
     if (!data.publicUrl) {
       throw new Error(
-        `Storage upload succeeded but no public URL was returned for bucket "${bucket}".`
+        `Storage upload succeeded but no public URL was returned for bucket "${bucket}" path "${path}".`
       )
     }
+    console.info("[analyze-upload] stored", {
+      storage: "supabase",
+      bucket,
+      path,
+      bytes: input.buffer.byteLength,
+      url: data.publicUrl,
+    })
     return {
       url: data.publicUrl,
       path,
@@ -98,10 +121,13 @@ export async function storeAnalyzeImage(input: {
     }
   }
 
+  console.error("[analyze-upload] supabase storage not configured", diagnosis)
+
   // Never use in-memory staging on Vercel — isolates do not share memory.
   if (process.env.VERCEL || process.env.NODE_ENV === "production") {
     throw new Error(
-      "Supabase Storage is required for Analyze Photos. Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY so photos survive across server instances."
+      diagnosis.reason ||
+        "Supabase Storage is required for Analyze Photos. Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
     )
   }
 
@@ -167,7 +193,7 @@ export async function resolveAnalyzeImageUrls(
     })
     if (!response.ok) {
       throw new Error(
-        `Photo ${photoNumber} could not be fetched (HTTP ${response.status}).`
+        `Photo ${photoNumber} could not be fetched (HTTP ${response.status}) from ${url}.`
       )
     }
     const contentType =
@@ -175,7 +201,7 @@ export async function resolveAnalyzeImageUrls(
       "image/jpeg"
     const buffer = Buffer.from(await response.arrayBuffer())
     if (buffer.byteLength === 0) {
-      throw new Error(`Photo ${photoNumber} fetched empty.`)
+      throw new Error(`Photo ${photoNumber} fetched empty from ${url}.`)
     }
     if (buffer.byteLength > FETCH_IMAGE_MAX_BYTES) {
       throw new Error(

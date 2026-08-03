@@ -166,9 +166,21 @@ export function ListingGenerator() {
       )
 
       // Temporary resized copies for AI only — originals stay at full resolution.
-      const imageUrls = await uploadAnalyzeImagesIndividually({
+      // Must finish durable uploads (URL+path) before any OpenAI request.
+      const uploaded = await uploadAnalyzeImagesIndividually({
         images: ordered,
+        userId: user.id,
       })
+      const imageUrls = uploaded.map((row) => row.url)
+      if (
+        imageUrls.length !== ordered.length ||
+        imageUrls.some((url) => !url) ||
+        uploaded.some((row) => !row.path)
+      ) {
+        throw new Error(
+          `Analyze upload incomplete (${uploaded.filter((r) => r.url && r.path).length}/${ordered.length} ready). Fix Storage before Analyze.`
+        )
+      }
 
       const response = await fetch("/api/listings/generate", {
         method: "POST",

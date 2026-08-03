@@ -36,7 +36,7 @@ export const confidentStringSchema = z.object({
     .describe("Model confidence from 0 to 1"),
   rationale: z
     .string()
-    .describe("Brief evidence from the photo(s)"),
+    .describe("Short visual evidence only (max ~12 words). No essays."),
 })
 
 export const photoKindEnum = z.enum([
@@ -180,11 +180,11 @@ export const compsEstimateSchema = z.object({
   confidence: z.number().min(0).max(1),
   rationale: z
     .string()
-    .describe("Why this price fits recent sold comparable items"),
+    .describe("One short sentence on comps fit"),
   comparableSummary: z
     .string()
     .describe(
-      "Summary of the sold comps considered (brands, conditions, price bands)"
+      "Brief sold comps summary (brands, conditions, price bands)"
     ),
   sampleSize: z
     .number()
@@ -193,8 +193,82 @@ export const compsEstimateSchema = z.object({
     .describe("Approximate number of sold comps considered in the estimate"),
 })
 
+/**
+ * Stage 1 — combined product identity across ALL photos in one response.
+ * Prefer tag/label evidence; never invent brand/gender/size/material/style.
+ */
+export const productIdentitySchema = z.object({
+  brand: confidentStringSchema.describe(
+    "Brand or licensed property from tags/logos only. Unknown if not visible — never invent."
+  ),
+  licensedProperty: confidentStringSchema.describe(
+    "Franchise/IP when visible (Looney Tunes, Disney…). Unknown if none."
+  ),
+  character: confidentStringSchema.describe(
+    "Named character when visibly depicted/labeled. Unknown if none."
+  ),
+  theme: confidentStringSchema.describe(
+    "Theme e.g. Cartoon, Looney Tunes. Unknown if none."
+  ),
+  features: confidentStringSchema.describe(
+    "Comma-separated visible features only"
+  ),
+  itemType: confidentStringSchema.describe(
+    "Specific garment type e.g. Women's sleeveless button shirt — not vague top"
+  ),
+  category: confidentStringSchema.describe(
+    "Likely eBay path e.g. Women > Clothing > Tops > Blouses"
+  ),
+  size: confidentStringSchema.describe(
+    "Size from tag OCR when readable. Unknown if not on a tag."
+  ),
+  color: confidentStringSchema.describe(
+    "Single primary color only (White, Black, Gray, Blue…)"
+  ),
+  material: confidentStringSchema.describe(
+    "Fabric from care tag when readable. Unknown if not visible."
+  ),
+  style: confidentStringSchema.describe(
+    "Style words from evidence only. Unknown if unsure."
+  ),
+  styleNumber: confidentStringSchema.describe(
+    "Style/RN from tag when readable, else Unknown"
+  ),
+  countryOfOrigin: confidentStringSchema.describe(
+    "Country from tag when readable, else Unknown"
+  ),
+  pattern: confidentStringSchema,
+  gender: confidentStringSchema.describe(
+    "Men, Women, Unisex, Boys, Girls, or Unknown — prefer tag"
+  ),
+  condition: z.object({
+    value: conditionEnum,
+    confidence: z.number().min(0).max(1),
+    rationale: z.string().describe("Short visual evidence only"),
+  }),
+  flaws: confidentStringSchema.describe(
+    "Only clear defects. Use None visible when unsure. Never invent wear."
+  ),
+  tagEvidence: z
+    .string()
+    .describe("Readable tag/label text combined (short)"),
+  logoEvidence: z
+    .string()
+    .describe("Logos/characters/graphics summary (short)"),
+  photos: z
+    .array(
+      z.object({
+        index: z.number().int().min(1),
+        photoKind: photoKindEnum,
+        summary: z.string().describe("One short sentence"),
+      })
+    )
+    .describe("One entry per photo, same order as input"),
+})
+
 export type ImageDetection = z.infer<typeof imageDetectionSchema>
 export type IdentitySecondPassResult = z.infer<typeof identitySecondPassSchema>
+export type ProductIdentity = z.infer<typeof productIdentitySchema>
 export type ListingCopy = z.infer<typeof listingCopySchema>
 export type CompsEstimate = z.infer<typeof compsEstimateSchema>
 

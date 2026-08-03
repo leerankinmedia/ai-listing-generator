@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2, Sparkles, Save, Camera } from "lucide-react"
+import { usePaidToolsAccess } from "@/components/billing/paid-feature-gate"
 import { ImageUploader } from "@/components/listings/image-uploader"
 import { ListingEditorForm } from "@/components/listings/listing-editor-form"
 import { OneClickPublishBar } from "@/components/listings/one-click-publish-bar"
@@ -10,7 +11,13 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/components/auth/auth-provider"
+import { isOwnerBillingStatus } from "@/lib/billing/owner"
 import { readApiJsonResponse } from "@/lib/api/read-json-response"
+import {
+  LISTING_PIPELINE_MODES,
+  PIPELINE_MODE_LABELS,
+  type ListingPipelineMode,
+} from "@/lib/ai/pipeline-mode"
 import { uploadAnalyzeImagesIndividually } from "@/lib/listings/analyze-client"
 import { ensureDurableOriginalImageUrls } from "@/lib/listings/durable-images"
 import { createEmptyListing, withImages } from "@/lib/listings/local-db"
@@ -39,21 +46,34 @@ import type { Listing, ListingImage } from "@/lib/types"
 
 type Step = "upload" | "review"
 
-const ROTATING_MESSAGES = [
-  "Reading labels",
-  "Identifying item details",
-  "Building your listing",
-  "Checking photos for details",
-  "Writing your draft",
-]
+type ProgressStage =
+  | "Uploading"
+  | "Identifying item"
+  | "Building listing"
+  | "Ready"
+
+const STAGE_PERCENT: Record<ProgressStage, number> = {
+  Uploading: 20,
+  "Identifying item": 55,
+  "Building listing": 85,
+  Ready: 100,
+}
 
 function AnalysisProgressScreen({
   percent,
-  message,
+  stage,
+  detail,
 }: {
   percent: number
-  message: string
+  stage: ProgressStage
+  detail?: string | null
 }) {
+  const stages: ProgressStage[] = [
+    "Uploading",
+    "Identifying item",
+    "Building listing",
+    "Ready",
+  ]
   return (
     <div
       className="flex min-h-[280px] flex-col items-center justify-center rounded-2xl border border-border bg-card/70 px-6 py-12 text-center"
@@ -61,7 +81,7 @@ function AnalysisProgressScreen({
       aria-live="polite"
     >
       <p className="font-display text-2xl font-semibold tracking-tight">
-        Analyzing photos
+        {stage === "Ready" ? "Ready" : "Analyzing photos"}
       </p>
       <div className="mt-6 h-2 w-full max-w-md overflow-hidden rounded-full bg-secondary">
         <div
@@ -69,13 +89,32 @@ function AnalysisProgressScreen({
           style={{ width: `${Math.max(4, Math.min(100, percent))}%` }}
         />
       </div>
-      <p className="mt-4 text-sm text-muted-foreground">{message}…</p>
+      <p className="mt-4 text-sm font-medium text-foreground">{stage}</p>
+      {detail && (
+        <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+      )}
+      <ol className="mt-6 flex flex-wrap justify-center gap-2 text-[11px] text-muted-foreground">
+        {stages.map((s) => (
+          <li
+            key={s}
+            className={
+              s === stage
+                ? "rounded-md bg-accent/15 px-2 py-1 font-semibold text-foreground"
+                : "rounded-md px-2 py-1"
+            }
+          >
+            {s}
+          </li>
+        ))}
+      </ol>
     </div>
   )
 }
 
 export function ListingGenerator() {
   const { user } = useAuth()
+  const { status: billingStatus } = usePaidToolsAccess()
+  const isFounder = isOwnerBillingStatus(billingStatus)
   const router = useRouter()
   const [step, setStep] = useState<Step>("upload")
   const [images, setImages] = useState<ListingImage[]>([])
@@ -86,7 +125,21 @@ export function ListingGenerator() {
   const [notice, setNotice] = useState<string | null>(null)
   const [sellerNotes, setSellerNotes] = useState("")
   const [progressPercent, setProgressPercent] = useState(0)
-  const [progressMessage, setProgressMessage] = useState(ROTATING_MESSAGES[0])
+  const [progressStage, setProgressStage] =
+    useState<ProgressStage>("Uploading")
+  const [progressDetail, setProgressDetail] = useState<string | null>(null)
+  const [pipelineMode, setPipelineMode] =
+    useState<ListingPipelineMode>("hybrid")
+  const [lastTimings, setLastTimings] = useState<{
+    uploadMs?: number
+    identityMs?: number
+    listingMs?: number
+    ebayMetadataMs?: number
+    totalMs?: number
+    pipelineMode?: string
+    identityModel?: string
+    copyModel?: string
+  } | null>(null)
   const [aspectMeta, setAspectMeta] = useState<{
     missing: string[]
     filled: number
@@ -120,29 +173,6 @@ export function ListingGenerator() {
     writeUploadSession(user.id, { images, sellerNotes })
   }, [user?.id, images, sellerNotes, sessionHydrated])
 
-  useEffect(() => {
-    if (!generating) return
-    setProgressPercent(8)
-    setProgressMessage(ROTATING_MESSAGES[0])
-    let messageIndex = 0
-    const messageTimer = window.setInterval(() => {
-      messageIndex = (messageIndex + 1) % ROTATING_MESSAGES.length
-      setProgressMessage(ROTATING_MESSAGES[messageIndex])
-    }, 2800)
-    const progressTimer = window.setInterval(() => {
-      setProgressPercent((prev) => {
-        if (prev >= 90) return 90
-        if (prev < 40) return prev + 3
-        if (prev < 70) return prev + 1.5
-        return prev + 0.4
-      })
-    }, 400)
-    return () => {
-      window.clearInterval(messageTimer)
-      window.clearInterval(progressTimer)
-    }
-  }, [generating])
-
   async function handleGenerate() {
     if (!user || images.length === 0) return
     if (images.length > MAX_LISTING_IMAGES) {
@@ -159,16 +189,32 @@ export function ListingGenerator() {
     setError(null)
     setNotice(null)
     setGenerating(true)
+    setLastTimings(null)
+    setProgressStage("Uploading")
+    setProgressPercent(STAGE_PERCENT.Uploading)
+    setProgressDetail(null)
 
+    const wallStart = Date.now()
     try {
       const ordered = [...images].sort(
         (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
       )
 
+      const uploadStart = Date.now()
       // Temporary resized copies for AI only — originals stay at full resolution.
       const imageUrls = await uploadAnalyzeImagesIndividually({
         images: ordered,
+        onProgress: (label) => setProgressDetail(label),
       })
+      const uploadMs = Date.now() - uploadStart
+
+      setProgressStage("Identifying item")
+      setProgressPercent(STAGE_PERCENT["Identifying item"])
+      setProgressDetail(
+        isFounder
+          ? PIPELINE_MODE_LABELS[pipelineMode]
+          : "Reading tags and product details"
+      )
 
       const response = await fetch("/api/listings/generate", {
         method: "POST",
@@ -176,6 +222,8 @@ export function ListingGenerator() {
         body: JSON.stringify({
           imageUrls,
           sellerNotes: sellerNotes.trim() || undefined,
+          uploadMs,
+          ...(isFounder ? { pipelineMode } : {}),
         }),
         credentials: "same-origin",
       })
@@ -183,6 +231,21 @@ export function ListingGenerator() {
         error?: string
         draft?: GeneratedListingOutput
         model?: string
+        identityModel?: string
+        copyModel?: string
+        pipelineMode?: string
+        timings?: {
+          uploadMs?: number
+          identityMs?: number
+          listingMs?: number
+          ebayMetadataMs?: number
+          totalMs?: number
+        }
+        categorySuggestions?: Array<{
+          categoryId: string
+          categoryName: string
+          categoryPath: string
+        }>
         imagesAnalyzed?: number
         imagesFailed?: Array<{ index: number; sourceUrl?: string; error: string }>
         warnings?: string[]
@@ -206,10 +269,11 @@ export function ListingGenerator() {
         })
       }
 
-      const draft = payload.draft as GeneratedListingOutput
-      setProgressPercent(92)
-      setProgressMessage("Completing eBay item specifics")
+      setProgressStage("Building listing")
+      setProgressPercent(STAGE_PERCENT["Building listing"])
+      setProgressDetail("eBay category & item specifics")
 
+      const draft = payload.draft as GeneratedListingOutput
       const mapped = mapDraftToListingFields(draft)
       const base = createEmptyListing(user.id)
       let next = withImages(base, ordered, {
@@ -230,6 +294,26 @@ export function ListingGenerator() {
           analyzedAt: new Date().toISOString(),
         },
       })
+
+      // Seed top Taxonomy suggestion early when the server prefetched it.
+      const topCat = payload.categorySuggestions?.[0]
+      if (topCat?.categoryId) {
+        next = {
+          ...next,
+          specifics: {
+            ...next.specifics,
+            category: topCat.categoryPath || next.specifics.category,
+            ebayCategory: {
+              marketplaceId: "EBAY_US",
+              categoryTreeId: "",
+              categoryId: topCat.categoryId,
+              categoryName: topCat.categoryName,
+              categoryPath: topCat.categoryPath,
+              leafCategory: true,
+            },
+          },
+        }
+      }
 
       if (!next.title.trim()) {
         throw new Error("Mapped listing title was empty after AI analysis.")
@@ -269,8 +353,19 @@ export function ListingGenerator() {
         }
       }
 
+      setProgressStage("Ready")
       setProgressPercent(100)
-      setProgressMessage("Building your listing")
+      const wallMs = Date.now() - wallStart
+      const timings = {
+        ...(payload.timings || {}),
+        uploadMs: payload.timings?.uploadMs ?? uploadMs,
+        totalMs: payload.timings?.totalMs ?? wallMs,
+        pipelineMode: payload.pipelineMode,
+        identityModel: payload.identityModel,
+        copyModel: payload.copyModel,
+      }
+      setLastTimings(timings)
+      console.info("[listing-generator] analysis timings", timings)
 
       if (payload.warnings?.length) {
         setNotice(payload.warnings.join(" "))
@@ -293,6 +388,41 @@ export function ListingGenerator() {
         setNotice("Selling preferences applied from your defaults.")
       }
 
+      if (isFounder && timings.totalMs) {
+        const keyFields = [
+          "brand",
+          "gender",
+          "size",
+          "category",
+          "condition",
+          "itemType",
+        ] as const
+        const accuracy = keyFields.map((key) => {
+          const fc = next.fieldConfidence?.[key]
+          const value = (fc?.value || "").toString().slice(0, 40)
+          const conf =
+            typeof fc?.confidence === "number"
+              ? Math.round(fc.confidence * 100)
+              : "?"
+          return `${key}=${value || "—"}(${conf}%)`
+        })
+        console.info("[listing-generator] founder field snapshot", {
+          pipelineMode: timings.pipelineMode || pipelineMode,
+          identityModel: timings.identityModel,
+          copyModel: timings.copyModel,
+          timings,
+          accuracy,
+        })
+        setNotice((prev) =>
+          [
+            prev,
+            `Founder timing · ${timings.pipelineMode || pipelineMode}: upload ${Math.round((timings.uploadMs || 0) / 100) / 10}s · AI identity ${Math.round((timings.identityMs || 0) / 100) / 10}s · listing ${Math.round((timings.listingMs || 0) / 100) / 10}s · total ${Math.round((timings.totalMs || 0) / 100) / 10}s · ${accuracy.join(" · ")}`,
+          ]
+            .filter(Boolean)
+            .join(" ")
+        )
+      }
+
       setListing(next)
       setStep("review")
     } catch (err) {
@@ -300,6 +430,7 @@ export function ListingGenerator() {
     } finally {
       setGenerating(false)
       setProgressPercent(0)
+      setProgressDetail(null)
     }
   }
 
@@ -383,7 +514,8 @@ export function ListingGenerator() {
           {generating ? (
             <AnalysisProgressScreen
               percent={progressPercent}
-              message={progressMessage}
+              stage={progressStage}
+              detail={progressDetail}
             />
           ) : (
             <>
@@ -393,6 +525,33 @@ export function ListingGenerator() {
                 disabled={generating}
                 userId={user?.id}
               />
+              {isFounder && (
+                <div className="space-y-2 rounded-xl border border-dashed border-accent/40 bg-accent/5 p-3">
+                  <Label htmlFor="pipeline-mode">
+                    Founder model test (temporary)
+                  </Label>
+                  <select
+                    id="pipeline-mode"
+                    value={pipelineMode}
+                    onChange={(e) =>
+                      setPipelineMode(e.target.value as ListingPipelineMode)
+                    }
+                    className="flex h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {LISTING_PIPELINE_MODES.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {PIPELINE_MODE_LABELS[mode]}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-muted-foreground">
+                    Compare mini vs strong vs hybrid. Timings appear after Analyze.
+                    {lastTimings?.totalMs
+                      ? ` Last total: ${(lastTimings.totalMs / 1000).toFixed(1)}s`
+                      : ""}
+                  </p>
+                </div>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="seller-notes">Help the AI</Label>
                 <Textarea

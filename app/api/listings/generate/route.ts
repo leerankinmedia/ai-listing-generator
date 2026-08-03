@@ -5,17 +5,24 @@ import {
   ListingEngineError,
 } from "@/lib/ai/generate-listing"
 import { getListingModel, emptyTokenUsage } from "@/lib/ai/pricing"
+import { resolvePipelineMode } from "@/lib/ai/pipeline-mode"
 import { recordAiUsage } from "@/lib/ai/usage"
 import { checkSubscriptionAccess } from "@/lib/billing/access"
 import {
   assertListingCreditAvailable,
   creditPeriodStartFromSubscription,
 } from "@/lib/billing/credits"
+import { ensureEbayUserAccessToken } from "@/lib/insights/ebay-auth"
 import {
   cleanupAnalyzeStagingUrls,
   resolveAnalyzeImageUrls,
 } from "@/lib/listings/analyze-upload"
+import { isKnownValue } from "@/lib/listings/clothing-identity"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
+import {
+  buildCategorySuggestionQuery,
+  getEbayCategorySuggestions,
+} from "@/lib/marketplaces/adapters/ebay/taxonomy"
 import {
   getServerAuthUser,
   isSupabaseConfigured,
@@ -57,6 +64,8 @@ type GenerateBody = {
   imageUrls?: unknown
   listingId?: unknown
   sellerNotes?: unknown
+  pipelineMode?: unknown
+  uploadMs?: unknown
 }
 
 async function handleGenerate(request: Request) {
@@ -158,6 +167,15 @@ async function handleGenerate(request: Request) {
     const sellerNotes =
       typeof body.sellerNotes === "string" ? body.sellerNotes.trim() : ""
 
+    const pipelineMode = resolvePipelineMode(body.pipelineMode, {
+      isOwner: Boolean(access.entitlement.ownerOverride),
+      envDefault: process.env.LISTWISE_PIPELINE_MODE,
+    })
+    const uploadMs =
+      typeof body.uploadMs === "number" && Number.isFinite(body.uploadMs)
+        ? Math.max(0, Math.round(body.uploadMs))
+        : undefined
+
     if (!isOpenAIConfigured()) {
       return jsonError(
         "OPENAI_API_KEY is required. Add it to your environment to run the production listing engine.",
@@ -166,17 +184,66 @@ async function handleGenerate(request: Request) {
       )
     }
 
+    let categorySuggestions: Array<{
+      categoryId: string
+      categoryName: string
+      categoryPath: string
+    }> = []
+
     const images = await resolveAnalyzeImageUrls(imageUrls)
     const {
       draft,
       model,
+      identityModel,
+      copyModel,
+      pipelineMode: usedMode,
       usage,
       imagesAnalyzed: analyzedCount,
       imagesFailed,
       warnings,
       partial,
+      timings,
     } = await generateListingFromImages(images, {
       sellerNotes: sellerNotes || undefined,
+      pipelineMode,
+      onIdentityReady: async (fields) => {
+        // Start Taxonomy suggestions as soon as item type + department exist.
+        if (
+          !isKnownValue(fields.itemType.value) &&
+          !isKnownValue(fields.gender.value)
+        ) {
+          return
+        }
+        try {
+          const token = await ensureEbayUserAccessToken()
+          if (!token.ok) return
+          const q = buildCategorySuggestionQuery({
+            title: [
+              fields.brand.value,
+              fields.gender.value,
+              fields.itemType.value,
+            ]
+              .filter((v) => isKnownValue(v))
+              .join(" "),
+            itemType: fields.itemType.value,
+            department: fields.gender.value,
+            brand: fields.brand.value,
+          })
+          if (!q) return
+          const suggested = await getEbayCategorySuggestions(
+            token.accessToken,
+            q,
+            { limit: 6 }
+          )
+          categorySuggestions = suggested.suggestions.map((s) => ({
+            categoryId: s.categoryId,
+            categoryName: s.categoryName,
+            categoryPath: s.categoryPath,
+          }))
+        } catch (err) {
+          console.warn("[listing engine] early category suggest failed", err)
+        }
+      },
     })
     imagesAnalyzed = analyzedCount
 
@@ -212,9 +279,31 @@ async function handleGenerate(request: Request) {
     // Best-effort cleanup for ephemeral staging URLs.
     void cleanupAnalyzeStagingUrls(imageUrls)
 
+    const fullTimings = {
+      ...timings,
+      uploadMs,
+      totalMs:
+        typeof uploadMs === "number"
+          ? timings.totalMs + uploadMs
+          : timings.totalMs,
+    }
+
+    console.info("[listing engine] analysis timings", {
+      pipelineMode: usedMode,
+      identityModel,
+      copyModel,
+      ...fullTimings,
+      ownerTest: Boolean(access.entitlement.ownerOverride),
+    })
+
     return NextResponse.json({
       draft,
       model,
+      identityModel,
+      copyModel,
+      pipelineMode: usedMode,
+      timings: fullTimings,
+      categorySuggestions,
       imagesAnalyzed,
       imagesFailed,
       warnings,

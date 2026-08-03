@@ -8,6 +8,11 @@ import {
   splitPrimaryColorAndDetails,
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import { ebayFetch } from "@/lib/marketplaces/adapters/ebay/client"
+import {
+  cacheGet,
+  cacheSet,
+  EBAY_TAXONOMY_CACHE_TTL_MS,
+} from "@/lib/marketplaces/adapters/ebay/ebay-cache"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import {
   ASPECT_AUTO_FILL_CONFIDENCE,
@@ -72,19 +77,28 @@ async function getDefaultCategoryTreeId(accessToken: string) {
   return categoryTreeId
 }
 
-/** Taxonomy getItemAspectsForCategory for a leaf category. */
+/** Taxonomy getItemAspectsForCategory for a leaf category (cached). */
 export async function fetchEbayItemAspectsForCategory(
   accessToken: string,
   categoryId: string
 ): Promise<EbayAspect[]> {
+  const id = categoryId.trim()
+  if (!id) return []
+
+  const cacheKey = `ebay:aspects:${marketplaceId()}:${id}`
+  const cached = cacheGet<EbayAspect[]>(cacheKey)
+  if (cached) return cached
+
   const categoryTreeId = await getDefaultCategoryTreeId(accessToken)
   const payload = (await ebayFetch(
-    `/commerce/taxonomy/v1/category_tree/${encodeURIComponent(categoryTreeId)}/get_item_aspects_for_category?category_id=${encodeURIComponent(categoryId)}`,
+    `/commerce/taxonomy/v1/category_tree/${encodeURIComponent(categoryTreeId)}/get_item_aspects_for_category?category_id=${encodeURIComponent(id)}`,
     accessToken,
     { method: "GET", step: "getItemAspectsForCategory" }
   )) as ItemAspectsResponse | null
 
-  return payload?.aspects ?? []
+  const aspects = payload?.aspects ?? []
+  cacheSet(cacheKey, aspects, EBAY_TAXONOMY_CACHE_TTL_MS)
+  return aspects
 }
 
 function allowedValues(aspect: EbayAspect): string[] {

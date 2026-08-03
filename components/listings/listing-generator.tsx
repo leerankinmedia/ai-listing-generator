@@ -240,7 +240,6 @@ export function ListingGenerator() {
       next = hydrated.listing
 
       // Apply saved selling defaults (shipping, returns, offers, promo).
-      let defaultsApplied = false
       try {
         const prefsRes = await fetch("/api/seller/ebay-defaults", {
           credentials: "same-origin",
@@ -256,7 +255,6 @@ export function ListingGenerator() {
               normalizeEbaySellerDefaults(prefs.defaults),
               { onlyIfUnset: false }
             )
-            defaultsApplied = true
           }
         }
       } catch {
@@ -265,7 +263,6 @@ export function ListingGenerator() {
           next = applyEbaySellerDefaultsToListing(next, local.defaults, {
             onlyIfUnset: false,
           })
-          defaultsApplied = true
         }
       }
 

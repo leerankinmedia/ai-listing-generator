@@ -106,6 +106,25 @@ export interface ListingShippingPackage {
   packageType: string
 }
 
+/** Selected leaf eBay category (Taxonomy) — never a hardcoded map. */
+export interface EbayListingCategory {
+  marketplaceId: string
+  categoryTreeId: string
+  categoryId: string
+  categoryName: string
+  /** Full breadcrumb path, e.g. Clothing > Women > … > Sweatshirts */
+  categoryPath: string
+  leafCategory: boolean
+}
+
+/** Condition chosen from Metadata getItemConditionPolicies for the selected category. */
+export interface EbayListingCondition {
+  conditionId: string
+  conditionName: string
+  /** Inventory API ConditionEnum derived from conditionId */
+  conditionEnum: string
+}
+
 export interface ListingSpecifics {
   brand?: string
   size?: string
@@ -116,6 +135,10 @@ export interface ListingSpecifics {
   gender?: string
   condition?: ItemCondition | string
   category?: string
+  /** Live eBay leaf category selection (source of truth for publish). */
+  ebayCategory?: EbayListingCategory
+  /** Condition ID/name from policies for ebayCategory.categoryId only. */
+  ebayCondition?: EbayListingCondition
   /** Visible defects / wear notes */
   flaws?: string
   extras?: Record<string, string>

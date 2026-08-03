@@ -24,7 +24,19 @@ import { resolveEbayImageUrls } from "@/lib/marketplaces/adapters/ebay/media"
 import { isEbayConfigured, refreshEbayToken, ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
 import { ensureEbayBusinessPolicyIds } from "@/lib/marketplaces/adapters/ebay/policies"
 import { applyEbayPromotedListing } from "@/lib/marketplaces/adapters/ebay/promoted-listings"
-import { resolveEbayLeafCategoryId } from "@/lib/marketplaces/adapters/ebay/taxonomy"
+import {
+  conditionIdAllowedForCategory,
+  conditionEnumForId,
+  inventoryConditionAllowedForCategory,
+  mapAiConditionToPolicy,
+} from "@/lib/marketplaces/adapters/ebay/condition-map"
+import { ebayMarketplaceId } from "@/lib/marketplaces/adapters/ebay/ebay-cache"
+import { getItemConditionPoliciesForCategory } from "@/lib/marketplaces/adapters/ebay/metadata-conditions"
+import {
+  buildCategorySuggestionQuery,
+  getEbayCategoryNode,
+  getEbayCategorySuggestions,
+} from "@/lib/marketplaces/adapters/ebay/taxonomy"
 import type { MarketplaceAdapter, PublishResult } from "@/lib/marketplaces/adapters/types"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { saveConnection } from "@/lib/marketplaces/connections/store"
@@ -250,11 +262,150 @@ export const ebayAdapter: MarketplaceAdapter = {
       }),
     })
 
-    // 3) Leaf category from Taxonomy suggestions (never a hardcoded parent ID)
-    const { categoryId } = await resolveEbayLeafCategoryId(
+    // 3) Leaf category — prefer saved Taxonomy selection; never invent parent IDs.
+    const marketplaceId = ebayMarketplaceId()
+    let categoryId = listing.specifics.ebayCategory?.categoryId?.trim() || ""
+    let categoryName =
+      listing.specifics.ebayCategory?.categoryName?.trim() || ""
+    let categoryPath =
+      listing.specifics.ebayCategory?.categoryPath?.trim() ||
+      listing.specifics.category?.trim() ||
+      ""
+    let categoryTreeId =
+      listing.specifics.ebayCategory?.categoryTreeId?.trim() || ""
+
+    if (!categoryId || listing.specifics.ebayCategory?.leafCategory === false) {
+      const query = buildCategorySuggestionQuery({
+        title: listing.title,
+        itemType:
+          listing.fieldConfidence?.itemType?.value ||
+          listing.specifics.extras?.Type,
+        department: listing.specifics.gender,
+        brand: listing.specifics.brand,
+        keywords: listing.keywords,
+        categoryHint: listing.specifics.category,
+      })
+      const suggested = await getEbayCategorySuggestions(
+        withLocation.accessToken,
+        query || listing.title,
+        { marketplaceId, limit: 1 }
+      )
+      const first = suggested.suggestions[0]
+      if (!first?.categoryId) {
+        throw new MarketplaceError(
+          "Select a leaf eBay category before publishing.",
+          "ebay_category_undetermined",
+          400
+        )
+      }
+      categoryId = first.categoryId
+      categoryName = first.categoryName
+      categoryPath = first.categoryPath
+      categoryTreeId = suggested.categoryTreeId
+    }
+
+    const categoryNode = await getEbayCategoryNode(
       withLocation.accessToken,
-      listing.title
+      categoryId,
+      { categoryTreeId: categoryTreeId || undefined, marketplaceId }
     )
+    if (categoryNode && !categoryNode.leafCategory) {
+      throw new MarketplaceError(
+        "Only leaf (bottom-level) eBay categories can be published. Pick a more specific category.",
+        "ebay_category_not_leaf",
+        400
+      )
+    }
+    if (categoryNode?.categoryName) categoryName = categoryNode.categoryName
+
+    // 3b) Condition policies for THIS category only — never reuse another category's ID.
+    const conditionPolicy = await getItemConditionPoliciesForCategory(
+      withLocation.accessToken,
+      categoryId,
+      marketplaceId
+    )
+    const validConditionIds = conditionPolicy.conditions.map((c) => c.conditionId)
+
+    let selectedConditionId =
+      listing.specifics.ebayCondition?.conditionId?.trim() ||
+      listing.specifics.extras?.ebayConditionId?.trim() ||
+      ""
+    let selectedConditionName =
+      listing.specifics.ebayCondition?.conditionName?.trim() ||
+      listing.specifics.extras?.ebayConditionDisplay?.trim() ||
+      ""
+    let selectedConditionEnum =
+      listing.specifics.ebayCondition?.conditionEnum?.trim() ||
+      listing.specifics.extras?.ebayConditionEnum?.trim() ||
+      ""
+
+    if (
+      !selectedConditionId ||
+      !conditionIdAllowedForCategory(selectedConditionId, conditionPolicy.conditions)
+    ) {
+      const mapped = mapAiConditionToPolicy(
+        listing.specifics.condition ||
+          listing.fieldConfidence?.condition?.value ||
+          "Pre-owned",
+        conditionPolicy.conditions
+      )
+      if (!mapped) {
+        throw new MarketplaceError(
+          `No valid eBay condition for category ${categoryId}.`,
+          "ebay_condition_unmapped",
+          400
+        )
+      }
+      selectedConditionId = mapped.conditionId
+      selectedConditionName = mapped.conditionName
+      selectedConditionEnum = mapped.conditionEnum
+    } else if (!selectedConditionEnum) {
+      selectedConditionEnum =
+        conditionEnumForId(selectedConditionId) || inventoryItem.condition
+    }
+
+    if (
+      !conditionIdAllowedForCategory(selectedConditionId, conditionPolicy.conditions)
+    ) {
+      throw new MarketplaceError(
+        `Condition ID ${selectedConditionId} is not valid for category ${categoryId}. Valid IDs: ${validConditionIds.join(", ")}.`,
+        "ebay_condition_invalid_for_category",
+        400
+      )
+    }
+
+    inventoryItem.condition = selectedConditionEnum
+
+    if (
+      !inventoryConditionAllowedForCategory(
+        inventoryItem.condition,
+        conditionPolicy.conditions
+      )
+    ) {
+      // Fall back to the enum for the validated conditionId.
+      const fromId = conditionEnumForId(selectedConditionId)
+      if (!fromId) {
+        throw new MarketplaceError(
+          `Condition ${selectedConditionName} (${selectedConditionId}) cannot be mapped to an Inventory API enum for category ${categoryId}.`,
+          "ebay_condition_enum_missing",
+          400
+        )
+      }
+      inventoryItem.condition = fromId
+    }
+
+    console.info("[ebay/publish] category + condition before inventory write", {
+      marketplaceId,
+      categoryTreeId: categoryTreeId || null,
+      categoryId,
+      categoryName,
+      categoryPath,
+      selectedConditionName,
+      selectedConditionId,
+      selectedConditionEnum: inventoryItem.condition,
+      validConditionIds,
+      itemConditionRequired: conditionPolicy.itemConditionRequired,
+    })
 
     // 4) Required item aspects for this leaf category — before inventory write
     const taxonomyAspects = await fetchEbayItemAspectsForCategory(
@@ -335,6 +486,29 @@ export const ebayAdapter: MarketplaceAdapter = {
     })
 
     // 6) Create (or update existing) offer with the verified location key
+    console.info("[ebay/publish] pre-publishOffer validation", {
+      marketplaceId,
+      categoryTreeId: categoryTreeId || null,
+      categoryId,
+      categoryPath,
+      selectedConditionName,
+      selectedConditionId,
+      selectedConditionEnum: inventoryItem.condition,
+      validConditionIds,
+      sku: publishSku,
+      offerCategoryId: offer.categoryId,
+    })
+
+    if (
+      !conditionIdAllowedForCategory(selectedConditionId, conditionPolicy.conditions)
+    ) {
+      throw new MarketplaceError(
+        `Refusing publishOffer: condition ID ${selectedConditionId} is not in the condition policy for category ${categoryId}.`,
+        "ebay_condition_invalid_for_category",
+        400
+      )
+    }
+
     const offerId = await resolveOfferId(withLocation.accessToken, publishSku, offer)
 
     // 7) Publish offer

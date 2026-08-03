@@ -11,6 +11,7 @@ import {
   type AiEmployeeAspectSummary,
   type EbayAspectFormField,
 } from "@/lib/listings/ebay-aspect-fields"
+import { applyEbayCategorySelection } from "@/lib/listings/ebay-category"
 import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
 import type { Listing } from "@/lib/types"
 
@@ -63,6 +64,16 @@ export async function hydrateListingEbayAspects(
       formFields?: EbayAspectFormField[]
       resolvedFields?: Array<{ name: string; value: string }>
       suggestedTitle?: string
+      marketplaceId?: string
+      categoryTreeId?: string
+      categoryId?: string | null
+      categoryName?: string
+      categoryPath?: string
+      mappedCondition?: {
+        conditionId: string
+        conditionName: string
+        conditionEnum: string
+      } | null
     }
 
     const formFields = json.formFields || []
@@ -71,6 +82,44 @@ export async function hydrateListingEbayAspects(
       if (field.allowedValues?.length) {
         optionsByName.set(field.name.toLowerCase(), field.allowedValues)
       }
+    }
+
+    let next = listing
+
+    // Persist suggested/selected leaf category + mapped condition when missing.
+    if (
+      json.categoryId &&
+      (!listing.specifics.ebayCategory?.categoryId ||
+        listing.specifics.ebayCategory.categoryId === json.categoryId)
+    ) {
+      next = applyEbayCategorySelection(
+        next,
+        {
+          marketplaceId: json.marketplaceId || "EBAY_US",
+          categoryTreeId:
+            json.categoryTreeId ||
+            listing.specifics.ebayCategory?.categoryTreeId ||
+            "",
+          categoryId: json.categoryId,
+          categoryName:
+            json.categoryName ||
+            listing.specifics.ebayCategory?.categoryName ||
+            json.categoryId,
+          categoryPath:
+            json.categoryPath ||
+            listing.specifics.ebayCategory?.categoryPath ||
+            json.categoryName ||
+            json.categoryId,
+          leafCategory: true,
+        },
+        json.mappedCondition
+          ? {
+              conditionId: json.mappedCondition.conditionId,
+              conditionName: json.mappedCondition.conditionName,
+              conditionEnum: json.mappedCondition.conditionEnum,
+            }
+          : listing.specifics.ebayCondition
+      )
     }
 
     const fromResolved = json.resolvedFields || []
@@ -82,8 +131,8 @@ export async function hydrateListingEbayAspects(
       }))
       .filter((f) => f.value)
 
-    let next = applyExactAspectsToListing(
-      listing,
+    next = applyExactAspectsToListing(
+      next,
       [...fromResolved, ...fromSuggested],
       optionsByName
     )

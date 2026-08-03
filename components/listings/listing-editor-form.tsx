@@ -4,6 +4,7 @@ import { useMemo, useState } from "react"
 import { ConfidenceMeter } from "@/components/listings/confidence-meter"
 import { ConfirmIdentityBox } from "@/components/listings/confirm-identity-box"
 import { CompsPricingPanel } from "@/components/listings/comps-pricing-panel"
+import { EbayCategoryPicker } from "@/components/listings/ebay-category-picker"
 import { EbayItemSpecificsFields } from "@/components/listings/ebay-item-specifics-fields"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -24,15 +25,6 @@ interface ListingEditorFormProps {
     total: number
   }) => void
 }
-
-const CONDITIONS = [
-  "New with tags",
-  "New without tags",
-  "Excellent",
-  "Good",
-  "Fair",
-  "Poor",
-]
 
 function FieldHeader({
   label,
@@ -186,21 +178,11 @@ export function ListingEditorForm({
           />
         </div>
 
-        <div className="space-y-2">
-          <FieldHeader
-            label="Category"
-            htmlFor="category"
-            fieldKey="category"
-            listing={listing}
-          />
-          <Input
-            id="category"
-            value={listing.specifics.category ?? ""}
-            disabled={disabled}
-            onChange={(e) => updateSpecific("category", e.target.value, "category")}
-            placeholder="Clothing, Shoes & Accessories > Men > Men's Clothing > Jeans"
-          />
-        </div>
+        <EbayCategoryPicker
+          listing={listing}
+          onChange={onChange}
+          disabled={disabled}
+        />
       </section>
 
       <CompsPricingPanel
@@ -214,8 +196,8 @@ export function ListingEditorForm({
         <div>
           <h2 className="font-display text-lg font-semibold">Item specifics</h2>
           <p className="text-sm text-muted-foreground">
-            Your AI employee already filled what it could from photos, OCR, title, and
-            description. Confirm Review items — everything else is ready.
+            Required specifics for the selected eBay leaf category appear below.
+            Completed and optional fields stay under More item specifics.
           </p>
         </div>
 
@@ -274,26 +256,28 @@ export function ListingEditorForm({
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <FieldHeader
-              label="Condition"
+              label="AI condition note"
               htmlFor="condition"
               fieldKey="condition"
               listing={listing}
             />
-            <select
+            <Input
               id="condition"
               disabled={disabled}
-              value={listing.specifics.condition ?? "Good"}
+              value={
+                listing.specifics.ebayCondition?.conditionName ||
+                listing.specifics.condition ||
+                ""
+              }
               onChange={(e) =>
                 updateSpecific("condition", e.target.value, "condition")
               }
-              className="flex h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {CONDITIONS.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
+              placeholder="Mapped from eBay category conditions above"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Publish uses the eBay condition ID selected for this category — not a
+              global condition list.
+            </p>
           </div>
         </div>
 

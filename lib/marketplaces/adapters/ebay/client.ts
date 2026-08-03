@@ -92,7 +92,7 @@ export function mapListingToEbayInventory(listing: Listing) {
           quantity: listingQuantity(listing),
         },
       },
-      condition: mapCondition(listing.specifics.condition),
+      condition: resolveInventoryCondition(listing),
       // Never invent wear — neutral statement when no verified flaws.
       conditionDescription: ebayConditionDescription(
         listing.specifics.flaws,
@@ -127,7 +127,18 @@ export function attachEbayImageUrls(
   return inventoryItem
 }
 
-function mapCondition(condition?: string) {
+/** Prefer Metadata-mapped Inventory enum when present on the listing. */
+export function resolveInventoryCondition(listing: Listing): string {
+  const fromPolicy = listing.specifics.ebayCondition?.conditionEnum?.trim()
+  if (fromPolicy) return fromPolicy.toUpperCase()
+
+  const fromExtra = listing.specifics.extras?.ebayConditionEnum?.trim()
+  if (fromExtra) return fromExtra.toUpperCase()
+
+  return mapConditionLabelToEnum(listing.specifics.condition)
+}
+
+function mapConditionLabelToEnum(condition?: string) {
   switch (condition) {
     case "New with tags":
       return "NEW"
@@ -141,6 +152,9 @@ function mapCondition(condition?: string) {
       return "USED_GOOD"
     case "Poor":
       return "USED_ACCEPTABLE"
+    case "Pre-owned":
+    case "Used":
+      return "USED_EXCELLENT"
     default:
       return "USED_EXCELLENT"
   }

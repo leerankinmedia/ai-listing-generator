@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import {
   ANALYZE_SINGLE_UPLOAD_MAX_BYTES,
+  diagnoseSupabaseStorageConfig,
   storeAnalyzeImage,
 } from "@/lib/listings/analyze-upload"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
@@ -108,6 +109,14 @@ export async function POST(request: Request) {
       index,
     })
 
+    if (!stored.url || !stored.path) {
+      return jsonError(
+        `Analyze upload incomplete: url=${Boolean(stored.url)} path=${Boolean(stored.path)}.`,
+        500,
+        { storage: stored.storage }
+      )
+    }
+
     return NextResponse.json({
       ok: true,
       url: stored.url,
@@ -118,10 +127,23 @@ export async function POST(request: Request) {
       index,
     })
   } catch (error) {
-    console.error("[analyze-upload]", error)
-    return jsonError(
-      error instanceof Error ? error.message : "Photo upload failed.",
-      500
-    )
+    const message =
+      error instanceof Error ? error.message : "Photo upload failed."
+    const diagnosis = diagnoseSupabaseStorageConfig({ requireServiceRole: true })
+    console.error("[analyze-upload]", {
+      message,
+      diagnosis,
+      error,
+    })
+    return jsonError(message, 500, {
+      diagnosis: {
+        hasUrl: diagnosis.hasUrl,
+        hasPublishableKey: diagnosis.hasPublishableKey,
+        hasServiceRoleKey: diagnosis.hasServiceRoleKey,
+        bucket: diagnosis.bucket,
+        urlHost: diagnosis.urlHost,
+        missing: diagnosis.missing,
+      },
+    })
   }
 }

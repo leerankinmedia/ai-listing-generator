@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation"
 import { Loader2, RefreshCw, Shield } from "lucide-react"
 import { useAuth } from "@/components/auth/auth-provider"
 import { Button, buttonVariants } from "@/components/ui/button"
+import { StorageHealthCheck } from "@/components/admin/storage-health-check"
 import { cn } from "@/lib/utils"
 
 type UsagePayload = {
@@ -108,6 +109,7 @@ export function AiUsageAdminClient() {
 
   return (
     <div className="space-y-8">
+      <StorageHealthCheck />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="mb-1 inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-accent">

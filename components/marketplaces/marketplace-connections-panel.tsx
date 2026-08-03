@@ -420,8 +420,8 @@ export function MarketplaceConnectionsPanel() {
 
       {!loading && status && !status.connectionsSecretConfigured && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          Set <code className="font-mono text-xs">CONNECTIONS_SECRET</code> (min
-          16 chars) in the server environment before connecting accounts.
+          Marketplace credential storage is unavailable on this server. Contact
+          support — do not reconnect until storage is restored.
         </div>
       )}
 
@@ -496,7 +496,9 @@ export function MarketplaceConnectionsPanel() {
                             ? "Connected"
                             : isLive
                               ? "Ready"
-                              : "Needs credentials"}
+                              : adapter.id === "ebay"
+                                ? "Not connected"
+                                : "Needs credentials"}
                       </span>
                     </div>
                     <p className="max-w-xl text-sm text-muted-foreground">

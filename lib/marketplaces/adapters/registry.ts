@@ -32,19 +32,21 @@ export function listImplementedAdapters(): MarketplaceAdapter[] {
 }
 
 export function getAdapterMeta(): AdapterMeta[] {
-  const cryptoReady = isConnectionsCryptoConfigured()
+  // eBay "live" depends on eBay app credentials only.
+  // Credential encryption auto-derives when CONNECTIONS_SECRET is unset.
+  // Never show "Needs credentials" solely because CONNECTIONS_SECRET is missing.
   return [
     {
       id: "ebay",
       name: "eBay",
-      status: isEbayConfigured() && cryptoReady ? "live" : "requires_credentials",
+      status: isEbayConfigured() ? "live" : "requires_credentials",
       authMethod: "oauth",
       capabilities: ["oauth", "publish", "disconnect"],
     },
     {
       id: "vinted",
       name: "Vinted",
-      status: cryptoReady ? "live" : "requires_credentials",
+      status: isConnectionsCryptoConfigured() ? "live" : "requires_credentials",
       authMethod: "api_token",
       capabilities: ["api_token", "publish", "disconnect"],
     },
@@ -52,7 +54,9 @@ export function getAdapterMeta(): AdapterMeta[] {
       id: "whatnot",
       name: "Whatnot",
       status:
-        isWhatnotConfigured() && cryptoReady ? "live" : "requires_credentials",
+        isWhatnotConfigured() && isConnectionsCryptoConfigured()
+          ? "live"
+          : "requires_credentials",
       authMethod: "oauth",
       capabilities: ["oauth", "publish", "disconnect"],
     },

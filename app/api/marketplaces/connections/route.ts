@@ -18,11 +18,12 @@ export const dynamic = "force-dynamic"
  * Connected status. Connect/disconnect/publish remain access-gated.
  */
 export async function GET() {
+  // Auto-derived secrets from SUPABASE_SERVICE_ROLE_KEY / EBAY_CLIENT_SECRET count.
   if (!isConnectionsCryptoConfigured()) {
     return NextResponse.json(
       {
         error:
-          "CONNECTIONS_SECRET is required to store marketplace credentials securely.",
+          "Marketplace credential storage is not available on this server.",
         connections: [],
       },
       { status: 503 }

@@ -196,8 +196,7 @@ export function ListingEditorForm({
         <div>
           <h2 className="font-display text-lg font-semibold">Item specifics</h2>
           <p className="text-sm text-muted-foreground">
-            Required specifics for the selected eBay leaf category appear below.
-            Completed and optional fields stay under More item specifics.
+            Review anything marked for attention — the rest is ready to publish.
           </p>
         </div>
 

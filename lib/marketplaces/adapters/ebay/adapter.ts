@@ -134,7 +134,6 @@ export const ebayAdapter: MarketplaceAdapter = {
     "EBAY_CLIENT_SECRET",
     "EBAY_REDIRECT_URI",
     "EBAY_ENVIRONMENT",
-    "CONNECTIONS_SECRET",
   ],
   async publish(listing: Listing, connection: StoredMarketplaceConnection): Promise<PublishResult> {
     if (!isEbayConfigured()) {
@@ -293,7 +292,7 @@ export const ebayAdapter: MarketplaceAdapter = {
       const first = suggested.suggestions[0]
       if (!first?.categoryId) {
         throw new MarketplaceError(
-          "Select a leaf eBay category before publishing.",
+          "Could not determine an eBay category from this listing. Add brand, item type, or a Help the AI note, then try again.",
           "ebay_category_undetermined",
           400
         )

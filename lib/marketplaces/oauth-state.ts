@@ -3,7 +3,7 @@ import { cookies } from "next/headers"
 import type { NextRequest, NextResponse } from "next/server"
 import {
   encryptPayload,
-  decryptPayload,
+  decryptPayloadWithFallback,
   isConnectionsCryptoConfigured,
 } from "@/lib/marketplaces/connections/crypto"
 
@@ -133,7 +133,7 @@ export async function consumeOAuthStateRaw(
 export function parseOAuthStateCookie(cookieValue: string): OAuthStatePayload {
   try {
     const json = isConnectionsCryptoConfigured()
-      ? decryptPayload(cookieValue)
+      ? decryptPayloadWithFallback(cookieValue)
       : Buffer.from(cookieValue, "base64url").toString("utf8")
     const parsed = JSON.parse(json) as OAuthStatePayload
     if (!parsed.marketplaceId || !parsed.nonce || !parsed.createdAt) {

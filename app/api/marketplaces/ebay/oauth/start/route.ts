@@ -213,7 +213,7 @@ export async function GET(request: NextRequest) {
       return noStoreJson(
         {
           error:
-            "CONNECTIONS_SECRET is required before connecting marketplaces.",
+            "Marketplace credential storage is not available. Set SUPABASE_SERVICE_ROLE_KEY (or CONNECTIONS_SECRET) on the server.",
         },
         503
       )

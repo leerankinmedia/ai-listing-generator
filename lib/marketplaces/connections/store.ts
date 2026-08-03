@@ -71,7 +71,9 @@ export async function saveConnection(
   connection: StoredMarketplaceConnection
 ): Promise<void> {
   if (!isConnectionsCryptoConfigured()) {
-    throw new Error("CONNECTIONS_SECRET is not configured.")
+    throw new Error(
+      "Marketplace credential storage is not available on this server."
+    )
   }
 
   const updated: StoredMarketplaceConnection = {
@@ -157,7 +159,12 @@ export async function saveConnection(
 export async function getConnection(
   marketplaceId: MarketplaceId
 ): Promise<StoredMarketplaceConnection | null> {
-  if (!isConnectionsCryptoConfigured()) return null
+  if (!isConnectionsCryptoConfigured()) {
+    console.error(
+      "[connections] getConnection: no secret candidates (CONNECTIONS_SECRET / SUPABASE_SERVICE_ROLE_KEY)"
+    )
+    return null
+  }
 
   const user = await getServerAuthUser()
   // Authenticated users: Supabase is the only source of truth (no cookie ghost).
@@ -175,7 +182,11 @@ export async function getConnection(
     if (!data) return null
     try {
       return deserializeConnection((data as ConnectionRow).encrypted_payload)
-    } catch {
+    } catch (err) {
+      console.error("[connections] decrypt failed for existing row", {
+        marketplaceId,
+        error: err instanceof Error ? err.message : String(err),
+      })
       return null
     }
   }
@@ -214,8 +225,12 @@ export async function listConnections(): Promise<StoredMarketplaceConnection[]> 
     for (const row of (data as ConnectionRow[] | null) ?? []) {
       try {
         results.push(deserializeConnection(row.encrypted_payload))
-      } catch {
-        // skip corrupt rows
+      } catch (err) {
+        console.error("[connections] skip undecryptable row", {
+          marketplaceId: row.marketplace_id,
+          accountLabel: row.account_label,
+          error: err instanceof Error ? err.message : String(err),
+        })
       }
     }
     return results

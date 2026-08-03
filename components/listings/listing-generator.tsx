@@ -240,7 +240,6 @@ export function ListingGenerator() {
       next = hydrated.listing
 
       // Apply saved selling defaults (shipping, returns, offers, promo).
-      let defaultsApplied = false
       try {
         const prefsRes = await fetch("/api/seller/ebay-defaults", {
           credentials: "same-origin",
@@ -256,7 +255,6 @@ export function ListingGenerator() {
               normalizeEbaySellerDefaults(prefs.defaults),
               { onlyIfUnset: false }
             )
-            defaultsApplied = true
           }
         }
       } catch {
@@ -265,7 +263,6 @@ export function ListingGenerator() {
           next = applyEbaySellerDefaultsToListing(next, local.defaults, {
             onlyIfUnset: false,
           })
-          defaultsApplied = true
         }
       }
 
@@ -278,19 +275,13 @@ export function ListingGenerator() {
         setNotice(
           "Partial analysis: some photos could not be read. Review the draft carefully."
         )
-      } else if (!defaultsApplied) {
-        setNotice(
-          "Set your selling defaults once so shipping, returns, and offers fill automatically."
-        )
       } else if (hydrated.ok && hydrated.summary.total > 0) {
         const n = hydrated.summary.needsAttention
         setNotice(
           n === 0
-            ? `AI completed ${hydrated.summary.completed}/${hydrated.summary.total} item specifics. Selling preferences applied.`
-            : `AI completed ${hydrated.summary.completed}/${hydrated.summary.total} item specifics. Only ${n} need your attention.`
+            ? `Ready — ${hydrated.summary.completed}/${hydrated.summary.total} specifics filled.`
+            : `${hydrated.summary.completed}/${hydrated.summary.total} specifics filled. ${n} need a quick review.`
         )
-      } else if (defaultsApplied) {
-        setNotice("Selling preferences applied from your defaults.")
       }
 
       setListing(next)

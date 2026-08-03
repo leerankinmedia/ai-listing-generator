@@ -176,31 +176,73 @@ export function OneClickPublishBar({
         // Never allow "Ready" with 0/0 — wait until eBay specifics have loaded.
         if (!aspectMeta || aspectMeta.total <= 0) {
           setError(
-            "eBay item specifics are still loading or failed to load. Wait for specifics to appear above, then publish."
+            "Item specifics are still loading. Wait a moment, then publish."
           )
           setPublishing(false)
           return
         }
+
+        // Auto-resolve leaf category if Analyze/hydrate left it empty.
         if (
           !listingForChecks.specifics.ebayCategory?.categoryId ||
           listingForChecks.specifics.ebayCategory.leafCategory === false
         ) {
-          setError(
-            "Select a leaf eBay category before publishing."
-          )
-          setPublishing(false)
-          return
+          try {
+            const catRes = await fetch("/api/marketplaces/ebay/categories", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "same-origin",
+              body: JSON.stringify({
+                title: listingForChecks.title,
+                itemType:
+                  listingForChecks.fieldConfidence?.itemType?.value ||
+                  listingForChecks.specifics.extras?.Type,
+                department: listingForChecks.specifics.gender,
+                brand: listingForChecks.specifics.brand,
+                keywords: listingForChecks.keywords,
+                categoryHint: listingForChecks.specifics.category,
+                limit: 1,
+              }),
+            })
+            if (catRes.ok) {
+              const catJson = (await catRes.json()) as {
+                categoryTreeId?: string
+                marketplaceId?: string
+                suggestions?: Array<{
+                  categoryId: string
+                  categoryName: string
+                  categoryPath: string
+                  leafCategory: boolean
+                }>
+              }
+              const top = catJson.suggestions?.[0]
+              if (top?.categoryId) {
+                const { applyEbayCategorySelection } = await import(
+                  "@/lib/listings/ebay-category"
+                )
+                listingForChecks = applyEbayCategorySelection(
+                  listingForChecks,
+                  {
+                    marketplaceId: catJson.marketplaceId || "EBAY_US",
+                    categoryTreeId: catJson.categoryTreeId || "",
+                    categoryId: top.categoryId,
+                    categoryName: top.categoryName,
+                    categoryPath: top.categoryPath,
+                    leafCategory: true,
+                  },
+                  listingForChecks.specifics.ebayCondition || null
+                )
+                onListingChange?.(listingForChecks)
+              }
+            }
+          } catch {
+            /* adapter also auto-suggests */
+          }
         }
-        if (!listingForChecks.specifics.ebayCondition?.conditionId) {
-          setError(
-            "Select a valid eBay condition for this category before publishing."
-          )
-          setPublishing(false)
-          return
-        }
+
         if (aspectMeta.missing.length > 0) {
           setError(
-            `Complete required item specifics in the form above: ${aspectMeta.missing.join(", ")}.`
+            `Complete required item specifics: ${aspectMeta.missing.join(", ")}.`
           )
           setPublishing(false)
           return

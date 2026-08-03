@@ -5,7 +5,17 @@ import {
   fetchEbayItemAspectsForCategory,
 } from "@/lib/marketplaces/adapters/ebay/aspects"
 import { mapListingToEbayInventory } from "@/lib/marketplaces/adapters/ebay/client"
-import { resolveEbayLeafCategoryId } from "@/lib/marketplaces/adapters/ebay/taxonomy"
+import {
+  mapAiConditionToPolicy,
+} from "@/lib/marketplaces/adapters/ebay/condition-map"
+import { ebayMarketplaceId } from "@/lib/marketplaces/adapters/ebay/ebay-cache"
+import { getItemConditionPoliciesForCategory } from "@/lib/marketplaces/adapters/ebay/metadata-conditions"
+import {
+  buildCategorySuggestionQuery,
+  getEbayCategorySuggestions,
+  getEbayDefaultCategoryTreeId,
+  type EbayCategorySuggestion,
+} from "@/lib/marketplaces/adapters/ebay/taxonomy"
 import {
   EBAY_SEO_ASPECT_PRIORITY,
   isPrimaryVisibleAspect,
@@ -25,10 +35,20 @@ function allowedValues(aspect: {
     .filter((v): v is string => Boolean(v))
 }
 
+function aspectUsage(aspect: {
+  aspectConstraint?: { aspectRequired?: boolean; aspectUsage?: string }
+}): "REQUIRED" | "RECOMMENDED" | "OPTIONAL" {
+  if (aspect.aspectConstraint?.aspectRequired) return "REQUIRED"
+  const usage = (aspect.aspectConstraint?.aspectUsage || "").toUpperCase()
+  if (usage === "REQUIRED") return "REQUIRED"
+  if (usage === "RECOMMENDED") return "RECOMMENDED"
+  return "OPTIONAL"
+}
+
 /**
- * After AI analysis / category selection: call Taxonomy getItemAspectsForCategory,
- * populate confidently known required + recommended specifics with exact values,
- * and return a compact form field set for the listing editor.
+ * Load Taxonomy aspects + Metadata conditions for a leaf category.
+ * Uses the listing's saved ebayCategory.categoryId when present; otherwise
+ * returns category suggestions so the UI can pick a leaf first.
  */
 export async function POST(request: Request) {
   try {
@@ -45,16 +65,69 @@ export async function POST(request: Request) {
       )
     }
 
-    const body = (await request.json()) as { listing?: Listing }
+    const body = (await request.json()) as {
+      listing?: Listing
+      categoryId?: string
+    }
     if (!body.listing) {
       return NextResponse.json({ error: "listing is required." }, { status: 400 })
     }
 
     const listing = body.listing
-    const { categoryId } = await resolveEbayLeafCategoryId(
+    const marketplaceId = ebayMarketplaceId()
+    const tree = await getEbayDefaultCategoryTreeId(
       token.accessToken,
-      listing.title || listing.specifics.category || "clothing"
+      marketplaceId
     )
+
+    const suggestQuery = buildCategorySuggestionQuery({
+      title: listing.title,
+      itemType:
+        listing.fieldConfidence?.itemType?.value ||
+        listing.specifics.extras?.Type ||
+        listing.specifics.style,
+      department: listing.specifics.gender,
+      brand: listing.specifics.brand,
+      keywords: listing.keywords,
+      categoryHint: listing.specifics.category,
+    })
+
+    let suggestions: EbayCategorySuggestion[] = []
+    try {
+      const suggested = await getEbayCategorySuggestions(
+        token.accessToken,
+        suggestQuery || listing.title || "item",
+        { marketplaceId, categoryTreeId: tree.categoryTreeId, limit: 8 }
+      )
+      suggestions = suggested.suggestions
+    } catch {
+      suggestions = []
+    }
+
+    const explicitCategoryId =
+      (body.categoryId || "").trim() ||
+      listing.specifics.ebayCategory?.categoryId?.trim() ||
+      ""
+
+    // Prefer saved leaf category; else auto-pick top suggestion so aspects can load.
+    const categoryId =
+      explicitCategoryId || suggestions[0]?.categoryId || ""
+    const selectedSuggestion =
+      suggestions.find((s) => s.categoryId === categoryId) || suggestions[0]
+
+    if (!categoryId) {
+      return NextResponse.json({
+        marketplaceId,
+        categoryTreeId: tree.categoryTreeId,
+        categoryId: null,
+        categorySuggestions: suggestions,
+        formFields: [],
+        conditions: [],
+        mappedCondition: null,
+        needsCategorySelection: true,
+      })
+    }
+
     const taxonomyAspects = await fetchEbayItemAspectsForCategory(
       token.accessToken,
       categoryId
@@ -80,9 +153,13 @@ export async function POST(request: Request) {
       const name = aspect.localizedAspectName?.trim()
       if (!name) continue
       const key = name.toLowerCase()
-      const required = Boolean(aspect.aspectConstraint?.aspectRequired)
+      const usage = aspectUsage(aspect)
+      const required = usage === "REQUIRED"
       const isSeo = seoKeys.has(key)
-      if (!required && !isSeo) continue
+      // Include required, recommended, SEO priority, and optional with values — full set.
+      if (!required && usage === "OPTIONAL" && !isSeo) {
+        // Still include optional aspects so "More item specifics" is complete.
+      }
 
       const allowed = allowedValues(aspect)
       const resolved = applied.aspects[name]?.[0]?.trim()
@@ -92,8 +169,8 @@ export async function POST(request: Request) {
       formFieldsByKey.set(key, {
         name,
         required,
-        primary: isPrimaryVisibleAspect(name),
-        allowedValues: allowed.length > 0 ? allowed.slice(0, 80) : undefined,
+        primary: required || isPrimaryVisibleAspect(name),
+        allowedValues: allowed.length > 0 ? allowed.slice(0, 120) : undefined,
         suggestedValue: missingEntry?.suggestedValue,
         value: resolved || undefined,
       })
@@ -132,7 +209,6 @@ export async function POST(request: Request) {
     const seoTotal = formFields.length
     const seoCompleted = formFields.filter((f) => f.value?.trim()).length
 
-    // Apply resolved extras onto a draft listing for SEO title generation.
     const extras = { ...(listing.specifics.extras || {}) }
     for (const field of applied.resolvedFields) {
       if (field.value?.trim()) extras[field.name] = field.value.trim()
@@ -146,8 +222,49 @@ export async function POST(request: Request) {
       listingForTitle
     )
 
+    let conditions: Array<{
+      conditionId: string
+      conditionDescription: string
+      conditionHelpText?: string
+    }> = []
+    let mappedCondition = null as ReturnType<typeof mapAiConditionToPolicy>
+    let itemConditionRequired = false
+    try {
+      const policy = await getItemConditionPoliciesForCategory(
+        token.accessToken,
+        categoryId,
+        marketplaceId
+      )
+      conditions = policy.conditions
+      itemConditionRequired = policy.itemConditionRequired
+      mappedCondition = mapAiConditionToPolicy(
+        listing.specifics.condition ||
+          listing.fieldConfidence?.condition?.value,
+        policy.conditions
+      )
+    } catch (err) {
+      console.warn("[ebay/aspects-preview] condition policies", err)
+    }
+
+    const categoryPath =
+      listing.specifics.ebayCategory?.categoryPath ||
+      selectedSuggestion?.categoryPath ||
+      listing.specifics.category ||
+      selectedSuggestion?.categoryName ||
+      ""
+    const categoryName =
+      listing.specifics.ebayCategory?.categoryName ||
+      selectedSuggestion?.categoryName ||
+      ""
+
     return NextResponse.json({
+      marketplaceId,
+      categoryTreeId: tree.categoryTreeId,
       categoryId,
+      categoryName,
+      categoryPath,
+      leafCategory: true,
+      categorySuggestions: suggestions,
       formFields,
       requiredFields: applied.missingRequired,
       resolvedFields: applied.resolvedFields,
@@ -158,6 +275,10 @@ export async function POST(request: Request) {
       seoCompleted,
       seoTotal,
       suggestedTitle,
+      conditions,
+      itemConditionRequired,
+      mappedCondition,
+      validConditionIds: conditions.map((c) => c.conditionId),
       aspectsPreview: Object.fromEntries(
         Object.entries(applied.aspects).map(([k, v]) => [k, v[0]])
       ),

@@ -181,6 +181,23 @@ export function OneClickPublishBar({
           setPublishing(false)
           return
         }
+        if (
+          !listingForChecks.specifics.ebayCategory?.categoryId ||
+          listingForChecks.specifics.ebayCategory.leafCategory === false
+        ) {
+          setError(
+            "Select a leaf eBay category before publishing."
+          )
+          setPublishing(false)
+          return
+        }
+        if (!listingForChecks.specifics.ebayCondition?.conditionId) {
+          setError(
+            "Select a valid eBay condition for this category before publishing."
+          )
+          setPublishing(false)
+          return
+        }
         if (aspectMeta.missing.length > 0) {
           setError(
             `Complete required item specifics in the form above: ${aspectMeta.missing.join(", ")}.`

@@ -278,7 +278,7 @@ export function EbayItemSpecificsFields({
       return
     }
 
-    const hydrateKey = `${listing.id}:${listing.specifics.category || ""}`
+    const hydrateKey = `${listing.id}:${listing.specifics.ebayCategory?.categoryId || listing.specifics.category || ""}`
     if (hydratedIdRef.current === hydrateKey && fields.length > 0) return
 
     let cancelled = false
@@ -339,7 +339,7 @@ export function EbayItemSpecificsFields({
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listing.id, listing.specifics.category, skipHydrate])
+  }, [listing.id, listing.specifics.ebayCategory?.categoryId, listing.specifics.category, skipHydrate])
 
   useEffect(() => {
     if (fields.length === 0) return

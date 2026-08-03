@@ -15,7 +15,7 @@ export type AnalyzeUploadResult = {
   index: number
 }
 
-const UPLOAD_CONCURRENCY = 3
+const UPLOAD_CONCURRENCY = 6
 
 async function uploadOneAnalyzeCopy(input: {
   image: ListingImage

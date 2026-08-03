@@ -5,19 +5,26 @@ import {
   imageBatchDetectionSchema,
   identitySecondPassSchema,
   listingCopySchema,
+  productIdentitySchema,
   VISION_BATCH_SIZE,
   type CompsEstimate,
   type GeneratedListingOutput,
   type ImageDetection,
   type IdentitySecondPassResult,
   type ListingCopy,
+  type ProductIdentity,
 } from "@/lib/listings/schema"
 import {
-  getListingModel,
   addTokenUsage,
   emptyTokenUsage,
+  getListingModel,
   type TokenUsage,
 } from "@/lib/ai/pricing"
+import {
+  modelsForPipeline,
+  type AnalysisTimings,
+  type ListingPipelineMode,
+} from "@/lib/ai/pipeline-mode"
 import { usageFromResult } from "@/lib/ai/token-usage"
 import {
   colorIsBlackFamily,
@@ -45,9 +52,8 @@ import type { FieldConfidence, Listing } from "@/lib/types"
 
 type OpenAIClient = ReturnType<typeof createOpenAI>
 
-/** Prefer Chat Completions so usage is returned as prompt_tokens/completion_tokens. */
-function listingModel(openai: OpenAIClient) {
-  return openai.chat(getListingModel())
+function chatModel(openai: OpenAIClient, modelId?: string) {
+  return openai.chat(modelId || getListingModel())
 }
 
 export class ListingEngineError extends Error {
@@ -95,45 +101,33 @@ type ContentPart =
   | { type: "text"; text: string }
   | { type: "image"; image: Uint8Array | Buffer | string; mediaType?: string }
 
-const DETECT_SYSTEM = `You are ListWise Vision, a production clothing identification engine for eBay resale listings.
-Analyze ONLY what is visible in the provided clothing photo(s). Use ALL visual evidence: garment body, tags, labels, embroidery, patches, logos, and graphics.
+const DETECT_SYSTEM = `You are ListWise Vision — Stage 1 product identification for eBay resale.
+Analyze ALL provided clothing photos TOGETHER in one response. Return strict structured JSON only.
 
-Identity rules (critical):
-- Detect licensed characters, franchises, logos, embroidery, patches, and graphic details.
-  Examples: Looney Tunes + Tweety Bird embroidery; Disney + Mickey; sports team logos.
-- photoKind must reflect the photo: garment | tag | label | graphic | detail | other.
-- Read EVERY visible tag/label with OCR-level care for brand, size, material, country, style number, and gender.
-- When a tag says Looney Tunes (or shows an official Looney Tunes label), brand AND licensedProperty = "Looney Tunes".
-- When Tweety (or Tweety Bird) is embroidered/printed/labeled, character = "Tweety Bird".
-- Theme example when cartoon IP is present: "Cartoon, Looney Tunes".
-- itemType must be specific (e.g. Women's sleeveless button-front shirt/blouse), not a vague "top".
-- features: list visible construction/graphic details (embroidered chest graphic, chest pocket, collared, sleeveless, button-front…).
-- Never invent brands, sizes, or labels you cannot see or reasonably infer from marks.
-- Never leave brand as Unknown when a licensed property or recognizable brand label is visible.
-- Use "Unknown" when evidence is insufficient; keep confidence low.
-- Confidence must reflect visual certainty (logos, tags, fabric grain, wear).
-- Flaws: ONLY report defects with strong, unambiguous visual evidence (clear stains, holes, tears,
-  missing buttons, obvious repairs). If unsure, return "None visible".
-  NEVER invent or assume wrinkles, fading, stains, holes, wear, odor, or damage from lighting,
-  folds, or normal pre-owned appearance.
-- Gender/department should reflect labeled/cut cues, otherwise Unisex or Unknown.
-- Category should map to eBay clothing taxonomy when possible.
-- Color: use a single primary garment color only (White, Black, Red, Blue, Gray, Green, Brown, Pink, Purple, Yellow, Orange).
-  Put accent details (red stitching, contrast trim, logos) in pattern, style, or description — never in Color.
-  Example: Color "White" and note "red stitching" elsewhere — not "White with red stitch".
-  For black-and-white gingham/check, Color may be Black or White (pick dominant) and pattern = gingham/check.
-  Do not default to Black when the garment looks charcoal, slate, or dark gray — especially in
-  uneven lighting. Reserve Black for clearly jet-black fabric with no gray/charcoal evidence.
-- Seller context (when provided) is HIGH PRIORITY guidance for ambiguous attributes
-  (women's/men's, size, brand, flaws, item type). Use it to fill gaps and disambiguate.
-  NEVER overwrite attributes that are clearly contradicted by strong, visible photo evidence.`
+Priority (critical):
+1. Tag and label photos — OCR every readable brand, size, material, country, style #, gender.
+2. Logo / graphic / embroidery / character marks.
+3. Front/back garment overview for type, color, pattern, condition.
+
+Rules:
+- Never invent brand, gender, size, material, or style. Use Unknown when not visible.
+- Tag text overrides guesses from cover shots.
+- Licensed labels (e.g. Looney Tunes) set brand AND licensedProperty.
+- Named characters when clearly depicted (e.g. Tweety Bird).
+- itemType must be specific (Women's sleeveless button shirt), not vague "top".
+- Color: single primary only (White, Black, Gray, Blue…). Accents go in features/pattern.
+- Flaws: only clear stains/holes/tears. Otherwise "None visible". Never invent wear.
+- rationale/evidence fields: max ~12 words. No essays, no step-by-step narration.
+- Seller notes (when provided) disambiguate gaps; never override clear photo evidence.`
+
+const IDENTITY_COMBINED_SYSTEM = DETECT_SYSTEM
 
 const IDENTITY_SECOND_PASS_SYSTEM = `You are ListWise Identity Vision — a second-pass specialist.
 Your ONLY job is to inspect logos, characters, embroidery, patches, graphics, brand marks, and every readable tag/label across ALL photos together.
 Do not treat the item as a generic garment. Name franchises and characters when visually clear (e.g. Looney Tunes / Tweety Bird).
 Tag text overrides guesses from cover shots for brand, size, material, country, style number, and gender.
 If an official Looney Tunes label/tag is visible, brand and licensedProperty must be "Looney Tunes".
-Return Unknown only when truly not visible.`
+Return Unknown only when truly not visible. Keep rationales under 12 words.`
 
 function sellerContextBlock(sellerNotes?: string): string {
   const notes = sellerNotes?.trim()
@@ -148,48 +142,23 @@ Use this to clarify ambiguous details (department, size, brand, flaws, item type
 If this conflicts with clear visual evidence in the photos, prefer the photos.`
 }
 
-const COPY_SYSTEM = `You are ListWise Copy, an expert eBay clothing listing writer.
-Write conversion-focused, accurate eBay titles and descriptions from verified attributes and photo evidence.
+const COPY_SYSTEM = `You are ListWise Copy — Stage 2 eBay listing writer.
+You receive VERIFIED structured facts from Stage 1. Do NOT ask for photos. Do not invent attributes.
+Write a strong natural eBay title targeting 75–80 characters (no keyword stuffing, no ALL CAPS).
+Title order: Brand/franchise → character/graphic → gender → pattern or color → item type → size.
+Keep materials like "100% Cotton" in the description, not the title (unless rare material: cashmere/leather/silk/wool).
+Description: short paragraphs + bullets; mention flaws only if verified; plain text only.
+Rationales: one short phrase each.`
 
-Apparel eBay title rules (strict priority order — omit unknown parts, do not reorder):
-1. Brand / franchise (e.g. Looney Tunes)
-2. Character, collection, event, team, or graphic keywords (e.g. Tweety Bird)
-3. Gender / department (e.g. Women's, Men's)
-4. Pattern when searchable (e.g. Gingham) OR normalized color
-5. Exact item type / style words (e.g. Sleeveless Button Shirt)
-6. Size (e.g. 22W)
-7. Optional: Vintage when clearly vintage, or one strong material search term (cashmere, leather, silk, wool)
-- Target near 80 characters when attributes support it — do not leave valuable title space unused
-- Do not add filler words, keyword stuffing, or ALL CAPS
-- Do NOT put commodity fabric callouts like "100% Cotton" or "Cotton Blend" in the title
-  unless the material itself is a rare major selling feature (cashmere, leather, silk, wool coat)
-- Color accents (stitching, trim, logos) belong in description bullets — not the Color specific
-Example titles:
-Vintage Looney Tunes Tweety Bird Women's Gingham Sleeveless Button Shirt 22W
-WWE WrestleMania Legends Men's XL Gray Graphic T-Shirt Wrestling Tee
-
-Description rules:
-- Clear paragraphs + bullet details
-- Call out character, franchise, embroidery/graphics, pattern, and construction features
-- Use a positive neutral condition line for normal pre-owned items with no verified flaws
-- ONLY mention flaws that appear in the verified attributes.flaws field with strong evidence
-- Never invent wrinkles, fading, stains, holes, wear, or damage
-- If verified flaws exist, put them under a final section titled "Condition notes"
-- Mention materials (including 100% Cotton when known), fit/style, and department
-- Preserve accent details (e.g. red stitching) in the description when Color is a primary value
-- Plain text only (no HTML)`
-
-const COMPS_SYSTEM = `You are ListWise Pricing, a secondary-market comps analyst for clothing on eBay sold listings.
-Estimate sold-comparable pricing in USD for the identified clothing item using recent eBay sold knowledge
-(and similar fashion resale comps when helpful).
-Be conservative. Prefer realistic sold ranges over aspirational retail.
-Explain the comps band clearly for the specific brand/style/condition/size when known.`
+const COMPS_SYSTEM = `You are ListWise Pricing. Estimate USD sold-comp pricing from the structured facts.
+Be conservative. One-sentence rationale. No essays.`
 
 async function detectSingleImage(
   openai: OpenAIClient,
   image: VisionImage,
   photoNumber: number,
   totalImages: number,
+  identityModelId: string,
   sellerNotes?: string
 ): Promise<{ detection: ImageDetection; usage: TokenUsage }> {
   const content: ContentPart[] = [
@@ -210,7 +179,7 @@ For flaws: use "None visible" unless a defect is clearly and strongly evidenced 
   ]
 
   const result = await generateObject({
-    model: listingModel(openai),
+    model: chatModel(openai, identityModelId),
     schema: imageBatchDetectionSchema,
     system: DETECT_SYSTEM,
     messages: [{ role: "user", content }],
@@ -236,6 +205,7 @@ async function detectBatch(
   batchIndex: number,
   totalImages: number,
   startIndex: number,
+  identityModelId: string,
   sellerNotes?: string
 ): Promise<{
   images: ImageDetection[]
@@ -262,7 +232,7 @@ For flaws: use "None visible" unless a defect is clearly and strongly evidenced 
 
   try {
     const result = await generateObject({
-      model: listingModel(openai),
+      model: chatModel(openai, identityModelId),
       schema: imageBatchDetectionSchema,
       system: DETECT_SYSTEM,
       messages: [{ role: "user", content }],
@@ -312,6 +282,7 @@ For flaws: use "None visible" unless a defect is clearly and strongly evidenced 
           image,
           photoNumber,
           totalImages,
+          identityModelId,
           sellerNotes
         )
         images.push(single.detection)
@@ -503,6 +474,7 @@ async function recognizeIdentitySecondPass(
   openai: OpenAIClient,
   images: VisionImage[],
   firstPass: IdentityFields,
+  identityModelId: string,
   sellerNotes?: string
 ): Promise<{ identity: IdentitySecondPass; usage: TokenUsage }> {
   const content: ContentPart[] = [
@@ -544,7 +516,7 @@ Example: Looney Tunes tag + Tweety embroidery → brand/licensedProperty Looney 
   }
 
   const result = await generateObject({
-    model: listingModel(openai),
+    model: chatModel(openai, identityModelId),
     schema: identitySecondPassSchema,
     system: IDENTITY_SECOND_PASS_SYSTEM,
     messages: [{ role: "user", content }],
@@ -653,12 +625,80 @@ function sanitizeApparelTitle(title: string): string {
   return next || title.slice(0, 80)
 }
 
+
+/**
+ * Stage 1 — one combined OpenAI vision call across all photos.
+ * Tag/label evidence outweighs front/back overview shots.
+ */
+async function identifyProductCombined(
+  openai: OpenAIClient,
+  images: VisionImage[],
+  identityModelId: string,
+  sellerNotes?: string
+): Promise<{ identity: ProductIdentity; usage: TokenUsage }> {
+  const content: ContentPart[] = [
+    {
+      type: "text",
+      text: `Identify this clothing item from ALL ${images.length} photos together.
+Photos are numbered 1..${images.length} in order.
+Prioritize tag/label photos for brand, size, material, gender, style number.
+Return strict JSON only. Never invent brand/gender/size/material/style.
+Keep each rationale under 12 words.${sellerContextBlock(sellerNotes)}`,
+    },
+  ]
+  for (const [i, image] of images.entries()) {
+    content.push({
+      type: "text",
+      text: `Photo ${image.index ?? i + 1}:`,
+    })
+    content.push({
+      type: "image",
+      image: image.data,
+      mediaType: image.mediaType,
+    })
+  }
+
+  const result = await generateObject({
+    model: chatModel(openai, identityModelId),
+    schema: productIdentitySchema,
+    system: IDENTITY_COMBINED_SYSTEM,
+    messages: [{ role: "user", content }],
+  })
+  return { identity: result.object, usage: usageFromResult(result) }
+}
+
+function identityFieldsFromCombined(identity: ProductIdentity): IdentityFields {
+  const base: IdentityFields = {
+    brand: identity.brand,
+    licensedProperty: identity.licensedProperty,
+    character: identity.character,
+    theme: identity.theme,
+    features: identity.features,
+    itemType: identity.itemType,
+    category: identity.category,
+    size: identity.size,
+    color: identity.color,
+    material: identity.material,
+    style: identity.style,
+    pattern: identity.pattern,
+    gender: identity.gender,
+    condition: identity.condition,
+    flaws: identity.flaws,
+    styleNumber: identity.styleNumber,
+    countryOfOrigin: identity.countryOfOrigin,
+  }
+  return {
+    ...base,
+    ...applyLicensedBrandFallback(base),
+  }
+}
+
 async function generateCopy(
   openai: OpenAIClient,
   fields: Record<string, FieldConfidence>,
-  sampleImages: VisionImage[],
   totalImages: number,
-  sellerNotes?: string
+  sellerNotes: string | undefined,
+  copyModelId: string
 ): Promise<{ copy: ListingCopy; usage: TokenUsage }> {
   const searchColor = titleSearchColor(fields.color?.value)
   const content: ContentPart[] = [
@@ -679,19 +719,12 @@ Do not put material percentages such as "100% Cotton" in the title — keep thos
 Verified attributes (with confidence) — include character, theme, features, and itemType when present.
 Keep accent details (stitching, trim) in description/pattern/style, not in Color.
 ${JSON.stringify(fields, null, 2)}
-Total photos in listing: ${totalImages}. Sample photos attached for visual context.${sellerContextBlock(sellerNotes)}`,
+Photos analyzed in Stage 1: ${totalImages}. Use facts only — no images.${sellerContextBlock(sellerNotes)}`,
     },
   ]
-  for (const image of sampleImages.slice(0, 4)) {
-    content.push({
-      type: "image",
-      image: image.data,
-      mediaType: image.mediaType,
-    })
-  }
 
   const result = await generateObject({
-    model: listingModel(openai),
+    model: chatModel(openai, copyModelId),
     schema: listingCopySchema,
     system: COPY_SYSTEM,
     messages: [{ role: "user", content }],
@@ -766,10 +799,11 @@ Total photos in listing: ${totalImages}. Sample photos attached for visual conte
  */
 export async function estimateSoldComps(
   openai: OpenAIClient,
-  fields: Record<string, FieldConfidence>
+  fields: Record<string, FieldConfidence>,
+  copyModelId?: string
 ): Promise<{ comps: CompsEstimate; usage: TokenUsage }> {
   const result = await generateObject({
-    model: listingModel(openai),
+    model: chatModel(openai, copyModelId),
     schema: compsEstimateSchema,
     system: COMPS_SYSTEM,
     messages: [
@@ -815,150 +849,156 @@ export function createAiCompsProvider(openai: OpenAIClient): CompsProvider {
 }
 
 /**
- * Production listing engine: analyzes every image, merges detections,
- * writes copy, and prices from sold comps.
- * Tolerates individual photo failures and continues with remaining photos.
+ * Production listing engine — two-stage hybrid by default:
+ * Stage 1: stronger vision model, all photos in one JSON identity call.
+ * Stage 2: gpt-4.1-mini copy + comps from structured facts (no re-vision).
  */
 export async function generateListingFromImages(
   images: VisionImage[],
   options?: {
     compsProvider?: CompsProvider
     sellerNotes?: string
+    pipelineMode?: ListingPipelineMode
+    /** Called as soon as Stage 1 yields itemType/department — for early eBay metadata. */
+    onIdentityReady?: (fields: IdentityFields) => Promise<void> | void
   }
 ): Promise<{
   draft: GeneratedListingOutput
   model: string
+  identityModel: string
+  copyModel: string
+  pipelineMode: ListingPipelineMode
   usage: TokenUsage
   imagesAnalyzed: number
   imagesFailed: FailedVisionImage[]
   warnings: string[]
   partial: boolean
+  timings: AnalysisTimings
 }> {
   if (images.length === 0) {
     throw new ListingEngineError("At least one image is required.", 400)
   }
 
+  const totalStarted = Date.now()
   const openai = getOpenAI()
-  const model = getListingModel()
+  const pipelineMode = options?.pipelineMode || "hybrid"
+  const models = modelsForPipeline(pipelineMode)
   const sellerNotes = options?.sellerNotes?.trim() || undefined
   let usage = emptyTokenUsage()
-
-  const batches: VisionImage[][] = []
-  for (let i = 0; i < images.length; i += VISION_BATCH_SIZE) {
-    batches.push(images.slice(i, i + VISION_BATCH_SIZE))
-  }
-
-  // Analyze every image in parallel batches (bounded concurrency).
-  // If a batch fails (e.g. one corrupt/oversized photo), fall back per-image.
-  const detections: ImageDetection[] = []
+  const warnings: string[] = []
   const imagesFailed: FailedVisionImage[] = []
-  const concurrency = 2
-  for (let i = 0; i < batches.length; i += concurrency) {
-    const slice = batches.slice(i, i + concurrency)
-    const results = await Promise.all(
-      slice.map((batch, offset) => {
-        const batchIndex = i + offset
-        const startIndex = batchIndex * VISION_BATCH_SIZE
-        return detectBatch(
+
+  // --- Stage 1: combined product identity ---
+  const identityStarted = Date.now()
+  let fields: IdentityFields
+  let perImage: GeneratedListingOutput["perImage"] = []
+  let detectionsCount = images.length
+
+  try {
+    const combined = await identifyProductCombined(
+      openai,
+      images,
+      models.identityModel,
+      sellerNotes
+    )
+    usage = addTokenUsage(usage, combined.usage)
+    fields = identityFieldsFromCombined(combined.identity)
+    perImage = (combined.identity.photos || []).map((p) => ({
+      index: p.index,
+      summary: p.summary,
+      flaws: fields.flaws.value,
+    }))
+    if (perImage.length === 0) {
+      perImage = images.map((img, i) => ({
+        index: img.index ?? i + 1,
+        summary: "Analyzed in combined identity pass",
+        flaws: fields.flaws.value,
+      }))
+    }
+  } catch (combinedError) {
+    const message =
+      combinedError instanceof Error
+        ? combinedError.message
+        : "Combined identity failed"
+    console.warn("[listing engine] combined identity failed — batch fallback", {
+      message,
+    })
+    warnings.push("Combined identity fell back to batched vision.")
+
+    const batches: VisionImage[][] = []
+    for (let i = 0; i < images.length; i += VISION_BATCH_SIZE) {
+      batches.push(images.slice(i, i + VISION_BATCH_SIZE))
+    }
+    const detections: ImageDetection[] = []
+    const concurrency = 2
+    for (let i = 0; i < batches.length; i += concurrency) {
+      const slice = batches.slice(i, i + concurrency)
+      const results = await Promise.all(
+        slice.map((batch, offset) => {
+          const batchIndex = i + offset
+          const startIndex = batchIndex * VISION_BATCH_SIZE
+          return detectBatch(
+            openai,
+            batch,
+            batchIndex,
+            images.length,
+            startIndex,
+            models.identityModel,
+            sellerNotes
+          )
+        })
+      )
+      for (const batchResult of results) {
+        detections.push(...batchResult.images)
+        imagesFailed.push(...batchResult.failed)
+        usage = addTokenUsage(usage, batchResult.usage)
+      }
+    }
+    if (detections.length === 0) {
+      throw new ListingEngineError(
+        `Could not analyze any photos.${message ? ` (${message})` : ""}`,
+        502
+      )
+    }
+    const merged = mergeDetections(detections)
+    fields = merged.fields
+    perImage = merged.perImage
+    detectionsCount = detections.length
+
+    if (needsIdentitySecondPass(fields, detections)) {
+      try {
+        const second = await recognizeIdentitySecondPass(
           openai,
-          batch,
-          batchIndex,
-          images.length,
-          startIndex,
+          images,
+          fields,
+          models.identityModel,
           sellerNotes
         )
-      })
-    )
-    for (const batchResult of results) {
-      detections.push(...batchResult.images)
-      imagesFailed.push(...batchResult.failed)
-      usage = addTokenUsage(usage, batchResult.usage)
+        usage = addTokenUsage(usage, second.usage)
+        fields = mergeIdentitySecondPass(fields, second.identity)
+      } catch {
+        /* non-fatal */
+      }
     }
   }
 
-  if (detections.length === 0) {
-    const failedSummary = imagesFailed
-      .map((f) => `photo ${f.index}${f.sourceUrl ? ` (${f.sourceUrl})` : ""}`)
-      .join(", ")
-    throw new ListingEngineError(
-      `Could not analyze any photos.${failedSummary ? ` Failed: ${failedSummary}.` : ""}`,
-      502
-    )
-  }
+  const identityMs = Date.now() - identityStarted
 
-  const warnings: string[] = []
-  if (imagesFailed.length > 0) {
-    const labels = imagesFailed
-      .map((f) => `photo ${f.index}`)
-      .join(", ")
-    warnings.push(
-      `Partial analysis: ${labels} could not be read. Listing was built from the remaining ${detections.length} photo${detections.length === 1 ? "" : "s"}.`
-    )
-    console.warn("[listing engine] partial analysis", {
-      analyzed: detections.length,
-      failed: imagesFailed,
-    })
-  }
-
-  const { fields: mergedFields, perImage } = mergeDetections(detections)
-  // Primary eBay color only — move "with red stitch" accents out of Color early.
+  // Color split + style fallback
   const colorSplit = applyPrimaryColorSplit({
-    color: mergedFields.color,
-    pattern: mergedFields.pattern,
-    style: mergedFields.style,
+    color: fields.color,
+    pattern: fields.pattern,
+    style: fields.style,
     description: "",
   })
-  let fields: IdentityFields = {
-    ...mergedFields,
-    color: colorSplit.color || mergedFields.color,
-    pattern: colorSplit.pattern || mergedFields.pattern,
-    style: colorSplit.style || mergedFields.style,
+  fields = {
+    ...fields,
+    color: colorSplit.color || fields.color,
+    pattern: colorSplit.pattern || fields.pattern,
+    style: colorSplit.style || fields.style,
   }
   const accentDetailNote = colorSplit.description.trim()
 
-  const survivingImages = images.filter(
-    (img, idx) =>
-      !imagesFailed.some(
-        (f) => f.index === (img.index ?? idx + 1)
-      )
-  )
-  const visionImages =
-    survivingImages.length > 0 ? survivingImages : images
-
-  // Second pass when brand/character identity confidence is low.
-  if (needsIdentitySecondPass(fields, detections)) {
-    try {
-      const second = await recognizeIdentitySecondPass(
-        openai,
-        visionImages,
-        fields,
-        sellerNotes
-      )
-      usage = addTokenUsage(usage, second.usage)
-      fields = mergeIdentitySecondPass(fields, second.identity)
-      warnings.push(
-        "Identity second pass ran to inspect logos, characters, embroidery, and tags across all photos."
-      )
-      console.info("[listing engine] identity second pass", {
-        brand: fields.brand.value,
-        character: fields.character.value,
-        licensedProperty: fields.licensedProperty.value,
-        logoSummary: second.identity.logoAndGraphicSummary,
-        tagSummary: second.identity.tagTextSummary,
-      })
-    } catch (secondPassError) {
-      const message =
-        secondPassError instanceof Error
-          ? secondPassError.message
-          : "Identity second pass failed"
-      console.warn("[listing engine] identity second pass failed", { message })
-      warnings.push(
-        "Identity second pass could not complete; listing uses first-pass garment analysis."
-      )
-    }
-  }
-
-  // Ensure style carries item type when style is vague.
   if (
     isUnknownValue(fields.style.value) &&
     isKnownValue(fields.itemType.value)
@@ -969,62 +1009,88 @@ export async function generateListingFromImages(
     }
   }
 
+  // Early eBay metadata — do not wait for description.
+  const ebayStarted = Date.now()
+  let ebayMetadataMs = 0
+  const ebayPrefetch = Promise.resolve()
+    .then(async () => {
+      if (options?.onIdentityReady) {
+        await options.onIdentityReady(fields)
+      }
+    })
+    .catch((err) => {
+      console.warn("[listing engine] early ebay prefetch failed", err)
+    })
+
+  // --- Stage 2: copy + comps from facts only (parallel) ---
+  const listingStarted = Date.now()
   const extras = identityExtrasFromFields(fields)
   const identityConfidence = identityFieldConfidence(fields)
+
+  const fieldPayload: Record<string, FieldConfidence> = {
+    brand: fields.brand,
+    category: fields.category,
+    size: fields.size,
+    color: fields.color,
+    material: fields.material,
+    style: fields.style,
+    pattern: fields.pattern,
+    gender: fields.gender,
+    condition: fields.condition,
+    flaws: fields.flaws,
+    character: fields.character,
+    theme: fields.theme,
+    features: fields.features,
+    itemType: fields.itemType,
+    licensedProperty: fields.licensedProperty,
+  }
+
+  const compsProvider =
+    options?.compsProvider ??
+    ({
+      async estimate(f) {
+        const { comps, usage: u } = await estimateSoldComps(
+          openai,
+          f,
+          models.copyModel
+        )
+        return {
+          ...comps,
+          currency: "USD" as const,
+          method: "ai_market_comps" as const,
+          usage: u,
+        }
+      },
+    } satisfies CompsProvider)
 
   const [copyResult, comps] = await Promise.all([
     generateCopy(
       openai,
-      {
-        brand: fields.brand,
-        category: fields.category,
-        size: fields.size,
-        color: fields.color,
-        material: fields.material,
-        style: fields.style,
-        pattern: fields.pattern,
-        gender: fields.gender,
-        condition: fields.condition,
-        flaws: fields.flaws,
-        character: fields.character,
-        theme: fields.theme,
-        features: fields.features,
-        itemType: fields.itemType,
-        licensedProperty: fields.licensedProperty,
-      },
-      visionImages,
-      detections.length,
-      sellerNotes
+      fieldPayload,
+      detectionsCount,
+      sellerNotes,
+      models.copyModel
     ),
-    (options?.compsProvider ?? createAiCompsProvider(openai)).estimate({
-      brand: fields.brand,
-      category: fields.category,
-      size: fields.size,
-      color: fields.color,
-      material: fields.material,
-      style: fields.style,
-      pattern: fields.pattern,
-      gender: fields.gender,
-      condition: fields.condition,
-      flaws: fields.flaws,
-      character: fields.character,
-      theme: fields.theme,
-      itemType: fields.itemType,
-    }),
+    compsProvider.estimate(fieldPayload),
+    ebayPrefetch,
   ])
+  ebayMetadataMs = Date.now() - ebayStarted
+  const listingMs = Date.now() - listingStarted
+
   usage = addTokenUsage(usage, copyResult.usage)
   usage = addTokenUsage(usage, comps.usage)
   const copy = copyResult.copy
+
   if (
     accentDetailNote &&
-    !copy.description.value.toLowerCase().includes(
-      accentDetailNote.replace(/^details:\s*/i, "").toLowerCase()
-    )
+    !copy.description.value
+      .toLowerCase()
+      .includes(accentDetailNote.replace(/^details:\s*/i, "").toLowerCase())
   ) {
-    copy.description.value = `${copy.description.value.trim()}\n\n${accentDetailNote}`.trim()
+    copy.description.value =
+      `${copy.description.value.trim()}\n\n${accentDetailNote}`.trim()
   }
 
-  // Inject identity bullets when description omitted them.
   const identityBits = [
     isKnownValue(fields.character.value)
       ? `Character: ${fields.character.value}`
@@ -1038,10 +1104,7 @@ export async function generateListingFromImages(
   ].filter(Boolean)
   for (const bit of identityBits) {
     const needle = bit.split(":")[1]?.trim().toLowerCase()
-    if (
-      needle &&
-      !copy.description.value.toLowerCase().includes(needle)
-    ) {
+    if (needle && !copy.description.value.toLowerCase().includes(needle)) {
       copy.description.value = `${copy.description.value.trim()}\n\n${bit}`.trim()
     }
   }
@@ -1118,13 +1181,31 @@ export async function generateListingFromImages(
     perImage,
   }
 
+  const timings: AnalysisTimings = {
+    identityMs,
+    listingMs,
+    ebayMetadataMs,
+    totalMs: Date.now() - totalStarted,
+  }
+
+  console.info("[listing engine] timings", {
+    pipelineMode,
+    identityModel: models.identityModel,
+    copyModel: models.copyModel,
+    ...timings,
+  })
+
   return {
     draft,
-    model,
+    model: `${models.identityModel}+${models.copyModel}`,
+    identityModel: models.identityModel,
+    copyModel: models.copyModel,
+    pipelineMode,
     usage,
-    imagesAnalyzed: detections.length,
+    imagesAnalyzed: detectionsCount,
     imagesFailed,
     warnings,
     partial: imagesFailed.length > 0,
+    timings,
   }
 }

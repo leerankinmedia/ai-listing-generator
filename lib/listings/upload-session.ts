@@ -10,6 +10,8 @@ export type UploadSessionDraft = {
   images: ListingImage[]
   sellerNotes: string
   updatedAt: string
+  /** Saved draft id after AI generation so refresh can restore Review Draft. */
+  listingId?: string
 }
 
 function storageKey(userId: string) {
@@ -49,7 +51,11 @@ export function readUploadSession(userId: string): UploadSessionDraft | null {
     const parsed = JSON.parse(raw) as UploadSessionDraft
     if (!parsed || !Array.isArray(parsed.images)) return null
     const images = durableImagesForSession(parsed.images)
-    if (images.length === 0) return null
+    const listingId =
+      typeof parsed.listingId === "string" && parsed.listingId.trim()
+        ? parsed.listingId.trim()
+        : undefined
+    if (images.length === 0 && !listingId) return null
     return {
       images,
       sellerNotes: typeof parsed.sellerNotes === "string" ? parsed.sellerNotes : "",
@@ -57,6 +63,7 @@ export function readUploadSession(userId: string): UploadSessionDraft | null {
         typeof parsed.updatedAt === "string"
           ? parsed.updatedAt
           : new Date().toISOString(),
+      listingId,
     }
   } catch {
     return null
@@ -65,11 +72,11 @@ export function readUploadSession(userId: string): UploadSessionDraft | null {
 
 export function writeUploadSession(
   userId: string,
-  draft: { images: ListingImage[]; sellerNotes?: string }
+  draft: { images: ListingImage[]; sellerNotes?: string; listingId?: string }
 ) {
   if (typeof window === "undefined" || !userId) return
   const images = durableImagesForSession(draft.images)
-  if (images.length === 0) {
+  if (images.length === 0 && !draft.listingId) {
     clearUploadSession(userId)
     return
   }
@@ -77,6 +84,7 @@ export function writeUploadSession(
     images,
     sellerNotes: draft.sellerNotes ?? "",
     updatedAt: new Date().toISOString(),
+    listingId: draft.listingId,
   }
   try {
     window.sessionStorage.setItem(storageKey(userId), JSON.stringify(payload))

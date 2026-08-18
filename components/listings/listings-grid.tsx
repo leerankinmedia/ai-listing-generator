@@ -78,7 +78,7 @@ export function ListingsGrid() {
           className={cn(buttonVariants({ variant: "accent" }))}
         >
           <Plus className="h-4 w-4" />
-          {unlocked ? "New AI listing" : subscribeCta}
+          {unlocked ? "Create listing" : subscribeCta}
         </Link>
       </div>
 

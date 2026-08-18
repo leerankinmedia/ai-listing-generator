@@ -38,12 +38,15 @@ interface EbayCategoryPickerProps {
   listing: Listing
   onChange: (listing: Listing) => void
   disabled?: boolean
+  /** Review Draft: hide browse/search until Change category. */
+  compact?: boolean
 }
 
 export function EbayCategoryPicker({
   listing,
   onChange,
   disabled,
+  compact,
 }: EbayCategoryPickerProps) {
   const [suggestions, setSuggestions] = useState<CategoryNode[]>([])
   const [browseStack, setBrowseStack] = useState<CategoryNode[]>([])
@@ -62,6 +65,7 @@ export function EbayCategoryPicker({
   const [loadingConditions, setLoadingConditions] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [browseOpen, setBrowseOpen] = useState(false)
+  const [changeOpen, setChangeOpen] = useState(false)
 
   const selected = listing.specifics.ebayCategory
   const selectedCondition = listing.specifics.ebayCondition
@@ -287,26 +291,36 @@ export function EbayCategoryPicker({
     return []
   }, [conditions])
 
+  const showCategoryTools = !compact || !selected || changeOpen
+
   return (
     <div className="space-y-4 rounded-xl border border-border bg-card/40 p-4">
       <div className="space-y-1">
-        <Label>eBay category</Label>
-        <p className="text-xs text-muted-foreground">
-          Pick a leaf category from live eBay US Taxonomy. Conditions and item
-          specifics load for that exact category only.
-        </p>
+        <Label>Category</Label>
+        {!compact && (
+          <p className="text-xs text-muted-foreground">
+            Pick a leaf category from live eBay US Taxonomy. Conditions and item
+            specifics load for that exact category only.
+          </p>
+        )}
       </div>
 
       {selected ? (
-        <div className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm">
+        <div className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-3 text-sm">
           <p className="font-medium text-foreground">{selected.categoryName}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {selected.categoryPath}
           </p>
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            ID {selected.categoryId}
-            {selected.leafCategory ? " · leaf" : ""}
-          </p>
+          {compact && (
+            <button
+              type="button"
+              disabled={disabled}
+              className="mt-2 min-h-11 rounded-lg border border-border bg-background px-3 text-sm font-medium"
+              onClick={() => setChangeOpen((open) => !open)}
+            >
+              {changeOpen ? "Done" : "Change category"}
+            </button>
+          )}
         </div>
       ) : (
         <p className="text-sm text-amber-700 dark:text-amber-400">
@@ -314,7 +328,8 @@ export function EbayCategoryPicker({
         </p>
       )}
 
-      <div className="space-y-2">
+      {showCategoryTools && (
+      <div className="space-y-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Suggested for this listing
         </p>
@@ -351,7 +366,6 @@ export function EbayCategoryPicker({
             )}
           </ul>
         )}
-      </div>
 
       <div className="flex flex-col gap-2 sm:flex-row">
         <div className="relative flex-1">
@@ -469,9 +483,11 @@ export function EbayCategoryPicker({
           )}
         </div>
       )}
+      </div>
+      )}
 
       <div className="space-y-2 border-t border-border pt-3">
-        <Label htmlFor="ebay-condition-policy">Condition (for this category)</Label>
+        <Label htmlFor="ebay-condition-policy">Condition</Label>
         {loadingConditions ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading valid conditions…
@@ -512,7 +528,7 @@ export function EbayCategoryPicker({
             ))}
           </select>
         )}
-        {selectedCondition && (
+        {selectedCondition && !compact && (
           <p className="text-[11px] text-muted-foreground">
             Condition ID {selectedCondition.conditionId}
             {selectedCondition.conditionEnum

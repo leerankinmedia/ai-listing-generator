@@ -7,6 +7,7 @@ import {
   resolveBrandAspectValue,
   resolveMustFillAspectValue,
   splitAspectFieldsForDisplay,
+  splitAspectFieldsForReviewDraft,
   summarizeAiEmployeeAspects,
   validateAspectsAgainstOptions,
   type EbayAspectFormField,
@@ -292,3 +293,59 @@ describe("AI employee banner", () => {
     assert.match(formatAiEmployeeBanner(summary), /Ready to publish/)
   })
 })
+
+describe("splitAspectFieldsForReviewDraft", () => {
+  it("keeps Brand Size Size Type Color Department visible even when auto-filled", () => {
+    const listing = baseListing({
+      specifics: {
+        brand: "Nike",
+        size: "XL",
+        color: "Black",
+        gender: "Men",
+        extras: { "Size Type": "Regular", Color: "Black", Department: "Men" },
+      },
+      fieldConfidence: {
+        brand: { value: "Nike", confidence: 0.99 },
+        size: { value: "XL", confidence: 0.98 },
+        color: { value: "Black", confidence: 0.99 },
+        gender: { value: "Men", confidence: 0.99 },
+      },
+    })
+    const fields: EbayAspectFormField[] = [
+      { name: "Brand", required: true, allowedValues: ["Nike"], value: "Nike" },
+      { name: "Size", required: true, value: "XL" },
+      {
+        name: "Size Type",
+        required: true,
+        allowedValues: ["Regular", "Plus"],
+        value: "Regular",
+      },
+      { name: "Color", required: true, allowedValues: ["Black"], value: "Black" },
+      {
+        name: "Department",
+        required: true,
+        allowedValues: ["Men"],
+        value: "Men",
+      },
+      {
+        name: "Features",
+        required: false,
+        value: "Dri-Fit",
+      },
+    ]
+    const split = splitAspectFieldsForReviewDraft(fields, listing)
+    const names = split.primary.map((v) => v.field.name)
+    assert.deepEqual(names.slice(0, 5), [
+      "Brand",
+      "Size",
+      "Size Type",
+      "Color",
+      "Department",
+    ])
+    assert.equal(
+      split.more.some((v) => v.field.name === "Features"),
+      true
+    )
+  })
+})
+

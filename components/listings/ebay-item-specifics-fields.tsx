@@ -9,6 +9,7 @@ import {
   readAspectValue,
   resolveSelectValue,
   splitAspectFieldsForDisplay,
+  splitAspectFieldsForReviewDraft,
   summarizeAiEmployeeAspects,
   validateAspectsAgainstOptions,
   writeAspectValue,
@@ -239,6 +240,7 @@ export function EbayItemSpecificsFields({
   skipHydrate,
   initialFields,
   initialSummary,
+  variant = "default",
 }: {
   listing: Listing
   onChange: (listing: Listing) => void
@@ -247,6 +249,7 @@ export function EbayItemSpecificsFields({
   skipHydrate?: boolean
   initialFields?: EbayAspectFormField[]
   initialSummary?: AiEmployeeAspectSummary
+  variant?: "default" | "review"
 }) {
   const [fields, setFields] = useState<EbayAspectFormField[]>(
     initialFields || []
@@ -378,21 +381,23 @@ export function EbayItemSpecificsFields({
     return null
   }
 
-  const { primary, more, autoFilledCount } = splitAspectFieldsForDisplay(
-    fields,
-    listing
-  )
+  const { primary, more, autoFilledCount } =
+    variant === "review"
+      ? splitAspectFieldsForReviewDraft(fields, listing)
+      : splitAspectFieldsForDisplay(fields, listing)
 
   return (
     <div className="space-y-4">
-      <AiEmployeeBanner summary={summary} />
+      {variant !== "review" && <AiEmployeeBanner summary={summary} />}
 
       {primary.length > 0 ? (
         <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">
-            Quick review — confirm or fix these, then publish:
-          </p>
-          <div className="grid gap-4 sm:grid-cols-2">
+          {variant !== "review" && (
+            <p className="text-xs text-muted-foreground">
+              Quick review — confirm or fix these, then publish:
+            </p>
+          )}
+          <div className={cn("grid gap-4", variant !== "review" && "sm:grid-cols-2")}>
             {primary.map((view) => (
               <AspectFieldEditor
                 key={view.field.name}
@@ -414,7 +419,7 @@ export function EbayItemSpecificsFields({
         <div className="rounded-xl border border-border bg-secondary/20">
           <button
             type="button"
-            className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left"
+            className="flex min-h-12 w-full items-center justify-between gap-3 px-3 py-3 text-left"
             onClick={() => setMoreOpen((o) => !o)}
           >
             <div className="flex items-start gap-2">
@@ -424,7 +429,7 @@ export function EbayItemSpecificsFields({
                 <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
               )}
               <div>
-                <p className="text-sm font-semibold">More item specifics</p>
+                <p className="text-sm font-semibold">More item details</p>
                 <p className="text-xs text-muted-foreground">
                   {summary.completed} of {summary.total} completed
                   {autoFilledCount > 0

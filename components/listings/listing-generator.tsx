@@ -2,22 +2,22 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { Loader2, Sparkles, Save, Camera } from "lucide-react"
+import { Loader2, Sparkles } from "lucide-react"
+import { GenerationProgressScreen, GENERATION_PROGRESS_MESSAGES } from "@/components/listings/generation-progress"
 import { ImageUploader } from "@/components/listings/image-uploader"
-import { ListingEditorForm } from "@/components/listings/listing-editor-form"
-import { OneClickPublishBar } from "@/components/listings/one-click-publish-bar"
+import { ReviewDraft } from "@/components/listings/review-draft"
+import { ListingLiveSuccess } from "@/components/listings/listing-live"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/components/auth/auth-provider"
 import { readApiJsonResponse } from "@/lib/api/read-json-response"
 import { uploadAnalyzeImagesIndividually } from "@/lib/listings/analyze-client"
-import { ensureDurableOriginalImageUrls } from "@/lib/listings/durable-images"
+import { hydrateListingEbayAspects } from "@/lib/listings/hydrate-ebay-aspects"
 import { createEmptyListing, withImages } from "@/lib/listings/local-db"
 import { mapDraftToListingFields } from "@/lib/listings/map-draft"
-import { hydrateListingEbayAspects } from "@/lib/listings/hydrate-ebay-aspects"
 import { persistListing } from "@/lib/listings/repository"
-import { listingIsReadyToPublish } from "@/lib/listings/publish"
+import { ensureListingQuantity } from "@/lib/listings/review-draft"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
 import type { GeneratedListingOutput } from "@/lib/listings/schema"
 import {
@@ -32,47 +32,11 @@ import {
   ebaySellerDefaultsAreReady,
   normalizeEbaySellerDefaults,
 } from "@/lib/seller/ebay-defaults"
-import {
-  readLocalEbaySellerDefaults,
-} from "@/lib/seller/ebay-defaults-local"
-import type { Listing, ListingImage } from "@/lib/types"
+import { readLocalEbaySellerDefaults } from "@/lib/seller/ebay-defaults-local"
+import type { Listing, ListingImage, OneClickPublishResult } from "@/lib/types"
+import type { EbayLiveSummary } from "@/lib/listings/review-draft"
 
-type Step = "upload" | "review"
-
-const ROTATING_MESSAGES = [
-  "Reading labels",
-  "Identifying item details",
-  "Building your listing",
-  "Checking photos for details",
-  "Writing your draft",
-]
-
-function AnalysisProgressScreen({
-  percent,
-  message,
-}: {
-  percent: number
-  message: string
-}) {
-  return (
-    <div
-      className="flex min-h-[280px] flex-col items-center justify-center rounded-2xl border border-border bg-card/70 px-6 py-12 text-center"
-      role="status"
-      aria-live="polite"
-    >
-      <p className="font-display text-2xl font-semibold tracking-tight">
-        Analyzing photos
-      </p>
-      <div className="mt-6 h-2 w-full max-w-md overflow-hidden rounded-full bg-secondary">
-        <div
-          className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out"
-          style={{ width: `${Math.max(4, Math.min(100, percent))}%` }}
-        />
-      </div>
-      <p className="mt-4 text-sm text-muted-foreground">{message}…</p>
-    </div>
-  )
-}
+type Step = "upload" | "review" | "live"
 
 export function ListingGenerator() {
   const { user } = useAuth()
@@ -81,18 +45,16 @@ export function ListingGenerator() {
   const [images, setImages] = useState<ListingImage[]>([])
   const [listing, setListing] = useState<Listing | null>(null)
   const [generating, setGenerating] = useState(false)
-  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [sellerNotes, setSellerNotes] = useState("")
   const [progressPercent, setProgressPercent] = useState(0)
-  const [progressMessage, setProgressMessage] = useState(ROTATING_MESSAGES[0])
-  const [aspectMeta, setAspectMeta] = useState<{
-    missing: string[]
-    filled: number
-    total: number
-  }>({ missing: [], filled: 0, total: 0 })
+  const [progressMessage, setProgressMessage] = useState(
+    GENERATION_PROGRESS_MESSAGES[0]
+  )
   const [sessionHydrated, setSessionHydrated] = useState(false)
+  const [liveSummary, setLiveSummary] = useState<EbayLiveSummary | null>(null)
+  const [notesOpen, setNotesOpen] = useState(false)
 
   const photosReady = useMemo(
     () => allListingImagesUploaded(images),
@@ -103,32 +65,36 @@ export function ListingGenerator() {
     [images]
   )
 
-  // Restore durable photo URLs after refresh / new Vercel instance.
   useEffect(() => {
     if (!user?.id || sessionHydrated) return
     const draft = readUploadSession(user.id)
     if (draft) {
       setImages(draft.images)
-      if (draft.sellerNotes) setSellerNotes(draft.sellerNotes)
+      if (draft.sellerNotes) {
+        setSellerNotes(draft.sellerNotes)
+        setNotesOpen(true)
+      }
     }
     setSessionHydrated(true)
-  }, [user?.id, sessionHydrated])
+  }, [user?.id, sessionHydrated, router])
 
-  // Persist only uploaded Supabase URLs so Analyze survives refresh.
   useEffect(() => {
     if (!user?.id || !sessionHydrated) return
-    writeUploadSession(user.id, { images, sellerNotes })
+    writeUploadSession(user.id, {
+      images,
+      sellerNotes,
+    })
   }, [user?.id, images, sellerNotes, sessionHydrated])
 
   useEffect(() => {
     if (!generating) return
     setProgressPercent(8)
-    setProgressMessage(ROTATING_MESSAGES[0])
+    setProgressMessage(GENERATION_PROGRESS_MESSAGES[0])
     let messageIndex = 0
     const messageTimer = window.setInterval(() => {
-      messageIndex = (messageIndex + 1) % ROTATING_MESSAGES.length
-      setProgressMessage(ROTATING_MESSAGES[messageIndex])
-    }, 2800)
+      messageIndex = (messageIndex + 1) % GENERATION_PROGRESS_MESSAGES.length
+      setProgressMessage(GENERATION_PROGRESS_MESSAGES[messageIndex])
+    }, 2400)
     const progressTimer = window.setInterval(() => {
       setProgressPercent((prev) => {
         if (prev >= 90) return 90
@@ -151,7 +117,7 @@ export function ListingGenerator() {
     }
     if (!allListingImagesUploaded(images)) {
       setError(
-        "Wait until every photo shows Saved before analyzing. Re-upload any that failed."
+        "Wait until every photo is saved, then generate. Re-upload any that failed."
       )
       return
     }
@@ -165,7 +131,6 @@ export function ListingGenerator() {
         (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
       )
 
-      // Temporary resized copies for AI only — originals stay at full resolution.
       const imageUrls = await uploadAnalyzeImagesIndividually({
         images: ordered,
       })
@@ -208,7 +173,7 @@ export function ListingGenerator() {
 
       const draft = payload.draft as GeneratedListingOutput
       setProgressPercent(92)
-      setProgressMessage("Completing eBay item specifics")
+      setProgressMessage("Adding item details")
 
       const mapped = mapDraftToListingFields(draft)
       const base = createEmptyListing(user.id)
@@ -230,16 +195,15 @@ export function ListingGenerator() {
           analyzedAt: new Date().toISOString(),
         },
       })
+      next = ensureListingQuantity(next)
 
       if (!next.title.trim()) {
         throw new Error("Mapped listing title was empty after AI analysis.")
       }
 
-      // AI employee: fill Taxonomy aspects before the seller sees the edit page.
       const hydrated = await hydrateListingEbayAspects(next)
       next = hydrated.listing
 
-      // Apply saved selling defaults (shipping, returns, offers, promo).
       let defaultsApplied = false
       try {
         const prefsRes = await fetch("/api/seller/ebay-defaults", {
@@ -270,7 +234,7 @@ export function ListingGenerator() {
       }
 
       setProgressPercent(100)
-      setProgressMessage("Building your listing")
+      setProgressMessage("Preparing your draft")
 
       if (payload.warnings?.length) {
         setNotice(payload.warnings.join(" "))
@@ -280,21 +244,29 @@ export function ListingGenerator() {
         )
       } else if (!defaultsApplied) {
         setNotice(
-          "Set your selling defaults once so shipping, returns, and offers fill automatically."
+          "Set selling defaults once so shipping, returns, and handling fill automatically."
         )
-      } else if (hydrated.ok && hydrated.summary.total > 0) {
-        const n = hydrated.summary.needsAttention
-        setNotice(
-          n === 0
-            ? `AI completed ${hydrated.summary.completed}/${hydrated.summary.total} item specifics. Selling preferences applied.`
-            : `AI completed ${hydrated.summary.completed}/${hydrated.summary.total} item specifics. Only ${n} need your attention.`
-        )
-      } else if (defaultsApplied) {
-        setNotice("Selling preferences applied from your defaults.")
       }
 
-      setListing(next)
-      setStep("review")
+      let saved: Listing
+      try {
+        saved = await persistListing({
+          ...next,
+          status: "draft",
+          updatedAt: new Date().toISOString(),
+        })
+      } catch (persistError) {
+        console.error("[listing-generator] persist after generate failed", persistError)
+        setListing(next)
+        setImages(ordered)
+        setNotice(
+          "Draft is on this device until you tap Save draft. Cloud save failed — check your connection."
+        )
+        setStep("review")
+        return
+      }
+      clearUploadSession(user.id)
+      router.replace(`/dashboard/listings/${saved.id}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generation failed")
     } finally {
@@ -303,218 +275,131 @@ export function ListingGenerator() {
     }
   }
 
-  async function handleSave(status: Listing["status"] = "ready") {
-    if (!listing || !user) return
-    setSaving(true)
-    setError(null)
-    try {
-      const sourceImages = (images.length > 0 ? images : listing.images) ?? []
-      const normalizedImages = [...sourceImages]
-        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
-        .map((img, index) => ({
-          ...img,
-          sortOrder: index,
-          isPrimary: index === 0,
-        }))
+  function handlePublished(payload: {
+    listing: Listing
+    results: OneClickPublishResult[]
+    summary: EbayLiveSummary
+  }) {
+    if (user?.id) clearUploadSession(user.id)
+    setListing(payload.listing)
+    setLiveSummary(payload.summary)
+    setStep("live")
+  }
 
-      const durableImages = await ensureDurableOriginalImageUrls(
-        normalizedImages,
-        user.id
-      )
-      setImages(durableImages)
+  if (step === "live" && liveSummary) {
+    return (
+      <ListingLiveSuccess
+        summary={liveSummary}
+        onCreateAnother={() => {
+          if (user?.id) clearUploadSession(user.id)
+        }}
+      />
+    )
+  }
 
-      const ready = listingIsReadyToPublish({
-        ...listing,
-        images: durableImages,
-      })
-      const toSave: Listing = {
-        ...listing,
-        images: durableImages,
-        title: listing.title.trim(),
-        status: ready ? status : "draft",
-        updatedAt: new Date().toISOString(),
-      }
-      if (!toSave.title) {
-        throw new Error("Title is required before saving.")
-      }
-      const saved = await persistListing(toSave)
-      clearUploadSession(user.id)
-      router.push(`/dashboard/listings/${saved.id}`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save listing")
-      setSaving(false)
-    }
+  if (step === "review" && listing) {
+    return (
+      <ReviewDraft
+        listing={{ ...listing, images }}
+        onChange={(next) => {
+          setListing(next)
+          setImages(next.images)
+        }}
+        notice={notice}
+        onPublished={handlePublished}
+      />
+    )
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="font-display text-3xl font-semibold tracking-tight">
-            {step === "upload" ? "Upload clothing photos" : "Review & edit listing"}
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {step === "upload"
-              ? `Upload 1–${MAX_LISTING_IMAGES} photos — AI fills the listing like an employee.`
-              : "Quick review: AI already filled most fields. Confirm anything marked Review, then publish."}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span
-            className={
-              step === "upload" ? "font-semibold text-foreground" : undefined
-            }
-          >
-            1. Photos
-          </span>
-          <span aria-hidden>→</span>
-          <span
-            className={
-              step === "review" ? "font-semibold text-foreground" : undefined
-            }
-          >
-            2. Edit & save
-          </span>
-        </div>
-      </div>
+    <div className="mx-auto max-w-lg space-y-5 pb-28">
+      {generating ? (
+        <GenerationProgressScreen
+          percent={progressPercent}
+          message={progressMessage}
+          photoCount={images.length}
+        />
+      ) : (
+        <>
+          <header className="space-y-1">
+            <h1 className="font-display text-3xl font-semibold tracking-tight">
+              Create listing
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              Add photos, then generate. AI fills the eBay draft for you.
+            </p>
+          </header>
 
-      {step === "upload" && (
-        <div className="animate-rise space-y-5">
-          {generating ? (
-            <AnalysisProgressScreen
-              percent={progressPercent}
-              message={progressMessage}
-            />
-          ) : (
-            <>
-              <ImageUploader
-                images={images}
-                onChange={setImages}
-                disabled={generating}
-                userId={user?.id}
-              />
-              <div className="space-y-2">
-                <Label htmlFor="seller-notes">Help the AI</Label>
+          <ImageUploader
+            images={images}
+            onChange={setImages}
+            disabled={generating}
+            userId={user?.id}
+            variant="create"
+          />
+
+          <div>
+            <button
+              type="button"
+              className="text-sm font-medium text-muted-foreground underline-offset-2 hover:underline"
+              onClick={() => setNotesOpen((open) => !open)}
+            >
+              {notesOpen ? "Hide extra notes" : "Add a note the photos don’t show"}
+            </button>
+            {notesOpen && (
+              <div className="mt-2 space-y-2">
+                <Label htmlFor="seller-notes" className="sr-only">
+                  Seller notes
+                </Label>
                 <Textarea
                   id="seller-notes"
                   value={sellerNotes}
                   onChange={(event) => setSellerNotes(event.target.value)}
-                  placeholder="Add anything the photos may not show — women’s, size, flaws, brand, item type, etc."
+                  placeholder="Size, flaws, brand, department — only if the photos miss it."
                   disabled={generating}
-                  className="min-h-[96px]"
+                  className="min-h-[88px]"
                 />
               </div>
-              {error && (
-                <p
-                  className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-                  role="alert"
-                >
-                  {error}
-                </p>
-              )}
-              <div className="flex flex-wrap gap-3">
-                <Button
-                  variant="accent"
-                  size="lg"
-                  disabled={!photosReady || generating}
-                  onClick={() => void handleGenerate()}
-                >
-                  <Sparkles />
-                  Analyze {images.length || ""} photo
-                  {images.length === 1 ? "" : "s"}
-                </Button>
-                <p className="flex items-center gap-1.5 self-center text-xs text-muted-foreground">
-                  <Camera className="h-3.5 w-3.5" />
-                  {photosUploading
-                    ? "Saving photos to cloud storage…"
-                    : photosReady
-                      ? "Creates a draft title, description, details, and price for you to edit"
-                      : images.length === 0
-                        ? "Upload photos to continue"
-                        : "Analyze unlocks when every photo shows Saved"}
-                </p>
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {step === "review" && listing && (
-        <div className="animate-rise space-y-6">
-          <div className="rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-sm">
-            <p className="font-medium text-foreground">{listing.title}</p>
-            <p className="mt-1 text-muted-foreground">
-              AI filled this listing from your photos. Confirm anything marked Review —
-              most clothing listings need under 10 seconds.
-            </p>
+            )}
           </div>
-          {notice && (
-            <p
-              className="rounded-xl border border-border bg-card/70 px-4 py-3 text-sm text-muted-foreground"
-              role="status"
-            >
-              {notice}
-            </p>
-          )}
 
-          <ImageUploader
-            images={images}
-            onChange={(next) => {
-              setImages(next)
-              setListing({ ...listing, images: next })
-            }}
-            disabled={saving}
-            userId={user?.id}
-          />
-          <ListingEditorForm
-            listing={{ ...listing, images }}
-            onChange={setListing}
-            disabled={saving}
-            onAspectMetaChange={setAspectMeta}
-          />
-          <OneClickPublishBar
-            listing={{ ...listing, images }}
-            disabled={saving}
-            aspectMeta={aspectMeta}
-            onListingChange={(next) => {
-              setListing(next)
-              setImages(next.images)
-            }}
-          />
           {error && (
-            <p className="text-sm text-destructive" role="alert">
+            <p
+              className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+              role="alert"
+            >
               {error}
             </p>
           )}
-          <div className="sticky bottom-3 z-20 flex flex-wrap gap-3 rounded-2xl border border-border bg-background/90 p-3 backdrop-blur-xl sm:static sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none">
-            <Button
-              variant="outline"
-              disabled={saving || generating}
-              onClick={() => {
-                setStep("upload")
-                setError(null)
-              }}
-            >
-              Back to photos
-            </Button>
-            <Button
-              variant="secondary"
-              disabled={saving}
-              onClick={() => void handleSave("draft")}
-            >
-              {saving ? <Loader2 className="animate-spin" /> : <Save />}
-              Save as draft
-            </Button>
-            <Button
-              variant="accent"
-              disabled={saving}
-              onClick={() => void handleSave("ready")}
-            >
-              {saving ? <Loader2 className="animate-spin" /> : <Save />}
-              Save listing
-            </Button>
+
+          <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-xl">
+            <div className="mx-auto max-w-lg">
+              <Button
+                variant="accent"
+                size="lg"
+                className="h-12 w-full text-base"
+                disabled={!photosReady || generating}
+                onClick={() => void handleGenerate()}
+              >
+                {generating ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Sparkles />
+                )}
+                Generate listing
+              </Button>
+              <p className="mt-2 text-center text-xs text-muted-foreground">
+                {photosUploading
+                  ? "Saving photos…"
+                  : photosReady
+                    ? "One tap — then review the draft"
+                    : images.length === 0
+                      ? "Add photos to continue"
+                      : "Generate unlocks when every photo is saved"}
+              </p>
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   )

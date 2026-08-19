@@ -27,6 +27,7 @@ type AspectsMeta = {
   total: number
   needsAttention?: number
   banner?: string
+  status?: "loading" | "ready" | "ebay_not_connected" | "failed"
 }
 
 function computeMissing(
@@ -287,6 +288,12 @@ export function EbayItemSpecificsFields({
     let cancelled = false
     setLoading(true)
     setError(null)
+    onMetaChangeRef.current?.({
+      missing: [],
+      filled: 0,
+      total: 0,
+      status: "loading",
+    })
 
     void hydrateListingEbayAspects(listing).then((result) => {
       if (cancelled) return
@@ -297,19 +304,26 @@ export function EbayItemSpecificsFields({
 
       if (!result.ok && result.skippedReason === "ebay_not_connected") {
         setFields([])
+        setError("Connect eBay to load item specifics.")
         onMetaChangeRef.current?.({
           missing: ["Connect eBay to load item specifics"],
           filled: 0,
           total: 0,
+          status: "ebay_not_connected",
         })
         return
       }
       if (!result.ok && result.formFields.length === 0) {
-        setError("Could not load eBay item specifics.")
+        const message =
+          result.skippedReason === "unauthorized"
+            ? "Sign in required to load eBay item specifics."
+            : "Could not load eBay item specifics."
+        setError(message)
         onMetaChangeRef.current?.({
-          missing: ["Item specifics failed to load"],
+          missing: [message],
           filled: 0,
           total: 0,
+          status: "failed",
         })
         return
       }
@@ -335,6 +349,7 @@ export function EbayItemSpecificsFields({
         total: result.summary.total,
         needsAttention: result.summary.needsAttention,
         banner: formatAiEmployeeBanner(result.summary),
+        status: "ready",
       })
     })
 
@@ -358,6 +373,7 @@ export function EbayItemSpecificsFields({
       total: nextSummary.total,
       needsAttention: nextSummary.needsAttention,
       banner: formatAiEmployeeBanner(nextSummary),
+      status: "ready",
     })
   }, [listing, fields])
 

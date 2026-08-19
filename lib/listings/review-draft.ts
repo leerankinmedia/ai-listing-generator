@@ -10,10 +10,36 @@ import {
 } from "@/lib/listings/publish"
 import type { Listing, OneClickPublishResult } from "@/lib/types"
 
+export type EbayAspectLoadStatus =
+  | "loading"
+  | "ready"
+  | "ebay_not_connected"
+  | "failed"
+
 export type EbayAspectMeta = {
   missing: string[]
   filled: number
   total: number
+  status?: EbayAspectLoadStatus
+}
+
+function aspectSpecificsBlockers(aspectMeta?: EbayAspectMeta): string[] {
+  if (!aspectMeta || aspectMeta.status === "loading") {
+    return ["Item specifics (still loading)"]
+  }
+  if (aspectMeta.status === "ebay_not_connected") {
+    const msg =
+      aspectMeta.missing.map((name) => name.trim()).find(Boolean) ||
+      "Connect eBay to load item specifics"
+    return [msg]
+  }
+  if (aspectMeta.status === "failed") {
+    const named = aspectMeta.missing.map((name) => name.trim()).filter(Boolean)
+    return named.length > 0
+      ? named
+      : ["Could not load eBay item specifics"]
+  }
+  return aspectMeta.missing.map((name) => name.trim()).filter(Boolean)
 }
 
 export const REVIEW_DRAFT_PRIMARY_ASPECTS = [
@@ -87,13 +113,7 @@ export function collectEbayPublishBlockers(
   const freeBlock = ebayFreeShippingBlockMessage(listing)
   if (freeBlock) missing.push(freeBlock)
 
-  if (!aspectMeta || aspectMeta.total <= 0) {
-    missing.push("Item specifics (still loading)")
-  } else {
-    for (const name of aspectMeta.missing) {
-      if (name.trim()) missing.push(name)
-    }
-  }
+  missing.push(...aspectSpecificsBlockers(aspectMeta))
 
   return missing
 }

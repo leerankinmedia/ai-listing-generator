@@ -47,7 +47,26 @@ async function hydrateExactEbayAspects(listing: Listing): Promise<{
       credentials: "same-origin",
     })
     if (!previewRes.ok) {
-      return { listing, blockers: [] }
+      const json = (await previewRes.json().catch(() => ({}))) as {
+        error?: string
+        code?: string
+      }
+      if (
+        json.code === "ebay_not_connected" ||
+        previewRes.status === 401 ||
+        /unauthor/i.test(json.error || "")
+      ) {
+        return {
+          listing,
+          blockers: ["Connect eBay to load item specifics"],
+        }
+      }
+      return {
+        listing,
+        blockers: [
+          json.error?.trim() || "Could not load eBay item specifics",
+        ],
+      }
     }
     const preview = (await previewRes.json()) as {
       formFields?: Array<{
@@ -96,7 +115,10 @@ async function hydrateExactEbayAspects(listing: Listing): Promise<{
         : preview.missingRequiredNames || []
     return { listing: next, blockers: missing }
   } catch {
-    return { listing, blockers: [] }
+    return {
+      listing,
+      blockers: ["Could not load eBay item specifics"],
+    }
   }
 }
 

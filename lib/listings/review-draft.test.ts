@@ -100,7 +100,7 @@ describe("review draft quantity", () => {
 })
 
 describe("collectEbayPublishBlockers", () => {
-  const readyMeta = { missing: [], filled: 8, total: 8 }
+  const readyMeta = { missing: [], filled: 8, total: 8, status: "ready" as const }
 
   it("returns no blockers for a complete clothing draft", () => {
     assert.deepEqual(collectEbayPublishBlockers(listing(), readyMeta), [])
@@ -121,6 +121,7 @@ describe("collectEbayPublishBlockers", () => {
       missing: ["Brand"],
       filled: 0,
       total: 0,
+      status: "ready",
     })
     assert.ok(blockers.includes("Title"))
     assert.ok(blockers.includes("Description"))
@@ -128,7 +129,48 @@ describe("collectEbayPublishBlockers", () => {
     assert.ok(blockers.includes("Photos"))
     assert.ok(blockers.includes("eBay category"))
     assert.ok(blockers.includes("Condition"))
-    assert.ok(blockers.includes("Item specifics (still loading)"))
+    assert.ok(blockers.includes("Brand"))
+    assert.ok(!blockers.includes("Item specifics (still loading)"))
+    assert.match(
+      blockers.join(" "),
+      /Enter shipping package details before publishing to eBay/
+    )
+  })
+
+  it("keeps still-loading only while item specifics are loading", () => {
+    assert.ok(
+      collectEbayPublishBlockers(listing()).includes(
+        "Item specifics (still loading)"
+      )
+    )
+    assert.ok(
+      collectEbayPublishBlockers(listing(), {
+        missing: [],
+        filled: 0,
+        total: 0,
+        status: "loading",
+      }).includes("Item specifics (still loading)")
+    )
+  })
+
+  it("asks to connect eBay instead of staying on still loading", () => {
+    const blockers = collectEbayPublishBlockers(listing(), {
+      missing: ["Connect eBay to load item specifics"],
+      filled: 0,
+      total: 0,
+      status: "ebay_not_connected",
+    })
+    assert.deepEqual(blockers, ["Connect eBay to load item specifics"])
+  })
+
+  it("does not block on item specifics when none are required", () => {
+    const blockers = collectEbayPublishBlockers(listing(), {
+      missing: [],
+      filled: 0,
+      total: 0,
+      status: "ready",
+    })
+    assert.deepEqual(blockers, [])
   })
 
   it("surfaces required item specifics after they load", () => {
@@ -136,12 +178,14 @@ describe("collectEbayPublishBlockers", () => {
       missing: ["Size Type"],
       filled: 7,
       total: 8,
+      status: "ready",
     })
     assert.deepEqual(blockers, ["Size Type"])
     assert.equal(reviewDraftIsPublishReady(listing(), {
       missing: ["Size Type"],
       filled: 7,
       total: 8,
+      status: "ready",
     }), false)
   })
 })

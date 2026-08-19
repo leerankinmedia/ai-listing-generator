@@ -193,7 +193,38 @@ export async function getSupabaseListing(id: string): Promise<Listing | null> {
   const supabase = createClient()
   const { data, error } = await supabase.from("listings").select("*").eq("id", id).maybeSingle()
   if (error) throw error
-  return data ? rowToListing(data as ListingRow) : null
+  if (!data) return null
+  const listing = rowToListing(data as ListingRow)
+  if (listing.images.length > 0) return listing
+
+  const { data: photos, error: photoError } = await supabase
+    .from("listing_photos")
+    .select("id, url, storage_path, sort_order, is_primary, analysis")
+    .eq("listing_id", id)
+    .order("sort_order", { ascending: true })
+  if (photoError || !photos?.length) return listing
+
+  return {
+    ...listing,
+    images: normalizeListingImageStorage(
+      photos.map((photo: {
+        id: string
+        url: string
+        storage_path?: string | null
+        sort_order?: number | null
+        is_primary?: boolean | null
+        analysis?: ListingImage["analysis"]
+      }, index: number) => ({
+        id: photo.id,
+        url: photo.url,
+        storagePath: photo.storage_path || undefined,
+        sortOrder: photo.sort_order ?? index,
+        isPrimary: Boolean(photo.is_primary) || index === 0,
+        analysis: photo.analysis ?? undefined,
+        storageStatus: "uploaded" as const,
+      }))
+    ),
+  }
 }
 
 async function upsertListingRow(

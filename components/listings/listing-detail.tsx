@@ -10,9 +10,12 @@ import { usePaidToolsAccess } from "@/components/billing/paid-feature-gate"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useAuth } from "@/components/auth/auth-provider"
 import { fetchListing, persistListing, removeListing } from "@/lib/listings/repository"
-import { ebayLiveSummary, type EbayLiveSummary } from "@/lib/listings/review-draft"
-import { normalizeListingImageStorage } from "@/lib/listings/upload-session"
-import { clearUploadSession } from "@/lib/listings/upload-session"
+import { ebayLiveSummary, ensureListingQuantity, type EbayLiveSummary } from "@/lib/listings/review-draft"
+import {
+  clearUploadSession,
+  normalizeListingImageStorage,
+  readUploadSession,
+} from "@/lib/listings/upload-session"
 import type { Listing, OneClickPublishResult } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -61,7 +64,20 @@ export function ListingDetail({ listingId }: { listingId: string }) {
         if (!row || (user && row.userId !== user.id)) {
           setListing(null)
         } else {
-          setListing(normalizeListing(row))
+          let next = ensureListingQuantity(normalizeListing(row))
+          if (user?.id && next.images.length === 0) {
+            const session = readUploadSession(user.id)
+            if (
+              session?.images.length &&
+              (!session.listingId || session.listingId === listingId)
+            ) {
+              next = { ...next, images: session.images }
+            }
+          }
+          setListing(next)
+          if (user?.id && next.images.length > 0) {
+            clearUploadSession(user.id)
+          }
         }
       } finally {
         if (mounted) setLoading(false)

@@ -183,7 +183,15 @@ export function ListingGenerator() {
         price: mapped.price,
         currency: mapped.currency,
         keywords: mapped.keywords,
-        specifics: mapped.specifics,
+        specifics: {
+          ...base.specifics,
+          ...mapped.specifics,
+          extras: {
+            ...(base.specifics.extras || {}),
+            ...(mapped.specifics.extras || {}),
+            quantity: mapped.specifics.extras?.quantity?.trim() || "1",
+          },
+        },
         fieldConfidence: mapped.fieldConfidence,
         comps: mapped.comps,
         aiGenerated: true,
@@ -214,22 +222,21 @@ export function ListingGenerator() {
             defaults?: unknown
             ready?: boolean
           }
-          if (prefs.defaults && prefs.ready) {
-            next = applyEbaySellerDefaultsToListing(
-              next,
-              normalizeEbaySellerDefaults(prefs.defaults),
-              { onlyIfUnset: false }
-            )
-            defaultsApplied = true
+          if (prefs.defaults) {
+            const normalized = normalizeEbaySellerDefaults(prefs.defaults)
+            next = applyEbaySellerDefaultsToListing(next, normalized, {
+              onlyIfUnset: false,
+            })
+            defaultsApplied = ebaySellerDefaultsAreReady(normalized)
           }
         }
       } catch {
         const local = readLocalEbaySellerDefaults()
-        if (local && ebaySellerDefaultsAreReady(local.defaults)) {
+        if (local?.defaults) {
           next = applyEbaySellerDefaultsToListing(next, local.defaults, {
             onlyIfUnset: false,
           })
-          defaultsApplied = true
+          defaultsApplied = ebaySellerDefaultsAreReady(local.defaults)
         }
       }
 
@@ -252,9 +259,17 @@ export function ListingGenerator() {
       try {
         saved = await persistListing({
           ...next,
+          images: ordered,
           status: "draft",
           updatedAt: new Date().toISOString(),
         })
+        if (saved.images.length === 0 && ordered.length > 0) {
+          saved = await persistListing({
+            ...saved,
+            images: ordered,
+            updatedAt: new Date().toISOString(),
+          })
+        }
       } catch (persistError) {
         console.error("[listing-generator] persist after generate failed", persistError)
         setListing(next)
@@ -265,7 +280,11 @@ export function ListingGenerator() {
         setStep("review")
         return
       }
-      clearUploadSession(user.id)
+      writeUploadSession(user.id, {
+        images: saved.images.length > 0 ? saved.images : ordered,
+        sellerNotes,
+        listingId: saved.id,
+      })
       router.replace(`/dashboard/listings/${saved.id}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generation failed")

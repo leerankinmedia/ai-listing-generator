@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Loader2, Save } from "lucide-react"
 import { EbayCategoryPicker } from "@/components/listings/ebay-category-picker"
 import { EbayItemSpecificsFields } from "@/components/listings/ebay-item-specifics-fields"
@@ -28,6 +28,11 @@ import {
   type EbayLiveSummary,
 } from "@/lib/listings/review-draft"
 import { persistListing } from "@/lib/listings/repository"
+import {
+  applyEbaySellerDefaultsToListing,
+  ebaySellerDefaultsAreReady,
+  normalizeEbaySellerDefaults,
+} from "@/lib/seller/ebay-defaults"
 import type { Listing, OneClickPublishResult } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -63,8 +68,10 @@ export function ReviewDraft({
     missing: [],
     filled: 0,
     total: 0,
+    status: "loading",
   })
   const busy = saving || publishing || disabled
+  const defaultsAppliedRef = useRef(false)
 
   useEffect(() => {
     let mounted = true
@@ -77,8 +84,26 @@ export function ReviewDraft({
           if (mounted) setDefaultsReady(false)
           return
         }
-        const json = (await res.json()) as { ready?: boolean }
-        if (mounted) setDefaultsReady(Boolean(json.ready))
+        const json = (await res.json()) as {
+          ready?: boolean
+          defaults?: unknown
+        }
+        if (!mounted) return
+        const normalized = json.defaults
+          ? normalizeEbaySellerDefaults(json.defaults)
+          : null
+        setDefaultsReady(
+          Boolean(json.ready) ||
+            (normalized ? ebaySellerDefaultsAreReady(normalized) : false)
+        )
+        if (normalized && !defaultsAppliedRef.current) {
+          defaultsAppliedRef.current = true
+          onChange(
+            applyEbaySellerDefaultsToListing(listing, normalized, {
+              onlyIfUnset: true,
+            })
+          )
+        }
       } catch {
         if (mounted) setDefaultsReady(false)
       }
@@ -86,9 +111,23 @@ export function ReviewDraft({
     return () => {
       mounted = false
     }
-  }, [])
+    // Apply saved selling defaults once when Review Draft mounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listing.id])
 
   const qty = listingQuantity(listing)
+
+  useEffect(() => {
+    if (publishing) return
+    const next = collectEbayPublishBlockers(listing, aspectMeta).filter(
+      (item) => item !== "Item specifics (still loading)"
+    )
+    setBlockers((prev) =>
+      prev.length === next.length && prev.every((item, i) => item === next[i])
+        ? prev
+        : next
+    )
+  }, [listing, aspectMeta, publishing])
 
   useEffect(() => {
     if (!listing.id) return
@@ -245,6 +284,7 @@ export function ReviewDraft({
             missing: meta.missing,
             filled: meta.filled,
             total: meta.total,
+            status: meta.status,
           })
         }
       />

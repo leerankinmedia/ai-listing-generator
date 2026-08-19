@@ -50,8 +50,12 @@ export async function persistListing(listing: Listing): Promise<Listing> {
     try {
       const remote = await upsertSupabaseListing(listing)
       if (remote) {
-        await saveLocalListing(remote)
-        return remote
+        const merged =
+          remote.images.length === 0 && listing.images.length > 0
+            ? { ...remote, images: listing.images }
+            : remote
+        await saveLocalListing(merged)
+        return merged
       }
     } catch (error) {
       console.error("[listings] Supabase save failed, using IndexedDB", error)

@@ -372,7 +372,9 @@ export function EbayItemSpecificsFields({
   if (error && fields.length === 0) {
     return (
       <p className="text-sm text-muted-foreground" role="status">
-        {error} You can still edit core attributes below.
+        {/unauthor/i.test(error)
+          ? "Connect eBay to load item specifics. You can still edit brand, size, color, and other details."
+          : `${error} You can still edit core attributes below.`}
       </p>
     )
   }

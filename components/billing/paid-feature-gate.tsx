@@ -4,12 +4,14 @@ import {
   FeatureLockPreview,
   type LockedFeatureId,
 } from "@/components/billing/feature-lock-preview"
+import { useAuth } from "@/components/auth/auth-provider"
 import { useBillingStatus } from "@/components/billing/paywall"
 
 /**
  * Soft-lock wrapper for paid tools.
  * Access is decided server-side (/api/billing/status + protected APIs).
  * Fail closed: only render actions when paidToolsUnlocked === true.
+ * Demo mode (no Supabase) stays unlocked so local IndexedDB listing still works.
  */
 export function PaidFeatureGate({
   feature,
@@ -20,7 +22,12 @@ export function PaidFeatureGate({
   children: React.ReactNode
   className?: string
 }) {
-  const { status, loading, error } = useBillingStatus()
+  const { isDemo } = useAuth()
+  const { status, loading, error } = useBillingStatus(!isDemo)
+
+  if (isDemo) {
+    return <>{children}</>
+  }
 
   if (loading) {
     return <p className="text-sm text-muted-foreground">Loading access…</p>
@@ -49,8 +56,9 @@ export function PaidFeatureGate({
 }
 
 export function usePaidToolsAccess() {
-  const { status, loading, error, refresh } = useBillingStatus()
-  const unlocked = status?.paidToolsUnlocked === true
+  const { isDemo } = useAuth()
+  const { status, loading, error, refresh } = useBillingStatus(!isDemo)
+  const unlocked = isDemo || status?.paidToolsUnlocked === true
   return {
     unlocked,
     previewMode: Boolean(status?.previewMode || (status && !unlocked)),

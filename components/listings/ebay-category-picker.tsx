@@ -540,7 +540,9 @@ export function EbayCategoryPicker({
 
       {error && (
         <p className="text-sm text-destructive" role="alert">
-          {error}
+          {/unauthor/i.test(error)
+            ? "Connect eBay to load live categories, conditions, and item specifics."
+            : error}
         </p>
       )}
     </div>

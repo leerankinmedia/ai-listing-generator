@@ -35,6 +35,7 @@ export async function hydrateListingEbayAspects(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ listing }),
+      credentials: "same-origin",
     })
 
     if (!res.ok) {
@@ -42,6 +43,8 @@ export async function hydrateListingEbayAspects(
         error?: string
         code?: string
       }
+      const unauthorized =
+        res.status === 401 || /unauthor/i.test(json.error || "")
       return {
         listing,
         formFields: [],
@@ -56,7 +59,9 @@ export async function hydrateListingEbayAspects(
         skippedReason:
           json.code === "ebay_not_connected"
             ? "ebay_not_connected"
-            : json.error || "aspects_preview_failed",
+            : unauthorized
+              ? "unauthorized"
+              : json.error || "aspects_preview_failed",
       }
     }
 

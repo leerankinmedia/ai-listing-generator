@@ -33,7 +33,7 @@ const navItems = [
   { href: "/dashboard/insights", label: "Insights", icon: LineChart },
   { href: "/dashboard/listings", label: "Listings", icon: Package },
   { href: "/dashboard/inventory", label: "Inventory", icon: Boxes },
-  { href: "/dashboard/listings/new", label: "AI Generator", icon: Plus },
+  { href: "/dashboard/listings/new", label: "Create listing", icon: Plus },
   { href: "/dashboard/connections", label: "Connections", icon: Store },
   { href: "/dashboard/selling", label: "Selling", icon: Truck },
   { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
@@ -77,10 +77,13 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const isOwner = isOwnerBillingStatus(status)
   const createHref = unlocked ? "/dashboard/listings/new" : "/checkout"
   const createLabel = unlocked
-    ? "New listing"
+    ? "Create listing"
     : status?.trialEligible === false || status?.status === "expired"
       ? "Subscribe"
       : "Start free trial"
+  const listingFlow =
+    pathname === "/dashboard/listings/new" ||
+    /^\/dashboard\/listings\/[^/]+$/.test(pathname)
 
   async function handleSignOut() {
     await signOut()
@@ -178,11 +181,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               href={createHref}
               className={cn(
                 buttonVariants({ variant: "accent", size: "sm" }),
-                "hidden sm:inline-flex lg:hidden"
+                "inline-flex min-h-10 lg:hidden",
+                pathname === "/dashboard/listings/new" && "hidden"
               )}
             >
               <Plus className="h-4 w-4" />
-              {unlocked ? "New" : createLabel}
+              {unlocked ? "Create" : createLabel}
             </Link>
             <ThemeToggle />
             <button
@@ -195,6 +199,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
+        {!listingFlow && (
         <nav className="flex gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
           {topNavItems.map((item) => {
             const Icon = item.icon
@@ -204,7 +209,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
+                  "flex shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 py-2 text-xs font-medium transition-colors",
                   active
                     ? "bg-secondary text-foreground"
                     : "text-muted-foreground hover:bg-secondary hover:text-foreground"
@@ -216,8 +221,18 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             )
           })}
         </nav>
+        )}
 
-        <main className="flex-1 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">{children}</main>
+        <main
+          className={cn(
+            "flex-1 overflow-x-hidden",
+            listingFlow
+              ? "px-3 py-3 sm:px-6 sm:py-5"
+              : "px-4 py-4 sm:px-6 sm:py-6 lg:px-8"
+          )}
+        >
+          {children}
+        </main>
       </div>
     </div>
   )

@@ -77,6 +77,7 @@ describe("ebay seller defaults", () => {
     assert.equal(next.specifics.requireImmediatePayment, true)
     assert.equal(next.specifics.promotedListings, "dynamic")
     assert.equal(next.specifics.extras?.itemLocationZip, "43604")
+    assert.equal(next.specifics.extras?.quantity, "1")
     assert.equal(next.specifics.shippingPackage?.weightPounds, 1)
   })
 

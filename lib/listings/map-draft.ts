@@ -135,7 +135,10 @@ export function mapDraftToListingFields(draft: GeneratedListingOutput): {
       asString(conf.category) ||
       undefined,
     flaws: asString(specificsSource.flaws) || asString(conf.flaws) || undefined,
-    extras: Object.keys(draftExtras).length > 0 ? draftExtras : undefined,
+    extras: {
+      ...draftExtras,
+      quantity: draftExtras.quantity?.trim() || "1",
+    },
   }
 
   const fieldKeys: DetectedFieldKey[] = [

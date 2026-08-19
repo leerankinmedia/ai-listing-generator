@@ -621,6 +621,73 @@ export function splitAspectFieldsForDisplay(
   }
 }
 
+/** Always-visible Magical Listing review fields. */
+export const REVIEW_DRAFT_PRIMARY_ASPECTS = [
+  "Brand",
+  "Size",
+  "Size Type",
+  "Color",
+  "Department",
+] as const
+
+/**
+ * Review Draft: keep Brand / Size / Size Type / Color / Department visible,
+ * plus anything that still needs input. Remaining specifics go under More.
+ */
+export function splitAspectFieldsForReviewDraft(
+  fields: EbayAspectFormField[],
+  listing: Listing
+): ReturnType<typeof splitAspectFieldsForDisplay> {
+  let autoFilledCount = 0
+  let reviewCount = 0
+  let hiddenBlankOptional = 0
+  const primaryKeys = new Set(
+    REVIEW_DRAFT_PRIMARY_ASPECTS.map((name) => name.toLowerCase())
+  )
+
+  const views = fields.map((field) => classifyAspectField(field, listing))
+  const primaryViews: AspectFieldView[] = []
+  const otherViews: AspectFieldView[] = []
+
+  for (const view of views) {
+    const key = view.field.name.trim().toLowerCase()
+    const isPinned = primaryKeys.has(key)
+    if (view.status === "auto_filled") autoFilledCount += 1
+    if (view.status === "needs_review") reviewCount += 1
+
+    if (view.status === "optional_blank" && !isPinned) {
+      hiddenBlankOptional += 1
+      continue
+    }
+
+    if (
+      isPinned ||
+      view.status === "needs_input" ||
+      view.status === "needs_review"
+    ) {
+      primaryViews.push(view)
+    } else {
+      otherViews.push(view)
+    }
+  }
+
+  const rank = (name: string) => {
+    const index = REVIEW_DRAFT_PRIMARY_ASPECTS.findIndex(
+      (n) => n.toLowerCase() === name.trim().toLowerCase()
+    )
+    return index === -1 ? 1000 : index
+  }
+  primaryViews.sort((a, b) => rank(a.field.name) - rank(b.field.name))
+
+  return {
+    primary: primaryViews,
+    more: otherViews,
+    autoFilledCount,
+    reviewCount,
+    hiddenBlankOptional,
+  }
+}
+
 export function summarizeAiEmployeeAspects(
   fields: EbayAspectFormField[],
   listing: Listing

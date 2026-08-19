@@ -19,7 +19,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { AlertCircle, Check, GripVertical, ImagePlus, Loader2, Star, X } from "lucide-react"
+import { AlertCircle, Camera, Check, GripVertical, ImagePlus, Loader2, Star, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { uploadListingOriginalToStorage } from "@/lib/listings/durable-images"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
@@ -35,6 +35,8 @@ interface ImageUploaderProps {
   disabled?: boolean
   /** Required for durable Supabase uploads */
   userId?: string | null
+  /** create = camera-first Add photos; review = compact strip + add more */
+  variant?: "create" | "review"
 }
 
 function normalizeImages(images: ListingImage[]): ListingImage[] {
@@ -275,8 +277,10 @@ export function ImageUploader({
   onChange,
   disabled,
   userId,
+  variant = "create",
 }: ImageUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const cameraRef = useRef<HTMLInputElement>(null)
   const imagesRef = useRef(images)
   imagesRef.current = images
   const [fileDragging, setFileDragging] = useState(false)
@@ -512,65 +516,118 @@ export function ImageUploader({
 
   return (
     <div className="space-y-3">
-      <div
-        onDragEnter={(e) => {
-          e.preventDefault()
-          if (!disabled) setFileDragging(true)
+      <input
+        ref={cameraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        disabled={disabled || busy}
+        onChange={(e) => {
+          if (e.target.files) void addFiles(e.target.files)
+          e.target.value = ""
         }}
-        onDragOver={(e) => {
-          e.preventDefault()
-          if (!disabled) setFileDragging(true)
+      />
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        disabled={disabled || busy}
+        onChange={(e) => {
+          if (e.target.files) void addFiles(e.target.files)
+          e.target.value = ""
         }}
-        onDragLeave={(e) => {
-          e.preventDefault()
-          setFileDragging(false)
-        }}
-        onDrop={(e) => {
-          e.preventDefault()
-          setFileDragging(false)
-          if (!disabled) void addFiles(e.dataTransfer.files)
-        }}
-        className={cn(
-          "relative flex min-h-[180px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-4 py-8 text-center transition-colors",
-          fileDragging
-            ? "border-accent bg-accent/10"
-            : "border-border bg-card/50 hover:border-accent/50 hover:bg-card/80",
-          disabled && "pointer-events-none opacity-60"
-        )}
-        onClick={() => inputRef.current?.click()}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") inputRef.current?.click()
-        }}
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          className="hidden"
-          disabled={disabled || busy}
-          onChange={(e) => {
-            if (e.target.files) void addFiles(e.target.files)
-            e.target.value = ""
+      />
+
+      {ordered.length === 0 ? (
+        <div
+          onDragEnter={(e) => {
+            e.preventDefault()
+            if (!disabled) setFileDragging(true)
           }}
-        />
-        <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-accent/15 text-accent">
-          <ImagePlus className="h-5 w-5" />
+          onDragOver={(e) => {
+            e.preventDefault()
+            if (!disabled) setFileDragging(true)
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault()
+            setFileDragging(false)
+          }}
+          onDrop={(e) => {
+            e.preventDefault()
+            setFileDragging(false)
+            if (!disabled) void addFiles(e.dataTransfer.files)
+          }}
+          className={cn(
+            "flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed px-4 py-8 text-center transition-colors",
+            fileDragging
+              ? "border-accent bg-accent/10"
+              : "border-border bg-card/50",
+            disabled && "pointer-events-none opacity-60"
+          )}
+        >
+          <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent/15 text-accent">
+            <Camera className="h-7 w-7" />
+          </div>
+          <p className="font-display text-xl font-semibold">Add photos</p>
+          <p className="mt-1 max-w-xs text-sm text-muted-foreground">
+            Take photos or upload 4–12 product shots. They save immediately.
+          </p>
+          <div className="mt-6 flex w-full max-w-sm flex-col gap-2">
+            <button
+              type="button"
+              disabled={disabled || busy}
+              onClick={() => cameraRef.current?.click()}
+              className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-accent text-base font-semibold text-accent-foreground"
+            >
+              <Camera className="h-5 w-5" />
+              Take photos
+            </button>
+            <button
+              type="button"
+              disabled={disabled || busy}
+              onClick={() => inputRef.current?.click()}
+              className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-border bg-background text-base font-semibold"
+            >
+              <ImagePlus className="h-5 w-5" />
+              Upload photos
+            </button>
+          </div>
         </div>
-        <p className="font-display text-base font-semibold">
-          {busy ? "Saving photos to storage…" : "Drop photos here"}
+      ) : (
+        <div className="flex gap-2">
+          <button
+            type="button"
+            disabled={disabled || busy || ordered.length >= MAX_LISTING_IMAGES}
+            onClick={() => cameraRef.current?.click()}
+            className="inline-flex h-12 min-w-0 flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-card text-sm font-semibold"
+          >
+            <Camera className="h-4 w-4" />
+            Take photo
+          </button>
+          <button
+            type="button"
+            disabled={disabled || busy || ordered.length >= MAX_LISTING_IMAGES}
+            onClick={() => inputRef.current?.click()}
+            className="inline-flex h-12 min-w-0 flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-card text-sm font-semibold"
+          >
+            <ImagePlus className="h-4 w-4" />
+            Add photos
+          </button>
+        </div>
+      )}
+
+      {busy && (
+        <p className="text-sm text-muted-foreground">
+          Saving photos to cloud storage…
         </p>
-        <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-          Drag and drop 1–{MAX_LISTING_IMAGES} clothing photos, or tap to browse.
-          Each photo is saved to cloud storage immediately at full resolution.
-        </p>
-        <p className="mt-3 text-xs font-medium text-muted-foreground">
-          {uploadedCount} / {ordered.length || 0} saved · {ordered.length} /{" "}
-          {MAX_LISTING_IMAGES} selected
-        </p>
-      </div>
+      )}
+      <p className="text-xs text-muted-foreground">
+        {uploadedCount} / {ordered.length || 0} saved · {ordered.length} /{" "}
+        {MAX_LISTING_IMAGES} selected
+      </p>
 
       {error && (
         <p className="text-sm text-destructive" role="alert">

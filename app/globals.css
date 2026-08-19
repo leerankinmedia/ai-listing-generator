@@ -113,10 +113,12 @@
 
   html {
     scroll-behavior: smooth;
+    overflow-x: hidden;
   }
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
+    overflow-x: hidden;
     background-image:
       radial-gradient(1200px 600px at 10% -10%, var(--mesh-a), transparent 55%),
       radial-gradient(900px 500px at 90% 0%, var(--mesh-b), transparent 50%),

@@ -122,6 +122,7 @@ export function createEmptyListing(userId: string): Listing {
     specifics: {
       shippingMode: "calculated",
       handlingTimeDays: 1,
+      extras: { quantity: "1" },
     },
     fieldConfidence: {},
     images: [],

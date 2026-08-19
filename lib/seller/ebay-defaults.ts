@@ -353,6 +353,9 @@ export function applyEbaySellerDefaultsToListing(
   ) {
     extras.autoDeclinePercent = String(defaults.autoDeclinePercent)
   }
+  if (!onlyIfUnset || !extras.quantity) {
+    extras.quantity = extras.quantity || "1"
+  }
 
   specifics.extras = extras
   return {

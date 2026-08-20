@@ -94,4 +94,20 @@ describe("eBay GeteBayDetails shipping services", () => {
       "UPSGround"
     )
   })
+
+  it("keeps USPS Ground Advantage when GeteBayDetails only lists Priority Mail", () => {
+    const xml = `
+      <ShippingServiceDetails>
+        <ShippingService>USPSPriority</ShippingService>
+        <ValidForSellingFlow>true</ValidForSellingFlow>
+        <ServiceType>Flat</ServiceType>
+        <ServiceType>Calculated</ServiceType>
+      </ShippingServiceDetails>
+    `
+    const services = parseShippingServiceDetailsXml(xml)
+    assert.equal(
+      pickValidDomesticServiceCode("USPSGroundAdvantage", services, true),
+      "USPSGroundAdvantage"
+    )
+  })
 })

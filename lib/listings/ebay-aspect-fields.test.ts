@@ -360,16 +360,13 @@ describe("splitAspectFieldsForReviewDraft", () => {
     assert.equal(additionalReviewSpecificsCount(fields, listing), 1)
     assert.equal(
       additionalReviewSpecificsLabel(1),
-      "1 more item specifics >"
+      "Other — 1 more…"
     )
     assert.equal(
       additionalReviewSpecificsLabel(12),
-      "12 more item specifics >"
+      "Other — 12 more…"
     )
-    assert.equal(
-      additionalReviewSpecificsLabel(0),
-      "Additional item specifics >"
-    )
+    assert.equal(additionalReviewSpecificsLabel(0), "Other")
   })
 
   it("keeps required blank specifics visible and does not invent MPN", () => {

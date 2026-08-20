@@ -176,4 +176,36 @@ describe("listing shipping intent", () => {
       "UPS"
     )
   })
+
+  it("maps each selected ListWise service to the same eBay API code through draft intent and create body", () => {
+    const services = [
+      { code: "USPSGroundAdvantage", carrier: "USPS" },
+      { code: "USPSPriority", carrier: "USPS" },
+      { code: "UPSGround", carrier: "UPS" },
+      { code: "FedExHomeDelivery", carrier: "FedEx" },
+    ] as const
+    for (const { code, carrier } of services) {
+      const listing = baseListing({
+        specifics: {
+          ...baseListing().specifics,
+          shippingService: code,
+          extras: { shippingService: code },
+        },
+      })
+      const intent = listingShippingIntent(listing)
+      assert.equal(intent.shippingServiceCode, code)
+      const body = buildFulfillmentPolicyCreateRequest({
+        ...fulfillmentPolicyArgsFromIntent(intent),
+        name: code,
+      })
+      assert.equal(
+        body.shippingOptions[0].shippingServices[0].shippingServiceCode,
+        code
+      )
+      assert.equal(
+        body.shippingOptions[0].shippingServices[0].shippingCarrierCode,
+        carrier
+      )
+    }
+  })
 })

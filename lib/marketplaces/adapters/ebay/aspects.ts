@@ -12,11 +12,9 @@ import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import {
   ASPECT_AUTO_FILL_CONFIDENCE,
   ASPECT_REVIEW_CONFIDENCE,
-  EBAY_SEO_ASPECT_PRIORITY,
   confidenceForListingAspect,
   identifierEvidenceFromListing,
   isMeasurementAspect,
-  isSeoPriorityAspect,
 } from "@/lib/listings/ebay-aspect-fields"
 import {
   doesNotApplyValue,
@@ -396,6 +394,25 @@ function inferSizeTypeFromListing(listing: Listing): string | undefined {
   return "Regular"
 }
 
+function allowedValueMentioned(
+  allowed: string[],
+  texts: Array<string | undefined>
+): string | undefined {
+  const hay = texts.filter((t) => Boolean(t?.trim())).join(" | ")
+  if (!hay.trim() || allowed.length === 0) return undefined
+  const ranked = [...allowed].sort(
+    (a, b) => b.trim().length - a.trim().length
+  )
+  for (const option of ranked) {
+    const raw = option.trim()
+    if (raw.length < 3) continue
+    const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const re = new RegExp(`(?:^|[^A-Za-z0-9])${escaped}(?:[^A-Za-z0-9]|$)`, "i")
+    if (re.test(hay)) return option
+  }
+  return undefined
+}
+
 /**
  * Merge listing specifics into inventory aspects, filling every required Taxonomy
  * aspect with an *exact* allowed eBay value when a normalized match exists.
@@ -604,21 +621,16 @@ export function applyRequiredEbayAspects(
     })
   }
 
-  // Populate recommended / high-search clothing specifics with exact allowed
-  // values when confidently known. Never invent measurements or uncertain data.
-  const seoPriorityKeys = new Set(
-    EBAY_SEO_ASPECT_PRIORITY.map((n) => n.toLowerCase())
-  )
+  // Populate every applicable optional Taxonomy aspect when evidence maps to a
+  // valid eBay value. Never invent measurements or uncertain data.
   for (const aspect of taxonomyAspects) {
     const name = aspect.localizedAspectName?.trim()
     if (!name || aspect.aspectConstraint?.aspectRequired) continue
     if (isProductIdentifierAspect(name)) continue
-    const key = name.toLowerCase()
     const allowed = allowedValues(aspect)
     const selectionOnly =
       (aspect.aspectConstraint?.aspectMode || "").toUpperCase() ===
       "SELECTION_ONLY"
-    const isSeo = seoPriorityKeys.has(key) || isSeoPriorityAspect(name)
     const conf = confidenceForAspect(listing, name)
     const highConfidence =
       (conf ?? 0) >= ASPECT_AUTO_FILL_CONFIDENCE ||
@@ -639,23 +651,35 @@ export function applyRequiredEbayAspects(
     }
 
     if (!current) {
-      // Only auto-fill SEO / recommended clothing aspects (or free-text with signal).
-      if (!isSeo && allowed.length > 0) continue
-      // <70% Vision confidence → leave blank (do not invent).
+      // Fill every applicable Taxonomy aspect when evidence maps to a valid
+      // value. Do not invent. Required/recommended is not a gate.
       if (conf != null && conf < ASPECT_REVIEW_CONFIDENCE) continue
-      // Exact/synonym at ≥70%; fuzzy shade only at ≥95%.
+      const candidates = listingCandidatesForAspect(listing, name)
+      const hasExplicitCandidate = candidates.some((c) => Boolean(c?.trim()))
+      if (!hasExplicitCandidate && allowed.length === 0) continue
       const allowFuzzy =
         !isMeasurementAspect(name) &&
         (conf ?? 0) >= ASPECT_AUTO_FILL_CONFIDENCE
-      const inferred = matchExactEbayAspectValue(
+      let inferred = matchExactEbayAspectValue(
         name,
-        listingCandidatesForAspect(listing, name),
+        [
+          ...candidates,
+          ...(allowed.length > 0 ? [listing.title, listing.description] : []),
+        ],
         allowed,
         {
           selectionOnly: selectionOnly || allowed.length > 0,
           highConfidence: allowFuzzy,
         }
       )
+      if (!inferred && allowed.length > 0 && !isMeasurementAspect(name)) {
+        inferred = allowedValueMentioned(allowed, [
+          listing.title,
+          listing.description,
+          ...candidates,
+          ...Object.values(listing.specifics.extras || {}),
+        ])
+      }
       if (inferred) {
         aspects[name] = [inferred]
         resolvedFields.push({ name, value: inferred })

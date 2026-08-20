@@ -350,7 +350,15 @@ export function detectedValueForAspect(
       fc.countryOfOrigin?.value
     )
   }
-  return listing.specifics.extras?.[aspectName]
+  return listing.specifics.extras?.[aspectName] || extraByName(listing, aspectName)
+}
+
+function extraByName(listing: Listing, aspectName: string): string | undefined {
+  const extras = listing.specifics.extras || {}
+  const hit = Object.entries(extras).find(
+    ([k]) => k.toLowerCase() === aspectName.trim().toLowerCase()
+  )
+  return hit?.[1]
 }
 
 export function applyExactAspectsToListing(
@@ -767,8 +775,8 @@ export function additionalReviewSpecificsCount(
 
 /** Presentation-only Review Draft label. Hidden specifics stay on the listing. */
 export function additionalReviewSpecificsLabel(count: number): string {
-  if (count > 0) return `${count} more item specifics >`
-  return "Additional item specifics >"
+  if (count > 0) return `Other — ${count} more…`
+  return "Other"
 }
 
 export function identifierEvidenceFromListing(

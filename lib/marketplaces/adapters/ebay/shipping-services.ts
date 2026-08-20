@@ -3,8 +3,7 @@ import { ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
 import {
   isParcelService,
   isStandardEnvelopeService,
-  parcelCarrierId,
-  PARCEL_SHIPPING_CATALOG,
+  normalizeShippingServiceCode,
   shippingServiceCodesEquivalent,
   USPS_GROUND_ADVANTAGE,
 } from "@/lib/marketplaces/adapters/ebay/shipping-service-resolve"
@@ -62,7 +61,7 @@ export function pickValidDomesticServiceCode(
   const allowStandardEnvelope =
     typeof options === "boolean" ? false : Boolean(options.allowStandardEnvelope)
 
-  const wanted = requested.trim()
+  const wanted = normalizeShippingServiceCode(requested) || requested.trim()
   const domestic = services.filter(
     (s) => s.validForSellingFlow && !s.international
   )
@@ -89,29 +88,9 @@ export function pickValidDomesticServiceCode(
   if (wanted && isStandardEnvelopeService(wanted) && !allowStandardEnvelope) {
     // Specialized envelope was requested but this listing is not eligible.
   } else if (wanted && isParcelService(wanted)) {
-    const carrier = parcelCarrierId(wanted)
-    const pool = preferCalculated
-      ? usable.filter((s) =>
-          s.serviceTypes.some((t) => t.toUpperCase() === "CALCULATED")
-        )
-      : usable
-    const search = pool.length > 0 ? pool : usable
-    if (carrier) {
-      const sameCarrier = search.filter(
-        (s) =>
-          parcelCarrierId(s.code) === carrier &&
-          !isStandardEnvelopeService(s.code)
-      )
-      for (const option of PARCEL_SHIPPING_CATALOG.filter(
-        (o) => o.carrier === carrier
-      )) {
-        const hit = sameCarrier.find((s) =>
-          shippingServiceCodesEquivalent(s.code, option.value)
-        )
-        if (hit) return hit.code
-      }
-      if (sameCarrier[0]) return sameCarrier[0].code
-    }
+    // Keep the seller's selected parcel service. Never substitute Priority
+    // Mail, another USPS product, UPS, or FedEx.
+    return wanted
   }
 
   const pool = preferCalculated
@@ -121,7 +100,7 @@ export function pickValidDomesticServiceCode(
     : usable
   const search = pool.length > 0 ? pool : usable
 
-  const preferredOrder = PARCEL_SHIPPING_CATALOG.map((option) => option.value)
+  const preferredOrder = [USPS_GROUND_ADVANTAGE]
   for (const code of preferredOrder) {
     const hit = search.find((s) => shippingServiceCodesEquivalent(s.code, code))
     if (hit) return hit.code

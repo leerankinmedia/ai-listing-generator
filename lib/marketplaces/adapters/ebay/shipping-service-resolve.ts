@@ -382,31 +382,6 @@ function availableHas(
   return list.some((s) => shippingServiceCodesEquivalent(s.code, code))
 }
 
-function firstAvailableParcelForCarrier(
-  services: EbayDomesticShippingService[] | undefined,
-  carrier: ParcelCarrierId,
-  preferCalculated: boolean
-): string | undefined {
-  const list = validDomestic(services)
-  if (list.length === 0) return undefined
-  const pool = preferCalculated
-    ? list.filter((s) =>
-        s.serviceTypes.some((t) => t.toUpperCase() === "CALCULATED")
-      )
-    : list
-  const search = (pool.length > 0 ? pool : list).filter(
-    (s) =>
-      parcelCarrierId(s.code) === carrier && !isStandardEnvelopeService(s.code)
-  )
-  for (const option of PARCEL_SHIPPING_CATALOG.filter((o) => o.carrier === carrier)) {
-    const hit = search.find((s) =>
-      shippingServiceCodesEquivalent(s.code, option.value)
-    )
-    if (hit) return hit.code
-  }
-  return search[0]?.code
-}
-
 function firstAvailableParcel(
   services: EbayDomesticShippingService[] | undefined,
   preferCalculated: boolean
@@ -444,15 +419,8 @@ export function recommendedParcelService(
     if (availableHas(input.availableServices, preferred)) {
       return preferred
     }
-    const carrier = parcelCarrierId(preferred)
-    if (carrier) {
-      const sameCarrier = firstAvailableParcelForCarrier(
-        input.availableServices,
-        carrier,
-        preferCalculated
-      )
-      if (sameCarrier) return sameCarrier
-    }
+    // Seller chose a real parcel service — never substitute another product.
+    return preferred
   }
   if (availableHas(input.availableServices, USPS_GROUND_ADVANTAGE)) {
     return USPS_GROUND_ADVANTAGE
@@ -472,18 +440,13 @@ export function resolveEbayShippingService(
     isParcelService(preferred) &&
     !isStandardEnvelopeService(preferred)
   ) {
-    const code = availableHas(input.availableServices, preferred)
-      ? preferred
-      : recommendedParcelService(input)
     return {
-      code,
-      label: shippingServiceDisplayLabel(code),
+      code: preferred,
+      label: shippingServiceDisplayLabel(preferred),
       specialized: false,
       envelopeEligible,
       ordinaryParcelMerchandise: ordinary,
-      reason: shippingServiceCodesEquivalent(code, preferred)
-        ? "seller_parcel_preference"
-        : "seller_parcel_preference_remapped",
+      reason: "seller_parcel_preference",
     }
   }
 

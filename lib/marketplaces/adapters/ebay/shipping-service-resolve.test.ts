@@ -306,7 +306,7 @@ describe("eBay shipping service resolution", () => {
     )
   })
 
-  it("remaps a missing UPS service to another UPS service, not USPS", () => {
+  it("keeps a selected UPS service even when GeteBayDetails lists a different UPS product", () => {
     const upsOnlyMissingGround: EbayDomesticShippingService[] = [
       {
         code: USPS_GROUND_ADVANTAGE,
@@ -327,7 +327,7 @@ describe("eBay shipping service resolution", () => {
       pickValidDomesticServiceCode("UPSGround", upsOnlyMissingGround, {
         preferCalculated: true,
       }),
-      "UPS3rdDay"
+      "UPSGround"
     )
     assert.equal(
       recommendedParcelService({
@@ -335,8 +335,34 @@ describe("eBay shipping service resolution", () => {
         availableServices: upsOnlyMissingGround,
         shippingMode: "calculated",
       }),
-      "UPS3rdDay"
+      "UPSGround"
     )
+  })
+
+  it("never substitutes USPS Priority Mail for selected Ground Advantage", () => {
+    const priorityOnly: EbayDomesticShippingService[] = [
+      {
+        code: "USPSPriority",
+        carrier: "USPS",
+        validForSellingFlow: true,
+        international: false,
+        serviceTypes: ["Flat", "Calculated"],
+      },
+    ]
+    assert.equal(
+      pickValidDomesticServiceCode("USPSGroundAdvantage", priorityOnly, {
+        preferCalculated: true,
+      }),
+      "USPSGroundAdvantage"
+    )
+    const resolved = resolveEbayShippingService({
+      categoryPath: jeansCategory.categoryPath,
+      categoryName: jeansCategory.categoryName,
+      package: apparelPackage8oz,
+      sellerPreferredService: USPS_GROUND_ADVANTAGE,
+      availableServices: priorityOnly,
+    })
+    assert.equal(resolved.code, USPS_GROUND_ADVANTAGE)
   })
 
   it("lists grouped USPS/UPS/FedEx parcel services and never envelope", () => {

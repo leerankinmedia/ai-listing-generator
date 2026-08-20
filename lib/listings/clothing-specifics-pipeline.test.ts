@@ -302,4 +302,38 @@ describe("clothing listing specifics pipeline", () => {
     )
     assert.equal(applied.aspects.MPN?.[0], "Does not apply")
   })
+
+  it("fills optional category-specific aspects when evidence maps to a valid value", () => {
+    const listing = jeansListing()
+    listing.specifics.extras = {
+      ...listing.specifics.extras,
+      Neckline: "Crew",
+    }
+    const taxonomy: EbayAspect[] = [
+      aspect("Brand", { required: true, values: ["American Eagle"] }),
+      aspect("Fit", { values: ["Slim", "Regular", "Relaxed"] }),
+      aspect("Rise", { values: ["Low", "Mid", "High"] }),
+      aspect("Neckline", { values: ["Crew", "V-Neck", "Scoop"] }),
+      aspect("Occasion", { values: ["Casual", "Formal", "Workwear"] }),
+    ]
+    const { inventoryItem } = mapListingToEbayInventory(listing)
+    const applied = applyRequiredEbayAspects(
+      listing,
+      taxonomy,
+      inventoryItem.product.aspects
+    )
+    assert.equal(applied.aspects.Fit?.[0], "Regular")
+    assert.equal(applied.aspects.Rise?.[0], "Mid")
+    assert.equal(applied.aspects.Neckline?.[0], "Crew")
+    assert.equal(applied.aspects.Occasion, undefined)
+  })
+
+  it("does not invent an optional aspect without evidence", () => {
+    const listing = jeansListing()
+    const taxonomy: EbayAspect[] = [
+      aspect("Handmade", { values: ["Yes", "No"] }),
+    ]
+    const applied = applyRequiredEbayAspects(listing, taxonomy, {})
+    assert.equal(applied.aspects.Handmade, undefined)
+  })
 })

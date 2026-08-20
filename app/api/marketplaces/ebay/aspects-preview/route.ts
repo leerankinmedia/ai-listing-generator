@@ -146,7 +146,6 @@ export async function POST(request: Request) {
         .map(([k]) => k.toLowerCase())
     )
 
-    const seoKeys = new Set(EBAY_SEO_ASPECT_PRIORITY.map((n) => n.toLowerCase()))
     const formFieldsByKey = new Map<string, EbayAspectFormField>()
 
     for (const aspect of taxonomyAspects) {
@@ -155,12 +154,6 @@ export async function POST(request: Request) {
       const key = name.toLowerCase()
       const usage = aspectUsage(aspect)
       const required = usage === "REQUIRED"
-      const isSeo = seoKeys.has(key)
-      // Include required, recommended, SEO priority, and optional with values — full set.
-      if (!required && usage === "OPTIONAL" && !isSeo) {
-        // Still include optional aspects so "More item specifics" is complete.
-      }
-
       const allowed = allowedValues(aspect)
       const resolved = applied.aspects[name]?.[0]?.trim()
       const missingEntry = applied.missingRequired.find(

@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import {
   ensureEbayBusinessPolicyIds,
   fulfillmentCacheKey,
+  fulfillmentCreateVariants,
   optInAlreadyComplete,
   optInRequiresManualUserAction,
   parseEbayPolicyCache,
@@ -229,6 +230,35 @@ describe("eBay policy reuse helpers", () => {
       optInAlreadyComplete([{ message: "Seller already opted in." }], 409),
       true
     )
+  })
+})
+
+describe("fulfillment create variants keep the selected service", () => {
+  it("does not add a USPS Priority Mail substitute for Ground Advantage", () => {
+    const variants = fulfillmentCreateVariants({
+      mode: "calculated",
+      service: "USPSGroundAdvantage",
+    })
+    assert.equal(
+      variants.some((v) => v.service === "USPSPriority"),
+      false
+    )
+    assert.ok(variants.every((v) => v.service === "USPSGroundAdvantage"))
+  })
+
+  it("keeps USPS Priority, UPS Ground, and FedEx when those are selected", () => {
+    for (const service of [
+      "USPSPriority",
+      "UPSGround",
+      "FedExHomeDelivery",
+    ]) {
+      const variants = fulfillmentCreateVariants({
+        mode: "calculated",
+        service,
+      })
+      assert.ok(variants.length > 0)
+      assert.ok(variants.every((v) => v.service === service))
+    }
   })
 })
 

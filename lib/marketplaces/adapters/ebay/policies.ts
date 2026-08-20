@@ -20,7 +20,6 @@ import {
 } from "@/lib/marketplaces/adapters/ebay/shipping-services"
 import {
   isStandardEnvelopeService,
-  parcelCarrierId,
   resolveEbayShippingService,
   shippingServiceCodesEquivalent,
 } from "@/lib/marketplaces/adapters/ebay/shipping-service-resolve"
@@ -493,17 +492,6 @@ export function fulfillmentCreateVariants(opts: {
       shape: "minimal",
       service,
     })
-    if (
-      service.toLowerCase() !== "uspspriority" &&
-      parcelCarrierId(service) === "USPS"
-    ) {
-      variants.push({
-        id: "flat-usps-priority",
-        mode: "flat",
-        shape: "minimal",
-        service: "USPSPriority",
-      })
-    }
   }
   return variants
 }
@@ -519,8 +507,7 @@ function policyNameForVariant(
   if (variant.mode === "free") {
     return `ListWise Free · ${variant.service} · ${days}d`
   }
-  const suffix = variant.id === "flat-usps-priority" ? " · P" : ""
-  return `ListWise Flat $${amount} · ${variant.service} · ${days}d${suffix}`
+  return `ListWise Flat $${amount} · ${variant.service} · ${days}d`
 }
 
 async function createFulfillmentPolicyForMode(

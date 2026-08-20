@@ -4,9 +4,12 @@ import {
   buildFulfillmentPolicyCreateRequest,
   classifyFulfillmentShippingMode,
   diagnoseFulfillmentCreateErrors,
+  fulfillmentPolicyHasUsableLogistics,
   fulfillmentPolicyIsFreeShipping,
+  fulfillmentRequestPresence,
   rejectedEbayFieldFromErrors,
   summarizeFulfillmentPolicy,
+  toFinalFulfillmentPolicyJson,
 } from "@/lib/marketplaces/adapters/ebay/fulfillment-shipping"
 
 describe("fulfillment shipping classification", () => {
@@ -134,27 +137,18 @@ describe("fulfillment shipping classification", () => {
       body.shippingOptions[0].shippingServices[0].shippingCost,
       undefined
     )
-    // Dev Support working create uses explicit false — never true (Motors-only).
+    // Motors-only true is invalid; default production shape omits the flags.
     assert.equal(
-      body.shippingOptions[0].shippingServices[0].buyerResponsibleForShipping,
+      "buyerResponsibleForShipping" in
+        body.shippingOptions[0].shippingServices[0],
       false
     )
+    assert.equal("shipToLocations" in body, false)
     assert.equal(
-      body.shippingOptions[0].shippingServices[0].buyerResponsibleForPickup,
+      "shipToLocations" in body.shippingOptions[0].shippingServices[0],
       false
     )
-    assert.equal(body.shippingOptions[0].insuranceOffered, false)
-    assert.deepEqual(body.shippingOptions[0].insuranceFee, {
-      value: "0.0",
-      currency: "USD",
-    })
-    assert.deepEqual(body.shipToLocations, {
-      regionIncluded: [{ regionName: "US", regionType: "COUNTRY" }],
-    })
-    assert.deepEqual(
-      body.shippingOptions[0].shippingServices[0].shipToLocations,
-      body.shipToLocations
-    )
+    assert.equal("insuranceOffered" in body.shippingOptions[0], false)
     assert.equal("default" in body.categoryTypes[0], false)
   })
 
@@ -207,38 +201,41 @@ describe("fulfillment shipping classification", () => {
     assert.equal(field, "LOGISTICS_INFO")
   })
 
-  it("maps 20403 / LSAS 216118 to shipToLocations", () => {
+  it("maps production 20403 / LSAS 216118 LOGISTICS_INFO_IS_MISSING", () => {
     const diagnosis = diagnoseFulfillmentCreateErrors([
       {
         errorId: 20403,
         domain: "API_ACCOUNT",
-        message: "Invalid LOGISTICS_INFO.",
+        message: "Invalid LOGISTICS_INFO_IS_MISSING.",
         longMessage: "LSAS validation failed.",
         parameters: [
-          { name: "fieldName", value: "LOGISTICS_INFO" },
+          { name: "fieldName", value: "LOGISTICS_INFO_IS_MISSING" },
+          { name: "SHIPELIG_ERROR_CODE_NAME", value: "LOGISTICS_INFO_IS_MISSING" },
           { name: "additionalInfo", value: "LSAS 216118" },
           { name: "1", value: "216118" },
         ],
       },
     ])
     assert.equal(diagnosis.lsasCode, "216118")
-    assert.equal(diagnosis.shipToLocationInvalid, true)
-    assert.equal(diagnosis.rejectedField, "shipToLocations")
+    assert.equal(diagnosis.logisticsInfoMissing, true)
+    assert.equal(diagnosis.shouldRetryFlat, true)
+    assert.equal(diagnosis.rejectedField, "LOGISTICS_INFO_IS_MISSING")
   })
 
-  it("maps numeric 216118 parameter values, not just strings", () => {
+  it("does not assume 216118 is a shipToLocations field error", () => {
     const diagnosis = diagnoseFulfillmentCreateErrors([
       {
         errorId: 20403,
         longMessage: "LSAS validation failed.",
         parameters: [
-          { name: "fieldName", value: "LOGISTICS_INFO" },
+          { name: "fieldName", value: "LOGISTICS_INFO_IS_MISSING" },
           { name: "SHIPELIG_ERROR_CODE", value: "216118" },
         ],
       },
     ])
     assert.equal(diagnosis.lsasCode, "216118")
-    assert.equal(diagnosis.shipToLocationInvalid, true)
+    assert.equal(diagnosis.logisticsInfoMissing, true)
+    assert.notEqual(diagnosis.rejectedField, "shipToLocations")
   })
 
   it("detects CALCULATED_SHIPPING_TYPE_NOT_SUPPORTED from SHIPELIG", () => {
@@ -273,6 +270,57 @@ describe("fulfillment shipping classification", () => {
     assert.equal(
       body.shippingOptions[0].shippingServices[0].shippingCost?.value,
       "5.99"
+    )
+  })
+
+  it("final production JSON keeps required EBAY_US fields and omits domestic shipToLocations", () => {
+    const body = buildFulfillmentPolicyCreateRequest({
+      marketplaceId: "EBAY_US",
+      mode: "calculated",
+      name: "ListWise Calculated · USPSGroundAdvantage · 1d",
+      handlingDays: 1,
+      shippingServiceCode: "USPSGroundAdvantage",
+    })
+    const finalJson = toFinalFulfillmentPolicyJson(body)
+    const presence = fulfillmentRequestPresence(finalJson)
+    assert.equal(presence.marketplaceId, "EBAY_US")
+    assert.equal(presence.categoryType, "ALL_EXCLUDING_MOTORS_VEHICLES")
+    assert.equal(presence.handlingTimeValue, 1)
+    assert.equal(presence.handlingTimeUnit, "DAY")
+    assert.equal(presence.localPickup, false)
+    assert.equal(presence.optionType, "DOMESTIC")
+    assert.equal(presence.costType, "CALCULATED")
+    assert.equal(presence.shippingServiceCode, "USPSGroundAdvantage")
+    assert.equal(presence.shippingCarrierCode, "USPS")
+    assert.equal(presence.shippingCost, null)
+    assert.equal(presence.hasTopLevelShipToLocations, false)
+    assert.equal(presence.hasServiceShipToLocations, false)
+    assert.equal(presence.hasInsuranceOffered, false)
+    assert.equal(presence.buyerResponsibleForShipping, null)
+    assert.equal(JSON.stringify(finalJson).includes("shipToLocations"), false)
+  })
+
+  it("skips listed policies that have no shipping service (stale / empty logistics)", () => {
+    assert.equal(
+      fulfillmentPolicyHasUsableLogistics({
+        fulfillmentPolicyId: "empty",
+        name: "ListWise Calculated",
+        shippingOptions: [],
+      }),
+      false
+    )
+    assert.equal(
+      fulfillmentPolicyHasUsableLogistics({
+        fulfillmentPolicyId: "ok",
+        shippingOptions: [
+          {
+            optionType: "DOMESTIC",
+            costType: "CALCULATED",
+            shippingServices: [{ shippingServiceCode: "USPSGroundAdvantage" }],
+          },
+        ],
+      }),
+      true
     )
   })
 })

@@ -127,6 +127,19 @@ export function classifyFulfillmentShippingMode(
   return "flat"
 }
 
+/** True when a listed policy has a domestic service LSAS can actually use. */
+export function fulfillmentPolicyHasUsableLogistics(
+  policy: EbayFulfillmentPolicyRaw
+): boolean {
+  const option = domesticOption(policy)
+  const service = option ? primaryService(option) : null
+  return Boolean(
+    option &&
+      String(option.costType || "").trim() &&
+      String(service?.shippingServiceCode || "").trim()
+  )
+}
+
 export function summarizeFulfillmentPolicy(
   policy: EbayFulfillmentPolicyRaw
 ): EbayFulfillmentShippingSummary | null {
@@ -229,26 +242,6 @@ export function shippingCarrierForService(serviceCode: string): string {
   return "USPS"
 }
 
-export type EbayDomesticRegion = {
-  regionName: string
-  regionType?: "COUNTRY" | "COUNTRY_REGION" | "WORLD_REGION"
-}
-
-export type EbayDomesticRegionSet = {
-  regionIncluded: EbayDomesticRegion[]
-}
-
-/**
- * USPS Ground Advantage (and other domestic US services) are not worldwide.
- * LSAS 216118 is shipping-eligibility against ship-to locations: omitting
- * shipToLocations lets LSAS default to an incompatible destination set.
- */
-export function domesticUsShipToLocations(): EbayDomesticRegionSet {
-  return {
-    regionIncluded: [{ regionName: "US", regionType: "COUNTRY" }],
-  }
-}
-
 export function currencyForMarketplace(marketplaceId: string): string {
   const id = (marketplaceId || "EBAY_US").toUpperCase()
   if (id === "EBAY_GB" || id === "EBAY_UK") return "GBP"
@@ -260,6 +253,20 @@ export function currencyForMarketplace(marketplaceId: string): string {
   return "USD"
 }
 
+/**
+ * Production createFulfillmentPolicy shapes.
+ *
+ * `minimal` matches the known-good EBAY_US Account API sketch (optionType,
+ * costType, shippingServiceCode, shippingCost for flat). Do NOT send
+ * shipToLocations on DOMESTIC services — Account API docs say that container
+ * is for INTERNATIONAL, and production 20403 LOGISTICS_INFO_IS_MISSING /
+ * LSAS 216118 appeared after we added it.
+ *
+ * `carrier` adds shippingCarrierCode (Dev Support AU example included it).
+ * `devsupport` also sets buyerResponsible* false. Never set those true.
+ */
+export type FulfillmentCreateShape = "minimal" | "carrier" | "devsupport"
+
 export type FulfillmentPolicyCreateRequest = {
   name: string
   marketplaceId: string
@@ -269,69 +276,47 @@ export type FulfillmentPolicyCreateRequest = {
   freightShipping: false
   globalShipping: false
   pickupDropOff: false
-  shipToLocations: EbayDomesticRegionSet
   shippingOptions: Array<{
     optionType: "DOMESTIC"
     costType: "CALCULATED" | "FLAT_RATE"
-    insuranceOffered: false
-    insuranceFee: { value: string; currency: string }
+    packageHandlingCost?: { value: string; currency: string }
     shippingServices: Array<{
       sortOrder: number
-      shippingCarrierCode: string
       shippingServiceCode: string
+      shippingCarrierCode?: string
       freeShipping: boolean
-      buyerResponsibleForShipping: false
-      buyerResponsibleForPickup: false
-      shipToLocations: EbayDomesticRegionSet
+      buyerResponsibleForShipping?: false
+      buyerResponsibleForPickup?: false
       shippingCost?: { value: string; currency: string }
     }>
   }>
 }
 
-/**
- * Build a createFulfillmentPolicy body matching eBay Dev Support's accepted
- * Account API shape for a normal US domestic calculated/flat/free policy.
- *
- * 20403 / LSAS 216118 (LOGISTICS_INFO):
- * - shipToLocations.regionIncluded must be US COUNTRY (Ground Advantage is
- *   domestic-only; missing destinations fail LSAS eligibility 216118).
- * - buyerResponsibleForShipping/Pickup must be explicit false (not omitted,
- *   never true — true is Motors-only).
- * - insuranceOffered false + insuranceFee 0.0 (Dev Support working payload).
- * - localPickup/freight/global/pickupDropOff explicit false.
- * - Include shippingCarrierCode with shippingServiceCode.
- * - CALCULATED must omit shippingCost; FLAT/FREE include it.
- *
- * When a template policy from the seller's eBay account exists, reuse its
- * logistics shape (costType/carrier/service) instead of inventing values.
- */
-export function buildFulfillmentPolicyCreateRequest(args: {
+export type BuildFulfillmentPolicyArgs = {
   marketplaceId: string
   mode: EbayShippingMode
   name: string
   handlingDays: number
   shippingServiceCode: string
   flatAmount?: number
-  /** Existing seller policy to copy logistics shape from (eBay.com-created preferred). */
   template?: EbayFulfillmentPolicyRaw | null
-  /** Set true only when the seller has no fulfillment policy yet. */
   setAsDefault?: boolean
-}): FulfillmentPolicyCreateRequest {
+  shape?: FulfillmentCreateShape
+  includePackageHandlingCost?: boolean
+}
+
+export function buildFulfillmentPolicyCreateRequest(
+  args: BuildFulfillmentPolicyArgs
+): FulfillmentPolicyCreateRequest {
   const days = Math.max(0, Math.min(30, Math.floor(args.handlingDays || 1)))
   const service =
     String(args.shippingServiceCode || "").trim() || "USPSGroundAdvantage"
   const currency = currencyForMarketplace(args.marketplaceId)
   const amount = Math.max(0.01, Number(args.flatAmount) || 5.99).toFixed(2)
+  const shape: FulfillmentCreateShape = args.shape || "carrier"
 
-  const templateOption = args.template
-    ? domesticOption(args.template)
-    : null
-  const templateService = templateOption
-    ? primaryService(templateOption)
-    : null
-
-  // Prefer service/carrier already present on the seller's eBay.com policy when
-  // that template matches the requested shipping mode.
+  const templateOption = args.template ? domesticOption(args.template) : null
+  const templateService = templateOption ? primaryService(templateOption) : null
   const templateMode = args.template
     ? classifyFulfillmentShippingMode(args.template)
     : null
@@ -339,7 +324,6 @@ export function buildFulfillmentPolicyCreateRequest(args: {
     templateMode === args.mode && templateService?.shippingServiceCode?.trim()
       ? templateService.shippingServiceCode.trim()
       : service
-
   const carrier =
     (templateMode === args.mode &&
       templateService?.shippingCarrierCode?.trim()) ||
@@ -348,26 +332,35 @@ export function buildFulfillmentPolicyCreateRequest(args: {
   const costType: "CALCULATED" | "FLAT_RATE" =
     args.mode === "calculated" ? "CALCULATED" : "FLAT_RATE"
 
-  const shipTo = domesticUsShipToLocations()
-
   const shippingService: FulfillmentPolicyCreateRequest["shippingOptions"][0]["shippingServices"][0] =
     {
       sortOrder: 1,
-      shippingCarrierCode: carrier,
       shippingServiceCode: resolvedService,
       freeShipping: args.mode === "free",
-      // Dev Support working create: explicit false. true is Motors-only (20403).
-      buyerResponsibleForShipping: false,
-      buyerResponsibleForPickup: false,
-      shipToLocations: shipTo,
     }
+
+  if (shape !== "minimal") {
+    shippingService.shippingCarrierCode = carrier
+  }
+  if (shape === "devsupport") {
+    shippingService.buyerResponsibleForShipping = false
+    shippingService.buyerResponsibleForPickup = false
+  }
 
   if (args.mode === "flat") {
     shippingService.shippingCost = { value: amount, currency }
   } else if (args.mode === "free") {
     shippingService.shippingCost = { value: "0.0", currency }
   }
-  // CALCULATED: no shippingCost — eBay computes from package weight/dims.
+
+  const option: FulfillmentPolicyCreateRequest["shippingOptions"][0] = {
+    optionType: "DOMESTIC",
+    costType,
+    shippingServices: [shippingService],
+  }
+  if (args.includePackageHandlingCost) {
+    option.packageHandlingCost = { value: "0.0", currency }
+  }
 
   return {
     name: args.name,
@@ -383,17 +376,112 @@ export function buildFulfillmentPolicyCreateRequest(args: {
     freightShipping: false,
     globalShipping: false,
     pickupDropOff: false,
-    shipToLocations: shipTo,
-    shippingOptions: [
-      {
-        optionType: "DOMESTIC",
-        costType,
-        insuranceOffered: false,
-        insuranceFee: { value: "0.0", currency },
-        shippingServices: [shippingService],
-      },
-    ],
+    shippingOptions: [option],
   }
+}
+
+/** JSON.parse(JSON.stringify) of the create body — the bytes actually POSTed. */
+export function toFinalFulfillmentPolicyJson(
+  body: FulfillmentPolicyCreateRequest
+): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(body)) as Record<string, unknown>
+}
+
+export type FulfillmentRequestPresence = {
+  marketplaceId: string | null
+  categoryType: string | null
+  handlingTimeValue: number | null
+  handlingTimeUnit: string | null
+  localPickup: unknown
+  optionType: string | null
+  costType: string | null
+  shippingServiceCode: string | null
+  shippingCarrierCode: string | null
+  shippingCost: unknown
+  freeShipping: unknown
+  buyerResponsibleForShipping: unknown
+  buyerResponsibleForPickup: unknown
+  hasTopLevelShipToLocations: boolean
+  hasServiceShipToLocations: boolean
+  hasInsuranceOffered: boolean
+  shippingOptionsCount: number
+  shippingServicesCount: number
+}
+
+export function fulfillmentRequestPresence(
+  finalJson: Record<string, unknown>
+): FulfillmentRequestPresence {
+  const options = Array.isArray(finalJson.shippingOptions)
+    ? (finalJson.shippingOptions as Array<Record<string, unknown>>)
+    : []
+  const option = options[0] || {}
+  const services = Array.isArray(option.shippingServices)
+    ? (option.shippingServices as Array<Record<string, unknown>>)
+    : []
+  const service = services[0] || {}
+  const handling =
+    finalJson.handlingTime && typeof finalJson.handlingTime === "object"
+      ? (finalJson.handlingTime as Record<string, unknown>)
+      : {}
+  const categories = Array.isArray(finalJson.categoryTypes)
+    ? (finalJson.categoryTypes as Array<Record<string, unknown>>)
+    : []
+
+  return {
+    marketplaceId:
+      typeof finalJson.marketplaceId === "string" ? finalJson.marketplaceId : null,
+    categoryType:
+      typeof categories[0]?.name === "string" ? categories[0].name : null,
+    handlingTimeValue:
+      typeof handling.value === "number" ? handling.value : null,
+    handlingTimeUnit:
+      typeof handling.unit === "string" ? handling.unit : null,
+    localPickup: finalJson.localPickup ?? null,
+    optionType: typeof option.optionType === "string" ? option.optionType : null,
+    costType: typeof option.costType === "string" ? option.costType : null,
+    shippingServiceCode:
+      typeof service.shippingServiceCode === "string"
+        ? service.shippingServiceCode
+        : null,
+    shippingCarrierCode:
+      typeof service.shippingCarrierCode === "string"
+        ? service.shippingCarrierCode
+        : null,
+    shippingCost: service.shippingCost ?? null,
+    freeShipping: service.freeShipping ?? null,
+    buyerResponsibleForShipping: service.buyerResponsibleForShipping ?? null,
+    buyerResponsibleForPickup: service.buyerResponsibleForPickup ?? null,
+    hasTopLevelShipToLocations: Object.prototype.hasOwnProperty.call(
+      finalJson,
+      "shipToLocations"
+    ),
+    hasServiceShipToLocations: Object.prototype.hasOwnProperty.call(
+      service,
+      "shipToLocations"
+    ),
+    hasInsuranceOffered: Object.prototype.hasOwnProperty.call(
+      option,
+      "insuranceOffered"
+    ),
+    shippingOptionsCount: options.length,
+    shippingServicesCount: services.length,
+  }
+}
+
+export function logFulfillmentCreateDiagnostics(opts: {
+  variant: string
+  listingSnapshot?: Record<string, string | number | boolean | null | undefined>
+  request: FulfillmentPolicyCreateRequest
+}) {
+  const finalJson = toFinalFulfillmentPolicyJson(opts.request)
+  const presence = fulfillmentRequestPresence(finalJson)
+  console.info("[ebay/policies] createFulfillmentPolicy FINAL JSON", {
+    variant: opts.variant,
+    listingSnapshot: opts.listingSnapshot || null,
+    presence,
+    finalJson,
+  })
+  return { finalJson, presence }
 }
 
 export type EbayAccountError = {
@@ -409,7 +497,8 @@ export type FulfillmentCreateDiagnosis = {
   shipEligCode: string | null
   xpath: string | null
   calculatedNotSupported: boolean
-  shipToLocationInvalid: boolean
+  logisticsInfoMissing: boolean
+  shouldRetryFlat: boolean
 }
 
 function paramByName(
@@ -470,19 +559,13 @@ export function diagnoseFulfillmentCreateErrors(
     }
 
     if (!rejectedField && fieldName) rejectedField = fieldName
-    else if (!rejectedField && xpathValue) rejectedField = xpathValue
     else if (!rejectedField && shipElig) rejectedField = shipElig
+    else if (!rejectedField && xpathValue) rejectedField = xpathValue
     else if (!rejectedField) {
       const m = hay.match(
-        /\b(LOGISTICS_INFO|shipToLocations|localPickup|shippingServiceCode|costType|buyerResponsibleForShipping)\b/i
+        /\b(LOGISTICS_INFO_IS_MISSING|LOGISTICS_INFO|shipToLocations|localPickup|shippingServiceCode|costType|buyerResponsibleForShipping)\b/i
       )
       if (m) rejectedField = m[1]
-    }
-    if (!rejectedField && lsasCode === "216118") {
-      rejectedField = "shipToLocations"
-    }
-    if (lsasCode === "216118" && rejectedField === "LOGISTICS_INFO") {
-      rejectedField = "shipToLocations"
     }
   }
 
@@ -501,17 +584,20 @@ export function diagnoseFulfillmentCreateErrors(
     shipEligCode === "CALCULATED_SHIPPING_TYPE_NOT_SUPPORTED" ||
     allText.includes("CALCULATED_SHIPPING_TYPE_NOT_SUPPORTED")
 
-  const shipToLocationInvalid =
-    lsasCode === "216118" ||
-    /SHIPTOLOCATION/i.test(rejectedField || "") ||
-    /SHIPTOLOCATION/i.test(xpath || "") ||
-    /SHIP_TO_LOCATION/i.test(shipEligCode || "") ||
-    /SHIP_TO_LOCATION/i.test(allText)
+  const logisticsInfoMissing =
+    (rejectedField || "").toUpperCase() === "LOGISTICS_INFO_IS_MISSING" ||
+    (shipEligCode || "").toUpperCase() === "LOGISTICS_INFO_IS_MISSING" ||
+    allText.includes("LOGISTICS_INFO_IS_MISSING")
 
-  if (!rejectedField && shipToLocationInvalid) rejectedField = "shipToLocations"
+  if (logisticsInfoMissing) rejectedField = "LOGISTICS_INFO_IS_MISSING"
   if (!rejectedField && calculatedNotSupported) {
-    rejectedField = "costType"
+    rejectedField = "CALCULATED_SHIPPING_TYPE_NOT_SUPPORTED"
   }
+
+  const shouldRetryFlat =
+    logisticsInfoMissing ||
+    calculatedNotSupported ||
+    lsasCode === "216118"
 
   return {
     rejectedField,
@@ -519,6 +605,7 @@ export function diagnoseFulfillmentCreateErrors(
     shipEligCode,
     xpath,
     calculatedNotSupported,
-    shipToLocationInvalid,
+    logisticsInfoMissing,
+    shouldRetryFlat,
   }
 }

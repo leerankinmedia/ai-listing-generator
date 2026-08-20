@@ -176,8 +176,22 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const method = (init?.method || "GET").toUpperCase()
-      const body = init?.body ? JSON.parse(String(init.body)) : null
+      const rawBody = init?.body
+      let body: unknown = null
+      if (typeof rawBody === "string") {
+        try {
+          body = JSON.parse(rawBody)
+        } catch {
+          body = rawBody
+        }
+      }
       calls.push({ url, method, body })
+      if (url.includes("/ws/api.dll")) {
+        return new Response(
+          "<GeteBayDetailsResponse><Ack>Success</Ack></GeteBayDetailsResponse>",
+          { status: 200, headers: { "Content-Type": "text/xml" } }
+        )
+      }
       return handler(url, method, body)
     }) as typeof fetch
   }
@@ -258,21 +272,41 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
       if (url.includes("/fulfillment_policy") && method === "POST") {
         fulfillmentCreated = true
         const req = body as {
-          shipToLocations?: { regionIncluded?: Array<{ regionName?: string }> }
+          marketplaceId?: string
+          shipToLocations?: unknown
           shippingOptions?: Array<{
+            optionType?: string
+            costType?: string
             shippingServices?: Array<{
+              shippingServiceCode?: string
+              shippingCarrierCode?: string
               buyerResponsibleForShipping?: boolean
               shipToLocations?: unknown
+              shippingCost?: unknown
             }>
           }>
         }
-        assert.equal(req.shipToLocations?.regionIncluded?.[0]?.regionName, "US")
+        assert.equal(req.marketplaceId, "EBAY_US")
+        assert.equal(req.shipToLocations, undefined)
+        assert.equal(req.shippingOptions?.[0]?.optionType, "DOMESTIC")
+        assert.equal(req.shippingOptions?.[0]?.costType, "CALCULATED")
+        assert.equal(
+          req.shippingOptions?.[0]?.shippingServices?.[0]?.shippingServiceCode,
+          "USPSGroundAdvantage"
+        )
+        assert.equal(
+          req.shippingOptions?.[0]?.shippingServices?.[0]?.shippingCarrierCode,
+          "USPS"
+        )
+        assert.equal(
+          req.shippingOptions?.[0]?.shippingServices?.[0]?.shipToLocations,
+          undefined
+        )
         assert.equal(
           req.shippingOptions?.[0]?.shippingServices?.[0]
             ?.buyerResponsibleForShipping,
-          false
+          undefined
         )
-        assert.ok(req.shippingOptions?.[0]?.shippingServices?.[0]?.shipToLocations)
         return jsonResponse(201, { fulfillmentPolicyId: "f-new" })
       }
       if (url.includes("/payment_policy") && method === "GET") {
@@ -368,6 +402,205 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
     assert.equal(
       calls.some((c) => c.method === "POST"),
       false
+    )
+  })
+
+  it("invalidates a cached fulfillment ID that has no logistics and creates a replacement", async () => {
+    let created = false
+    mockEbay((url, method, body) => {
+      if (url.includes("/program/get_opted_in_programs")) {
+        return jsonResponse(200, {
+          programs: [{ programType: "SELLING_POLICY_MANAGEMENT" }],
+        })
+      }
+      if (url.includes("/fulfillment_policy") && method === "GET") {
+        return jsonResponse(200, {
+          fulfillmentPolicies: created
+            ? [{ ...calculatedPolicy, fulfillmentPolicyId: "f-fixed" }]
+            : [
+                {
+                  fulfillmentPolicyId: "f-bad",
+                  name: "ListWise Calculated · USPSGroundAdvantage · 1d",
+                  shippingOptions: [],
+                },
+              ],
+        })
+      }
+      if (url.includes("/fulfillment_policy") && method === "POST") {
+        created = true
+        const req = body as { shipToLocations?: unknown }
+        assert.equal(req.shipToLocations, undefined)
+        return jsonResponse(201, { fulfillmentPolicyId: "f-fixed" })
+      }
+      if (url.includes("/payment_policy")) {
+        if (method === "GET") {
+          return jsonResponse(200, {
+            paymentPolicies: [
+              { paymentPolicyId: "pay-lw", name: "ListWise Payment", immediatePay: false },
+            ],
+          })
+        }
+      }
+      if (url.includes("/return_policy")) {
+        if (method === "GET") {
+          return jsonResponse(200, {
+            returnPolicies: [
+              {
+                returnPolicyId: "ret-30",
+                returnsAccepted: true,
+                returnPeriod: { value: 30, unit: "DAY" },
+                returnShippingCostPayer: "BUYER",
+              },
+            ],
+          })
+        }
+      }
+      return jsonResponse(500, { errors: [{ message: `unexpected ${method} ${url}` }] })
+    })
+
+    const key = fulfillmentCacheKey("calculated", "USPSGroundAdvantage", 1)
+    const result = await ensureEbayBusinessPolicyIds("token", {
+      shippingMode: "calculated",
+      shippingServiceCode: "USPSGroundAdvantage",
+      handlingTimeDays: 1,
+      policyCache: {
+        marketplaceId: "EBAY_US",
+        fulfillment: { [key]: "f-bad" },
+        payment: { standard: "pay-lw" },
+        returns: { "1|30|BUYER": "ret-30" },
+      },
+    })
+    assert.equal(result.fulfillmentPolicyId, "f-fixed")
+    assert.equal(result.policyCache.fulfillment[key], "f-fixed")
+    assert.equal(
+      calls.some((c) => c.method === "POST" && c.url.includes("/fulfillment_policy")),
+      true
+    )
+  })
+
+  it("retries to a flat US payload after production LOGISTICS_INFO_IS_MISSING / LSAS 216118", async () => {
+    const productionError = {
+      errors: [
+        {
+          errorId: 20403,
+          domain: "API_ACCOUNT",
+          category: "REQUEST",
+          message: "Invalid LOGISTICS_INFO_IS_MISSING.",
+          longMessage: "LSAS validation failed.",
+          parameters: [
+            { name: "fieldName", value: "LOGISTICS_INFO_IS_MISSING" },
+            {
+              name: "SHIPELIG_ERROR_CODE_NAME",
+              value: "LOGISTICS_INFO_IS_MISSING",
+            },
+            { name: "additionalInfo", value: "LSAS 216118" },
+          ],
+        },
+      ],
+    }
+    let createdFlat = false
+    mockEbay((url, method, body) => {
+      if (url.includes("/program/get_opted_in_programs")) {
+        return jsonResponse(200, {
+          programs: [{ programType: "SELLING_POLICY_MANAGEMENT" }],
+        })
+      }
+      if (url.includes("/fulfillment_policy") && method === "GET") {
+        return jsonResponse(200, {
+          fulfillmentPolicies: createdFlat
+            ? [
+                {
+                  fulfillmentPolicyId: "f-flat",
+                  name: "ListWise Flat $5.99 · USPSGroundAdvantage · 1d",
+                  handlingTime: { value: 1, unit: "DAY" },
+                  shippingOptions: [
+                    {
+                      optionType: "DOMESTIC",
+                      costType: "FLAT_RATE",
+                      shippingServices: [
+                        {
+                          shippingServiceCode: "USPSGroundAdvantage",
+                          shippingCarrierCode: "USPS",
+                          freeShipping: false,
+                          shippingCost: { value: "5.99", currency: "USD" },
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ]
+            : [],
+        })
+      }
+      if (url.includes("/fulfillment_policy") && method === "POST") {
+        const req = body as {
+          shipToLocations?: unknown
+          shippingOptions?: Array<{
+            costType?: string
+            shippingServices?: Array<{
+              shippingServiceCode?: string
+              shippingCost?: { value?: string }
+            }>
+          }>
+        }
+        assert.equal(req.shipToLocations, undefined)
+        if (req.shippingOptions?.[0]?.costType === "CALCULATED") {
+          return jsonResponse(400, productionError)
+        }
+        createdFlat = true
+        assert.equal(req.shippingOptions?.[0]?.costType, "FLAT_RATE")
+        assert.equal(
+          req.shippingOptions?.[0]?.shippingServices?.[0]?.shippingServiceCode,
+          "USPSGroundAdvantage"
+        )
+        assert.ok(req.shippingOptions?.[0]?.shippingServices?.[0]?.shippingCost)
+        return jsonResponse(201, { fulfillmentPolicyId: "f-flat" })
+      }
+      if (url.includes("/payment_policy")) {
+        if (method === "GET") {
+          return jsonResponse(200, {
+            paymentPolicies: [
+              { paymentPolicyId: "pay-lw", immediatePay: false },
+            ],
+          })
+        }
+        return jsonResponse(201, { paymentPolicyId: "pay-lw" })
+      }
+      if (url.includes("/return_policy")) {
+        if (method === "GET") {
+          return jsonResponse(200, {
+            returnPolicies: [
+              {
+                returnPolicyId: "ret-30",
+                returnsAccepted: true,
+                returnPeriod: { value: 30, unit: "DAY" },
+                returnShippingCostPayer: "BUYER",
+              },
+            ],
+          })
+        }
+        return jsonResponse(201, { returnPolicyId: "ret-30" })
+      }
+      return jsonResponse(500, { errors: [{ message: `unexpected ${method} ${url}` }] })
+    })
+
+    const result = await ensureEbayBusinessPolicyIds("token", {
+      shippingMode: "calculated",
+      shippingServiceCode: "USPSGroundAdvantage",
+      handlingTimeDays: 1,
+    })
+    assert.equal(result.fulfillmentPolicyId, "f-flat")
+    assert.equal(result.fulfillmentSummary.mode, "flat")
+    const fulfillmentPosts = calls.filter(
+      (c) => c.method === "POST" && c.url.includes("/fulfillment_policy")
+    )
+    assert.ok(fulfillmentPosts.length > 1)
+    assert.equal(
+      fulfillmentPosts.some((c) => {
+        const body = c.body as { shippingOptions?: Array<{ costType?: string }> }
+        return body.shippingOptions?.[0]?.costType === "FLAT_RATE"
+      }),
+      true
     )
   })
 })

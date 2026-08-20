@@ -159,6 +159,19 @@ export const ebayAdapter: MarketplaceAdapter = {
       listing.specifics.shippingMode === "calculated"
         ? listing.specifics.shippingMode
         : "calculated"
+    console.info("[ebay/shipping] listing snapshot for fulfillment policy", {
+      shippingMode,
+      handlingTimeDays: listing.specifics.handlingTimeDays ?? 1,
+      shippingService:
+        listing.specifics.shippingService ||
+        listing.specifics.extras?.shippingService ||
+        "USPSGroundAdvantage",
+      flatShippingAmount: listing.specifics.flatShippingAmount ?? null,
+      freeShippingConfirmed: Boolean(listing.specifics.freeShippingConfirmed),
+      packageComplete: shippingPackageIsComplete(
+        listing.specifics.shippingPackage
+      ),
+    })
     const policies = await ensureEbayBusinessPolicyIds(auth.accessToken, {
       shippingMode,
       freeShippingConfirmed: Boolean(listing.specifics.freeShippingConfirmed),

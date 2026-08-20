@@ -23,6 +23,11 @@ export type EbayFetchInit = RequestInit & {
   step?: string
   /** When true, do not auto-retry 25001 (used on the second attempt). */
   skip25001Retry?: boolean
+  /**
+   * When true, return HTTP 4xx/5xx instead of throwing MarketplaceError.
+   * Used by the policy layer to inspect createFulfillmentPolicy 20403 bodies.
+   */
+  allowHttpError?: boolean
 }
 
 function listingQuantity(listing: Listing): number {
@@ -330,7 +335,12 @@ function extractEbayErrorDetails(json: unknown): EbayErrorDetail[] {
       const row = p as Record<string, unknown>
       return {
         name: typeof row.name === "string" ? row.name : undefined,
-        value: typeof row.value === "string" ? row.value : undefined,
+        value:
+          typeof row.value === "string"
+            ? row.value
+            : row.value != null
+              ? String(row.value)
+              : undefined,
       }
     })
   }
@@ -512,7 +522,8 @@ export async function ebayFetchResult(
   accessToken: string,
   init?: EbayFetchInit
 ): Promise<{ status: number; data: unknown; traceHeaders: Record<string, string> }> {
-  const { contentLanguage, step, skip25001Retry, ...fetchInit } = init || {}
+  const { contentLanguage, step, skip25001Retry, allowHttpError, ...fetchInit } =
+    init || {}
   const headers = new Headers(fetchInit.headers)
   headers.set("Authorization", `Bearer ${accessToken}`)
   headers.set("Content-Type", "application/json")
@@ -584,7 +595,7 @@ export async function ebayFetchResult(
     result = await attemptOnce(2)
   }
 
-  if (!result.response.ok) {
+  if (!result.response.ok && !allowHttpError) {
     throw new MarketplaceError(
       formatEbayUserMessage(result.errors, result.response.status, step),
       "ebay_api_error",

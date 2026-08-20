@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import {
   buildFulfillmentPolicyCreateRequest,
   classifyFulfillmentShippingMode,
+  diagnoseFulfillmentCreateErrors,
   fulfillmentPolicyIsFreeShipping,
   rejectedEbayFieldFromErrors,
   summarizeFulfillmentPolicy,
@@ -133,11 +134,28 @@ describe("fulfillment shipping classification", () => {
       body.shippingOptions[0].shippingServices[0].shippingCost,
       undefined
     )
-    // Must not invent Motors-only buyerResponsibleForShipping=true (LOGISTICS_INFO).
+    // Dev Support working create uses explicit false — never true (Motors-only).
     assert.equal(
-      "buyerResponsibleForShipping" in body.shippingOptions[0].shippingServices[0],
+      body.shippingOptions[0].shippingServices[0].buyerResponsibleForShipping,
       false
     )
+    assert.equal(
+      body.shippingOptions[0].shippingServices[0].buyerResponsibleForPickup,
+      false
+    )
+    assert.equal(body.shippingOptions[0].insuranceOffered, false)
+    assert.deepEqual(body.shippingOptions[0].insuranceFee, {
+      value: "0.0",
+      currency: "USD",
+    })
+    assert.deepEqual(body.shipToLocations, {
+      regionIncluded: [{ regionName: "US", regionType: "COUNTRY" }],
+    })
+    assert.deepEqual(
+      body.shippingOptions[0].shippingServices[0].shipToLocations,
+      body.shipToLocations
+    )
+    assert.equal("default" in body.categoryTypes[0], false)
   })
 
   it("clones carrier/service from an eBay.com template policy", () => {
@@ -187,6 +205,75 @@ describe("fulfillment shipping classification", () => {
       },
     ])
     assert.equal(field, "LOGISTICS_INFO")
+  })
+
+  it("maps 20403 / LSAS 216118 to shipToLocations", () => {
+    const diagnosis = diagnoseFulfillmentCreateErrors([
+      {
+        errorId: 20403,
+        domain: "API_ACCOUNT",
+        message: "Invalid LOGISTICS_INFO.",
+        longMessage: "LSAS validation failed.",
+        parameters: [
+          { name: "fieldName", value: "LOGISTICS_INFO" },
+          { name: "additionalInfo", value: "LSAS 216118" },
+          { name: "1", value: "216118" },
+        ],
+      },
+    ])
+    assert.equal(diagnosis.lsasCode, "216118")
+    assert.equal(diagnosis.shipToLocationInvalid, true)
+    assert.equal(diagnosis.rejectedField, "shipToLocations")
+  })
+
+  it("maps numeric 216118 parameter values, not just strings", () => {
+    const diagnosis = diagnoseFulfillmentCreateErrors([
+      {
+        errorId: 20403,
+        longMessage: "LSAS validation failed.",
+        parameters: [
+          { name: "fieldName", value: "LOGISTICS_INFO" },
+          { name: "SHIPELIG_ERROR_CODE", value: "216118" },
+        ],
+      },
+    ])
+    assert.equal(diagnosis.lsasCode, "216118")
+    assert.equal(diagnosis.shipToLocationInvalid, true)
+  })
+
+  it("detects CALCULATED_SHIPPING_TYPE_NOT_SUPPORTED from SHIPELIG", () => {
+    const diagnosis = diagnoseFulfillmentCreateErrors([
+      {
+        errorId: 20403,
+        longMessage: "LSAS validation failed.",
+        parameters: [
+          {
+            name: "SHIPELIG_ERROR_CODE_NAME",
+            value: "CALCULATED_SHIPPING_TYPE_NOT_SUPPORTED",
+          },
+        ],
+      },
+    ])
+    assert.equal(diagnosis.calculatedNotSupported, true)
+    assert.equal(diagnosis.rejectedField, "CALCULATED_SHIPPING_TYPE_NOT_SUPPORTED")
+  })
+
+  it("sets default:true only when asked (first policy on the account)", () => {
+    const body = buildFulfillmentPolicyCreateRequest({
+      marketplaceId: "EBAY_US",
+      mode: "flat",
+      name: "ListWise Flat",
+      handlingDays: 1,
+      shippingServiceCode: "USPSGroundAdvantage",
+      flatAmount: 5.99,
+      setAsDefault: true,
+    })
+    assert.equal(body.categoryTypes[0].default, true)
+    assert.equal(body.shippingOptions[0].costType, "FLAT_RATE")
+    assert.equal(
+      body.shippingOptions[0].shippingServices[0].shippingCost?.value,
+      "5.99"
+    )
   })
 })
 

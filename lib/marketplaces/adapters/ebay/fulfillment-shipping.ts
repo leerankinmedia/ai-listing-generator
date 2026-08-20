@@ -5,6 +5,17 @@
 
 export type EbayShippingMode = "calculated" | "flat" | "free"
 
+export type EbayRegionSet = {
+  regionIncluded?: Array<{
+    regionName?: string
+    regionType?: string
+  }>
+  regionExcluded?: Array<{
+    regionName?: string
+    regionType?: string
+  }>
+}
+
 export type EbayFulfillmentPolicyRaw = {
   fulfillmentPolicyId?: string
   name?: string
@@ -23,8 +34,12 @@ export type EbayFulfillmentPolicyRaw = {
       shippingCost?: { value?: string; currency?: string }
       additionalShippingCost?: { value?: string; currency?: string }
       sortOrder?: number
+      shipToLocations?: EbayRegionSet
     }>
+    insuranceOffered?: boolean
+    insuranceFee?: { value?: string; currency?: string }
   }>
+  shipToLocations?: EbayRegionSet
 }
 
 export type EbayFulfillmentShippingSummary = {
@@ -214,6 +229,37 @@ export function shippingCarrierForService(serviceCode: string): string {
   return "USPS"
 }
 
+export type EbayDomesticRegion = {
+  regionName: string
+  regionType?: "COUNTRY" | "COUNTRY_REGION" | "WORLD_REGION"
+}
+
+export type EbayDomesticRegionSet = {
+  regionIncluded: EbayDomesticRegion[]
+}
+
+/**
+ * USPS Ground Advantage (and other domestic US services) are not worldwide.
+ * LSAS 216118 is shipping-eligibility against ship-to locations: omitting
+ * shipToLocations lets LSAS default to an incompatible destination set.
+ */
+export function domesticUsShipToLocations(): EbayDomesticRegionSet {
+  return {
+    regionIncluded: [{ regionName: "US", regionType: "COUNTRY" }],
+  }
+}
+
+export function currencyForMarketplace(marketplaceId: string): string {
+  const id = (marketplaceId || "EBAY_US").toUpperCase()
+  if (id === "EBAY_GB" || id === "EBAY_UK") return "GBP"
+  if (id === "EBAY_AU") return "AUD"
+  if (id === "EBAY_CA") return "CAD"
+  if (id === "EBAY_DE" || id === "EBAY_FR" || id === "EBAY_IT" || id === "EBAY_ES") {
+    return "EUR"
+  }
+  return "USD"
+}
+
 export type FulfillmentPolicyCreateRequest = {
   name: string
   marketplaceId: string
@@ -223,27 +269,36 @@ export type FulfillmentPolicyCreateRequest = {
   freightShipping: false
   globalShipping: false
   pickupDropOff: false
+  shipToLocations: EbayDomesticRegionSet
   shippingOptions: Array<{
     optionType: "DOMESTIC"
     costType: "CALCULATED" | "FLAT_RATE"
+    insuranceOffered: false
+    insuranceFee: { value: string; currency: string }
     shippingServices: Array<{
       sortOrder: number
       shippingCarrierCode: string
       shippingServiceCode: string
       freeShipping: boolean
+      buyerResponsibleForShipping: false
+      buyerResponsibleForPickup: false
+      shipToLocations: EbayDomesticRegionSet
       shippingCost?: { value: string; currency: string }
     }>
   }>
 }
 
 /**
- * Build a createFulfillmentPolicy body matching what eBay.com / Account API
- * returns for a normal US domestic calculated/flat/free policy.
+ * Build a createFulfillmentPolicy body matching eBay Dev Support's accepted
+ * Account API shape for a normal US domestic calculated/flat/free policy.
  *
- * Important (errorId 20403 / LOGISTICS_INFO):
- * - localPickup must be explicit false (eBay Dev Support).
- * - Do NOT set buyerResponsibleForShipping=true (Motors-only; invalid logistics
- *   for apparel and causes LOGISTICS_INFO rejection).
+ * 20403 / LSAS 216118 (LOGISTICS_INFO):
+ * - shipToLocations.regionIncluded must be US COUNTRY (Ground Advantage is
+ *   domestic-only; missing destinations fail LSAS eligibility 216118).
+ * - buyerResponsibleForShipping/Pickup must be explicit false (not omitted,
+ *   never true — true is Motors-only).
+ * - insuranceOffered false + insuranceFee 0.0 (Dev Support working payload).
+ * - localPickup/freight/global/pickupDropOff explicit false.
  * - Include shippingCarrierCode with shippingServiceCode.
  * - CALCULATED must omit shippingCost; FLAT/FREE include it.
  *
@@ -259,10 +314,13 @@ export function buildFulfillmentPolicyCreateRequest(args: {
   flatAmount?: number
   /** Existing seller policy to copy logistics shape from (eBay.com-created preferred). */
   template?: EbayFulfillmentPolicyRaw | null
+  /** Set true only when the seller has no fulfillment policy yet. */
+  setAsDefault?: boolean
 }): FulfillmentPolicyCreateRequest {
   const days = Math.max(0, Math.min(30, Math.floor(args.handlingDays || 1)))
   const service =
     String(args.shippingServiceCode || "").trim() || "USPSGroundAdvantage"
+  const currency = currencyForMarketplace(args.marketplaceId)
   const amount = Math.max(0.01, Number(args.flatAmount) || 5.99).toFixed(2)
 
   const templateOption = args.template
@@ -290,67 +348,177 @@ export function buildFulfillmentPolicyCreateRequest(args: {
   const costType: "CALCULATED" | "FLAT_RATE" =
     args.mode === "calculated" ? "CALCULATED" : "FLAT_RATE"
 
+  const shipTo = domesticUsShipToLocations()
+
   const shippingService: FulfillmentPolicyCreateRequest["shippingOptions"][0]["shippingServices"][0] =
     {
       sortOrder: 1,
       shippingCarrierCode: carrier,
       shippingServiceCode: resolvedService,
       freeShipping: args.mode === "free",
+      // Dev Support working create: explicit false. true is Motors-only (20403).
+      buyerResponsibleForShipping: false,
+      buyerResponsibleForPickup: false,
+      shipToLocations: shipTo,
     }
 
   if (args.mode === "flat") {
-    shippingService.shippingCost = { value: amount, currency: "USD" }
+    shippingService.shippingCost = { value: amount, currency }
   } else if (args.mode === "free") {
-    shippingService.shippingCost = { value: "0.0", currency: "USD" }
+    shippingService.shippingCost = { value: "0.0", currency }
   }
   // CALCULATED: no shippingCost — eBay computes from package weight/dims.
 
   return {
     name: args.name,
     marketplaceId: args.marketplaceId,
-    categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
+    categoryTypes: [
+      {
+        name: "ALL_EXCLUDING_MOTORS_VEHICLES",
+        ...(args.setAsDefault ? { default: true } : {}),
+      },
+    ],
     handlingTime: { value: days, unit: "DAY" },
-    // Explicit flags matching eBay.com Account API policies (Dev Support: localPickup false).
     localPickup: false,
     freightShipping: false,
     globalShipping: false,
     pickupDropOff: false,
+    shipToLocations: shipTo,
     shippingOptions: [
       {
         optionType: "DOMESTIC",
         costType,
+        insuranceOffered: false,
+        insuranceFee: { value: "0.0", currency },
         shippingServices: [shippingService],
       },
     ],
   }
 }
 
+export type EbayAccountError = {
+  errorId?: number
+  message?: string
+  longMessage?: string
+  parameters?: Array<{ name?: string; value?: string }>
+}
+
+export type FulfillmentCreateDiagnosis = {
+  rejectedField: string | null
+  lsasCode: string | null
+  shipEligCode: string | null
+  xpath: string | null
+  calculatedNotSupported: boolean
+  shipToLocationInvalid: boolean
+}
+
+function paramByName(
+  params: Array<{ name?: string; value?: string }>,
+  name: string
+): string | null {
+  const wanted = name.toUpperCase()
+  const hit = params.find((p) => (p.name || "").toUpperCase() === wanted)
+  return hit?.value?.trim() || null
+}
+
 /** Extract rejected field name from eBay 20403 parameters (e.g. LOGISTICS_INFO). */
 export function rejectedEbayFieldFromErrors(
-  errors: Array<{
-    errorId?: number
-    message?: string
-    longMessage?: string
-    parameters?: Array<{ name?: string; value?: string }>
-  }>
+  errors: EbayAccountError[]
 ): string | null {
+  return diagnoseFulfillmentCreateErrors(errors).rejectedField
+}
+
+/**
+ * Parse the full 20403 / LSAS body, including numeric parameter values like 216118.
+ */
+export function diagnoseFulfillmentCreateErrors(
+  errors: EbayAccountError[]
+): FulfillmentCreateDiagnosis {
+  let rejectedField: string | null = null
+  let lsasCode: string | null = null
+  let shipEligCode: string | null = null
+  let xpath: string | null = null
+
   for (const err of errors) {
     const params = err.parameters || []
-    const fieldName = params.find(
-      (p) => (p.name || "").toUpperCase() === "FIELDNAME"
-    )?.value
-    if (fieldName) return fieldName
-    const xpath = params.find((p) => (p.name || "").toUpperCase() === "XPATH")
-      ?.value
-    if (xpath) return xpath
-    const shipElig = params.find(
-      (p) => (p.name || "").toUpperCase() === "SHIPELIG_ERROR_CODE_NAME"
-    )?.value
-    if (shipElig) return shipElig
-    // Some responses put the token directly in message/longMessage.
-    const hay = `${err.message || ""} ${err.longMessage || ""}`
-    const m = hay.match(/\b(LOGISTICS_INFO|localPickup|shippingServiceCode|costType)\b/i)
-    if (m) return m[1]
+    const fieldName = paramByName(params, "fieldName")
+    const xpathValue = paramByName(params, "XPATH")
+    const shipElig = paramByName(params, "SHIPELIG_ERROR_CODE_NAME")
+    const additional = paramByName(params, "additionalInfo")
+    const hay = [
+      err.message || "",
+      err.longMessage || "",
+      additional || "",
+      ...params.map((p) => `${p.name || ""} ${p.value || ""}`),
+    ].join(" ")
+
+    if (!xpath && xpathValue) xpath = xpathValue
+    if (!shipEligCode && shipElig) shipEligCode = shipElig
+
+    const lsasMatch = hay.match(/\bLSAS[^\d]{0,8}(\d{5,6})\b/i)
+    const codeMatch = hay.match(/\b(216118)\b/)
+    if (!lsasCode && (lsasMatch?.[1] || codeMatch?.[1])) {
+      lsasCode = lsasMatch?.[1] || codeMatch?.[1] || null
+    }
+    for (const p of params) {
+      if ((p.name || "").trim() === "216118" && p.value) {
+        lsasCode = lsasCode || "216118"
+      }
+      if ((p.value || "").trim() === "216118") {
+        lsasCode = "216118"
+      }
+    }
+
+    if (!rejectedField && fieldName) rejectedField = fieldName
+    else if (!rejectedField && xpathValue) rejectedField = xpathValue
+    else if (!rejectedField && shipElig) rejectedField = shipElig
+    else if (!rejectedField) {
+      const m = hay.match(
+        /\b(LOGISTICS_INFO|shipToLocations|localPickup|shippingServiceCode|costType|buyerResponsibleForShipping)\b/i
+      )
+      if (m) rejectedField = m[1]
+    }
+    if (!rejectedField && lsasCode === "216118") {
+      rejectedField = "shipToLocations"
+    }
+    if (lsasCode === "216118" && rejectedField === "LOGISTICS_INFO") {
+      rejectedField = "shipToLocations"
+    }
   }
-  return null
+
+  const allText = errors
+    .map((e) =>
+      [
+        e.message,
+        e.longMessage,
+        ...(e.parameters || []).map((p) => `${p.name}=${p.value}`),
+      ].join(" ")
+    )
+    .join(" ")
+    .toUpperCase()
+
+  const calculatedNotSupported =
+    shipEligCode === "CALCULATED_SHIPPING_TYPE_NOT_SUPPORTED" ||
+    allText.includes("CALCULATED_SHIPPING_TYPE_NOT_SUPPORTED")
+
+  const shipToLocationInvalid =
+    lsasCode === "216118" ||
+    /SHIPTOLOCATION/i.test(rejectedField || "") ||
+    /SHIPTOLOCATION/i.test(xpath || "") ||
+    /SHIP_TO_LOCATION/i.test(shipEligCode || "") ||
+    /SHIP_TO_LOCATION/i.test(allText)
+
+  if (!rejectedField && shipToLocationInvalid) rejectedField = "shipToLocations"
+  if (!rejectedField && calculatedNotSupported) {
+    rejectedField = "costType"
+  }
+
+  return {
+    rejectedField,
+    lsasCode,
+    shipEligCode,
+    xpath,
+    calculatedNotSupported,
+    shipToLocationInvalid,
+  }
 }

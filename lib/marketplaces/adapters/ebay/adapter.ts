@@ -22,7 +22,11 @@ import {
 import { ensureEbayMerchantLocationKey } from "@/lib/marketplaces/adapters/ebay/location"
 import { resolveEbayImageUrls } from "@/lib/marketplaces/adapters/ebay/media"
 import { isEbayConfigured, refreshEbayToken, ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
-import { ensureEbayBusinessPolicyIds } from "@/lib/marketplaces/adapters/ebay/policies"
+import {
+  ensureEbayBusinessPolicyIds,
+  parseEbayPolicyCache,
+  serializeEbayPolicyCache,
+} from "@/lib/marketplaces/adapters/ebay/policies"
 import { applyEbayPromotedListing } from "@/lib/marketplaces/adapters/ebay/promoted-listings"
 import {
   conditionIdAllowedForCategory,
@@ -145,7 +149,7 @@ export const ebayAdapter: MarketplaceAdapter = {
       )
     }
 
-    const auth = await withFreshToken(connection)
+    let auth = await withFreshToken(connection)
 
     // 1) Seller-owned Business Policies — match explicit shipping mode
     // (default: buyer pays calculated). Never silently use free shipping.
@@ -169,7 +173,17 @@ export const ebayAdapter: MarketplaceAdapter = {
       returnShippingPaidBy:
         listing.specifics.returnShippingPaidBy === "SELLER" ? "SELLER" : "BUYER",
       requireImmediatePayment: Boolean(listing.specifics.requireImmediatePayment),
+      policyCache: parseEbayPolicyCache(auth.meta?.ebayPolicyCache),
     })
+    const nextPolicyCache = serializeEbayPolicyCache(policies.policyCache)
+    if (auth.meta?.ebayPolicyCache !== nextPolicyCache) {
+      auth = {
+        ...auth,
+        meta: { ...auth.meta, ebayPolicyCache: nextPolicyCache },
+        updatedAt: new Date().toISOString(),
+      }
+      await saveConnection(auth)
+    }
     console.info("[ebay/shipping] publish using fulfillment policy", {
       shippingMode,
       freeShippingConfirmed: Boolean(listing.specifics.freeShippingConfirmed),

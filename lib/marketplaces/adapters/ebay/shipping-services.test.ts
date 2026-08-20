@@ -159,15 +159,84 @@ describe("eBay GeteBayDetails shipping services", () => {
       </ShippingServiceDetails>
     `)
     const result = validateSelectedShippingService({
-      requested: "USPSGroundAdvantage",
+      requested: "USPS Ground Advantage",
       costType: "CALCULATED",
       services: priorityOnly,
     })
-    assert.equal(result.ok, false)
-    if (!result.ok) {
-      assert.equal(result.reason, "not_found")
+    assert.equal(result.ok, true)
+    if (result.ok) {
       assert.equal(result.code, "USPSGroundAdvantage")
-      assert.match(result.message, /did not substitute/i)
+      assert.equal(result.carrier, "USPS")
+      assert.notEqual(result.code, "USPSPriority")
     }
+  })
+
+  it("maps the friendly Ground Advantage label to live USPSParcel metadata", () => {
+    const xml = `
+      <ShippingServiceDetails>
+        <Description>USPS Ground Advantage</Description>
+        <ShippingService>USPSParcel</ShippingService>
+        <ShippingCarrier>USPS</ShippingCarrier>
+        <ValidForSellingFlow>true</ValidForSellingFlow>
+        <ServiceType>Flat</ServiceType>
+        <ServiceType>Calculated</ServiceType>
+      </ShippingServiceDetails>
+      <ShippingServiceDetails>
+        <ShippingService>USPSPriority</ShippingService>
+        <ShippingCarrier>USPS</ShippingCarrier>
+        <ValidForSellingFlow>true</ValidForSellingFlow>
+        <ServiceType>Flat</ServiceType>
+        <ServiceType>Calculated</ServiceType>
+      </ShippingServiceDetails>
+    `
+    const services = parseShippingServiceDetailsXml(xml)
+    const parsed = services.find((s) => s.code === "USPSParcel")
+    assert.equal(parsed?.description, "USPS Ground Advantage")
+    const result = validateSelectedShippingService({
+      requested: "USPS Ground Advantage",
+      costType: "CALCULATED",
+      services,
+    })
+    assert.equal(result.ok, true)
+    if (result.ok) {
+      assert.equal(result.code, "USPSParcel")
+      assert.equal(result.carrier, "USPS")
+      assert.notEqual(result.code, "USPS Ground Advantage")
+      assert.notEqual(result.code, "USPSPriority")
+    }
+  })
+
+  it("still accepts UPS Ground and FedEx Home Delivery friendly labels", () => {
+    const xml = `
+      <ShippingServiceDetails>
+        <Description>UPS Ground</Description>
+        <ShippingService>UPSGround</ShippingService>
+        <ShippingCarrier>UPS</ShippingCarrier>
+        <ValidForSellingFlow>true</ValidForSellingFlow>
+        <ServiceType>Calculated</ServiceType>
+      </ShippingServiceDetails>
+      <ShippingServiceDetails>
+        <Description>FedEx Ground / Home Delivery</Description>
+        <ShippingService>FedExHomeDelivery</ShippingService>
+        <ShippingCarrier>FedEx</ShippingCarrier>
+        <ValidForSellingFlow>true</ValidForSellingFlow>
+        <ServiceType>Calculated</ServiceType>
+      </ShippingServiceDetails>
+    `
+    const services = parseShippingServiceDetailsXml(xml)
+    const ups = validateSelectedShippingService({
+      requested: "UPS Ground",
+      costType: "CALCULATED",
+      services,
+    })
+    const fedex = validateSelectedShippingService({
+      requested: "FedEx Ground / Home Delivery",
+      costType: "CALCULATED",
+      services,
+    })
+    assert.equal(ups.ok, true)
+    assert.equal(fedex.ok, true)
+    if (ups.ok) assert.equal(ups.code, "UPSGround")
+    if (fedex.ok) assert.equal(fedex.code, "FedExHomeDelivery")
   })
 })

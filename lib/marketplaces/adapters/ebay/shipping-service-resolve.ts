@@ -21,6 +21,20 @@ export const USPS_PRIORITY = "USPSPriority"
 export const USPS_PARCEL = "USPSParcel"
 export const UPS_3RD_DAY = "UPS3rdDay"
 export const UPS_2ND_DAY = "UPS2ndDay"
+export const USPS_PARCEL_SELECT = "USPSParcelSelect"
+export const USPS_RETAIL_GROUND = "USPSRetailGround"
+
+/**
+ * eBay reused Parcel Select Ground's enum when USPS Ground Advantage launched.
+ * Live GeteBayDetails often returns USPSParcel with Description
+ * "USPS Ground Advantage" instead of a USPSGroundAdvantage token.
+ */
+export const GROUND_ADVANTAGE_SERVICE_CODES = [
+  USPS_GROUND_ADVANTAGE,
+  USPS_PARCEL,
+  USPS_PARCEL_SELECT,
+  USPS_RETAIL_GROUND,
+] as const
 
 /** Parcel services Magical-style recommenders may choose among. */
 export const PARCEL_SERVICE_CODES = [
@@ -90,7 +104,9 @@ export const SHIPPING_SERVICE_LABELS: Record<string, string> = {
   USPSGroundAdvantage: "USPS Ground Advantage",
   USPSPriority: "USPS Priority Mail",
   USPSFirstClass: "USPS First Class",
-  USPSParcel: "USPS Parcel Select",
+  USPSParcel: "USPS Ground Advantage",
+  USPSParcelSelect: "USPS Ground Advantage",
+  USPSRetailGround: "USPS Ground Advantage",
   UPSGround: "UPS Ground",
   UPS3rdDay: "UPS 3 Day Select",
   UPS2ndDay: "UPS 2nd Day Air",
@@ -107,20 +123,34 @@ const SERVICE_ALIASES: Record<string, string> = {
   "usps ground advantage": USPS_GROUND_ADVANTAGE,
   uspspriority: USPS_PRIORITY,
   usps_priority: USPS_PRIORITY,
+  "usps priority": USPS_PRIORITY,
+  "usps priority mail": USPS_PRIORITY,
   uspsparcel: USPS_PARCEL,
   usps_parcel: USPS_PARCEL,
+  "usps parcel": USPS_PARCEL,
   "usps parcel select": USPS_PARCEL,
+  uspsparcelselect: USPS_PARCEL,
+  uspsretailground: USPS_PARCEL,
+  "usps retail ground": USPS_PARCEL,
   upsground: UPS_GROUND,
   ups_ground: UPS_GROUND,
+  "ups ground": UPS_GROUND,
   ups3rdday: UPS_3RD_DAY,
   ups_3rdday: UPS_3RD_DAY,
   ups3dayselect: UPS_3RD_DAY,
+  "ups 3 day select": UPS_3RD_DAY,
+  "ups 3rd day": UPS_3RD_DAY,
   ups2ndday: UPS_2ND_DAY,
   ups_2ndday: UPS_2ND_DAY,
+  "ups 2nd day air": UPS_2ND_DAY,
   fedexhomedelivery: FEDEX_HOME_DELIVERY,
   fedex_home_delivery: FEDEX_HOME_DELIVERY,
+  "fedex ground home delivery": FEDEX_HOME_DELIVERY,
+  "fedex ground / home delivery": FEDEX_HOME_DELIVERY,
+  fedexgroundhomedelivery: FEDEX_HOME_DELIVERY,
   fedexground: FEDEX_GROUND,
   fedex_ground: FEDEX_GROUND,
+  "fedex ground": FEDEX_GROUND,
   us_ebaystandardenvelope: STANDARD_ENVELOPE_SERVICE,
   usebaystandardenvelope: STANDARD_ENVELOPE_SERVICE,
   ebaystandardenvelope: STANDARD_ENVELOPE_SERVICE,
@@ -188,8 +218,32 @@ export function normalizeShippingServiceCode(
 ): string {
   const raw = String(code || "").trim()
   if (!raw) return ""
-  const aliased = SERVICE_ALIASES[raw.toLowerCase().replace(/\s+/g, " ")]
-  return aliased || raw
+  const lowered = raw
+    .toLowerCase()
+    .replace(/[™®]/g, "")
+    .replace(/&amp;/g, "and")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  const compact = lowered.replace(/\s+/g, "")
+  const underscored = lowered.replace(/\s+/g, "_")
+  return (
+    SERVICE_ALIASES[lowered] ||
+    SERVICE_ALIASES[compact] ||
+    SERVICE_ALIASES[underscored] ||
+    raw
+  )
+}
+
+export function isGroundAdvantageService(
+  code: string | null | undefined
+): boolean {
+  const normalized = normalizeShippingServiceCode(code)
+  if (!normalized) return false
+  if (/ground\s*advantage/i.test(String(code || ""))) return true
+  return GROUND_ADVANTAGE_SERVICE_CODES.some((member) =>
+    member.toLowerCase() === normalized.toLowerCase()
+  )
 }
 
 export function shippingServiceCodesEquivalent(
@@ -199,7 +253,8 @@ export function shippingServiceCodesEquivalent(
   const left = normalizeShippingServiceCode(a)
   const right = normalizeShippingServiceCode(b)
   if (!left || !right) return false
-  return left.toLowerCase() === right.toLowerCase()
+  if (left.toLowerCase() === right.toLowerCase()) return true
+  return isGroundAdvantageService(left) && isGroundAdvantageService(right)
 }
 
 export function isStandardEnvelopeService(
@@ -275,6 +330,7 @@ export function shippingServiceDisplayLabel(
 ): string {
   const normalized = normalizeShippingServiceCode(code)
   if (!normalized) return "USPS Ground Advantage"
+  if (isGroundAdvantageService(normalized)) return "USPS Ground Advantage"
   return SHIPPING_SERVICE_LABELS[normalized] || normalized
 }
 

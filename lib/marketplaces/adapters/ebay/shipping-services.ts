@@ -1,6 +1,8 @@
 import { xmlText } from "@/lib/marketplaces/adapters/ebay/trading-parse"
 import { ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
 import {
+  isGroundAdvantageService,
+  isKnownParcelService,
   isParcelService,
   isStandardEnvelopeService,
   normalizeShippingServiceCode,
@@ -14,6 +16,7 @@ export type EbayShippingCostType = "CALCULATED" | "FLAT_RATE"
 
 export type EbayDomesticShippingService = {
   code: string
+  description?: string
   carrier: string | null
   validForSellingFlow: boolean
   international: boolean
@@ -111,6 +114,7 @@ export function parseShippingServiceDetailsXml(
       )
       return {
         code,
+        description: xmlText(block, "Description") || undefined,
         carrier: normalizeEbayCarrierCode(xmlText(block, "ShippingCarrier")),
         validForSellingFlow: xmlFlag(block, "ValidForSellingFlow"),
         international: xmlFlag(block, "InternationalService"),
@@ -186,13 +190,50 @@ export function pickValidDomesticServiceCode(
   return USPS_GROUND_ADVANTAGE
 }
 
+function serviceRecordMatches(
+  service: EbayDomesticShippingService,
+  wanted: string
+): boolean {
+  if (shippingServiceCodesEquivalent(service.code, wanted)) return true
+  if (
+    service.description &&
+    shippingServiceCodesEquivalent(service.description, wanted)
+  ) {
+    return true
+  }
+  if (
+    isGroundAdvantageService(wanted) &&
+    /ground\s*advantage/i.test(service.description || "")
+  ) {
+    return true
+  }
+  return false
+}
+
 export function findEbayDomesticShippingService(
   requested: string,
   services: EbayDomesticShippingService[]
 ): EbayDomesticShippingService | undefined {
   const wanted = normalizeShippingServiceCode(requested) || requested.trim()
   if (!wanted) return undefined
-  return services.find((s) => shippingServiceCodesEquivalent(s.code, wanted))
+  const matches = services.filter((service) => serviceRecordMatches(service, wanted))
+  if (matches.length === 0) return undefined
+  const exactCode = matches.find(
+    (service) =>
+      normalizeShippingServiceCode(service.code).toLowerCase() ===
+      wanted.toLowerCase()
+  )
+  if (exactCode) return exactCode
+  const namedGroundAdvantage = matches.find(
+    (service) =>
+      isGroundAdvantageService(wanted) &&
+      /ground\s*advantage/i.test(service.description || "")
+  )
+  if (namedGroundAdvantage) return namedGroundAdvantage
+  const explicitGa = matches.find((service) =>
+    shippingServiceCodesEquivalent(service.code, USPS_GROUND_ADVANTAGE)
+  )
+  return explicitGa || matches[0]
 }
 
 function unsupportedMessage(
@@ -259,7 +300,24 @@ export function validateSelectedShippingService(opts: {
     message: unsupportedMessage(serviceCode, opts.costType, reason),
   })
 
-  if (!match) return fail("not_found")
+  if (!match) {
+    // Known catalog parcels stay selected. Live metadata may omit an enum
+    // while still accepting the service, and must never be compared to the
+    // friendly UI label as if it were a shippingServiceCode.
+    if (isKnownParcelService(code)) {
+      return {
+        ok: true,
+        code,
+        carrier: catalogCarrier,
+        serviceTypes: [],
+        validForSellingFlow: true,
+        metadataAvailable: true,
+        dimensionsRequired: opts.costType === "CALCULATED",
+        weightRequired: opts.costType === "CALCULATED",
+      }
+    }
+    return fail("not_found")
+  }
   if (!match.validForSellingFlow) {
     return fail("not_valid_for_selling_flow", match.code)
   }

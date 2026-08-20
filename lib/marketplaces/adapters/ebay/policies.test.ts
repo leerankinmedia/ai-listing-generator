@@ -786,18 +786,170 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
     )
   })
 
-  it("returns a clear ListWise error when the selected service is missing from eBay US metadata", async () => {
-    const priorityOnlyXml = `<?xml version="1.0" encoding="utf-8"?>
+  it("resolves the USPS Ground Advantage label to live USPSParcel and creates that policy", async () => {
+    const parcelXml = `<?xml version="1.0" encoding="utf-8"?>
 <GeteBayDetailsResponse>
   <Ack>Success</Ack>
   <ShippingServiceDetails>
-    <ShippingService>USPSPriority</ShippingService>
+    <Description>USPS Ground Advantage</Description>
+    <ShippingService>USPSParcel</ShippingService>
     <ShippingCarrier>USPS</ShippingCarrier>
     <ValidForSellingFlow>true</ValidForSellingFlow>
     <ServiceType>Flat</ServiceType>
     <ServiceType>Calculated</ServiceType>
   </ShippingServiceDetails>
 </GeteBayDetailsResponse>`
+    let created = false
+    mockEbay((url, method, body) => {
+      if (url.includes("/program/get_opted_in_programs")) {
+        return jsonResponse(200, {
+          programs: [{ programType: "SELLING_POLICY_MANAGEMENT" }],
+        })
+      }
+      if (url.includes("/fulfillment_policy") && method === "GET") {
+        return jsonResponse(200, {
+          fulfillmentPolicies: created
+            ? [
+                {
+                  fulfillmentPolicyId: "f-parcel",
+                  name: "ListWise Calculated · USPSParcel · 1d",
+                  handlingTime: { value: 1, unit: "DAY" },
+                  shippingOptions: [
+                    {
+                      optionType: "DOMESTIC",
+                      costType: "CALCULATED",
+                      shippingServices: [
+                        {
+                          shippingCarrierCode: "USPS",
+                          shippingServiceCode: "USPSParcel",
+                          freeShipping: false,
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ]
+            : [],
+        })
+      }
+      if (url.includes("/fulfillment_policy") && method === "POST") {
+        created = true
+        const req = body as {
+          shippingOptions?: Array<{
+            shippingServices?: Array<{
+              shippingServiceCode?: string
+              shippingCarrierCode?: string
+            }>
+          }>
+        }
+        assert.equal(
+          req.shippingOptions?.[0]?.shippingServices?.[0]?.shippingServiceCode,
+          "USPSParcel"
+        )
+        assert.equal(
+          req.shippingOptions?.[0]?.shippingServices?.[0]?.shippingCarrierCode,
+          "USPS"
+        )
+        assert.notEqual(
+          req.shippingOptions?.[0]?.shippingServices?.[0]?.shippingServiceCode,
+          "USPS Ground Advantage"
+        )
+        return jsonResponse(201, { fulfillmentPolicyId: "f-parcel" })
+      }
+      if (url.includes("/payment_policy") && method === "GET") {
+        return jsonResponse(200, {
+          paymentPolicies: [
+            { paymentPolicyId: "pay-lw", name: "ListWise Payment", immediatePay: false },
+          ],
+        })
+      }
+      if (url.includes("/return_policy") && method === "GET") {
+        return jsonResponse(200, {
+          returnPolicies: [
+            {
+              returnPolicyId: "ret-30",
+              returnsAccepted: true,
+              returnPeriod: { value: 30, unit: "DAY" },
+              returnShippingCostPayer: "BUYER",
+            },
+          ],
+        })
+      }
+      return jsonResponse(500, { errors: [{ message: `unexpected ${method} ${url}` }] })
+    }, parcelXml)
+
+    const result = await ensureEbayBusinessPolicyIds("token", {
+      shippingMode: "calculated",
+      shippingServiceCode: "USPS Ground Advantage",
+      handlingTimeDays: 1,
+    })
+    assert.equal(result.fulfillmentPolicyId, "f-parcel")
+    assert.equal(result.fulfillmentSummary.serviceCode, "USPSParcel")
+    assert.equal(result.fulfillmentSummary.serviceLabel, "USPS Ground Advantage")
+    assert.equal(
+      calls.some(
+        (c) =>
+          c.method === "POST" &&
+          JSON.stringify(c.body).includes("USPSPriority")
+      ),
+      false
+    )
+  })
+
+  it("reuses a cached USPS Ground Advantage policy for the friendly label", async () => {
+    mockEbay((url, method) => {
+      if (url.includes("/program/get_opted_in_programs")) {
+        return jsonResponse(200, {
+          programs: [{ programType: "SELLING_POLICY_MANAGEMENT" }],
+        })
+      }
+      if (url.includes("/fulfillment_policy") && method === "GET") {
+        return jsonResponse(200, { fulfillmentPolicies: [calculatedPolicy] })
+      }
+      if (url.includes("/payment_policy") && method === "GET") {
+        return jsonResponse(200, {
+          paymentPolicies: [
+            { paymentPolicyId: "pay-lw", name: "ListWise Payment", immediatePay: false },
+          ],
+        })
+      }
+      if (url.includes("/return_policy") && method === "GET") {
+        return jsonResponse(200, {
+          returnPolicies: [
+            {
+              returnPolicyId: "ret-30",
+              name: "ListWise Returns · 30d · BUYER",
+              returnsAccepted: true,
+              returnPeriod: { value: 30, unit: "DAY" },
+              returnShippingCostPayer: "BUYER",
+            },
+          ],
+        })
+      }
+      return jsonResponse(500, { errors: [{ message: `unexpected ${method} ${url}` }] })
+    })
+
+    const key = fulfillmentCacheKey("calculated", "USPSGroundAdvantage", 1)
+    const result = await ensureEbayBusinessPolicyIds("token", {
+      shippingMode: "calculated",
+      shippingServiceCode: "USPS Ground Advantage",
+      handlingTimeDays: 1,
+      policyCache: {
+        marketplaceId: "EBAY_US",
+        fulfillment: { [key]: "f-calc-1" },
+        payment: { standard: "pay-lw" },
+        returns: { "1|30|BUYER": "ret-30" },
+      },
+    })
+    assert.equal(result.fulfillmentPolicyId, "f-calc-1")
+    assert.equal(result.fulfillmentSummary.serviceLabel, "USPS Ground Advantage")
+    assert.equal(
+      calls.some((c) => c.method === "POST" && c.url.includes("/fulfillment_policy")),
+      false
+    )
+  })
+
+  it("still rejects an unknown shipping service that is not a catalog parcel", async () => {
     mockEbay((url, method) => {
       if (url.includes("/program/get_opted_in_programs")) {
         return jsonResponse(200, {
@@ -827,21 +979,18 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
         })
       }
       return jsonResponse(500, { errors: [{ message: `unexpected ${method} ${url}` }] })
-    }, priorityOnlyXml)
+    }, EBAY_US_PARCEL_DETAILS_XML)
 
     await assert.rejects(
       () =>
         ensureEbayBusinessPolicyIds("token", {
           shippingMode: "calculated",
-          shippingServiceCode: "USPSGroundAdvantage",
+          shippingServiceCode: "USPSFakeBoatService",
           handlingTimeDays: 1,
         }),
       (err: unknown) => {
-        assert.ok(err && typeof err === "object")
-        const error = err as { code?: string; message?: string }
+        const error = err as { code?: string }
         assert.equal(error.code, "ebay_shipping_unsupported")
-        assert.match(String(error.message), /USPS Ground Advantage/i)
-        assert.match(String(error.message), /did not substitute/i)
         return true
       }
     )
@@ -849,17 +998,6 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
       calls.some(
         (c) => c.method === "POST" && c.url.includes("/fulfillment_policy")
       ),
-      false
-    )
-    assert.equal(
-      JSON.stringify(calls).includes("USPSPriority") &&
-        calls.some(
-          (c) =>
-            c.method === "POST" &&
-            typeof c.body === "object" &&
-            c.body !== null &&
-            JSON.stringify(c.body).includes("USPSPriority")
-        ),
       false
     )
   })

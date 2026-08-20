@@ -7,6 +7,8 @@ import {
   isStandardEnvelopeService,
   recommendedParcelService,
   resolveEbayShippingService,
+  shippingServiceCodesEquivalent,
+  shippingServiceDisplayLabel,
   STANDARD_ENVELOPE_SERVICE,
   USPS_GROUND_ADVANTAGE,
   UPS_GROUND,
@@ -363,6 +365,43 @@ describe("eBay shipping service resolution", () => {
       availableServices: priorityOnly,
     })
     assert.equal(resolved.code, USPS_GROUND_ADVANTAGE)
+  })
+
+  it("maps friendly carrier labels to eBay API codes and keeps Ground Advantage display", () => {
+    assert.equal(
+      resolveEbayShippingService({
+        sellerPreferredService: "USPS Ground Advantage",
+      }).code,
+      USPS_GROUND_ADVANTAGE
+    )
+    assert.equal(
+      resolveEbayShippingService({
+        sellerPreferredService: "USPS Ground Advantage",
+      }).label,
+      "USPS Ground Advantage"
+    )
+    assert.equal(
+      resolveEbayShippingService({ sellerPreferredService: "UPS Ground" }).code,
+      UPS_GROUND
+    )
+    assert.equal(
+      resolveEbayShippingService({
+        sellerPreferredService: "FedEx Ground / Home Delivery",
+      }).code,
+      FEDEX_HOME_DELIVERY
+    )
+    assert.equal(
+      shippingServiceDisplayLabel("USPSParcel"),
+      "USPS Ground Advantage"
+    )
+    assert.equal(
+      shippingServiceCodesEquivalent("USPS Ground Advantage", "USPSParcel"),
+      true
+    )
+    assert.equal(
+      shippingServiceCodesEquivalent("USPSGroundAdvantage", "USPSPriority"),
+      false
+    )
   })
 
   it("lists grouped USPS/UPS/FedEx parcel services and never envelope", () => {

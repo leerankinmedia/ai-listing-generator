@@ -62,7 +62,7 @@ export type EbayFulfillmentShippingSummary = {
 const SERVICE_LABELS: Record<string, string> = {
   USPSPriority: "USPS Priority Mail",
   USPSFirstClass: "USPS First Class",
-  USPSParcel: "USPS Parcel Select",
+  USPSParcel: "USPS Ground Advantage",
   USPSGroundAdvantage: "USPS Ground Advantage",
   UPSGround: "UPS Ground",
   UPS3rdDay: "UPS 3 Day Select",

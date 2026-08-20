@@ -68,6 +68,33 @@ describe("listing shipping intent", () => {
     assert.match(reviewPackageSummary(baseListing()), /1 lb 8 oz/)
   })
 
+  it("maps the friendly USPS Ground Advantage label to an eBay service code, not the display string", () => {
+    const listing = baseListing({
+      specifics: {
+        ...baseListing().specifics,
+        shippingService: "USPS Ground Advantage",
+        extras: { shippingService: "USPS Ground Advantage" },
+      },
+    })
+    const intent = listingShippingIntent(listing)
+    assert.equal(intent.shippingServiceCode, "USPSGroundAdvantage")
+    assert.notEqual(intent.shippingServiceCode, "USPS Ground Advantage")
+    assert.equal(intent.shippingServiceLabel, "USPS Ground Advantage")
+    assert.equal(reviewShippingSummary(listing), "USPS Ground Advantage — Buyer pays")
+    const body = buildFulfillmentPolicyCreateRequest({
+      ...fulfillmentPolicyArgsFromIntent(intent),
+      name: "ga-label",
+    })
+    assert.equal(
+      body.shippingOptions[0].shippingServices[0].shippingServiceCode,
+      "USPSGroundAdvantage"
+    )
+    assert.notEqual(
+      body.shippingOptions[0].shippingServices[0].shippingServiceCode,
+      "USPS Ground Advantage"
+    )
+  })
+
   it("shows USPS Ground Advantage — Buyer pays even if envelope was stored on apparel", () => {
     const listing = baseListing({
       title: "Women's skinny jeans",

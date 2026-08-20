@@ -67,6 +67,7 @@ const SERVICE_LABELS: Record<string, string> = {
   UPSGround: "UPS Ground",
   FedExHomeDelivery: "FedEx Ground / Home Delivery",
   FedExGround: "FedEx Ground / Home Delivery",
+  US_eBayStandardEnvelope: "eBay Standard Envelope",
   FreightOtherServices: "Freight",
 }
 
@@ -320,12 +321,13 @@ export function buildFulfillmentPolicyCreateRequest(
   const templateMode = args.template
     ? classifyFulfillmentShippingMode(args.template)
     : null
-  const resolvedService =
-    templateMode === args.mode && templateService?.shippingServiceCode?.trim()
-      ? templateService.shippingServiceCode.trim()
-      : service
+  // Never copy a template's shipping service onto a different listing.
+  // Cached/native policies may be Standard Envelope; the current listing's
+  // resolved service is the source of truth.
+  const resolvedService = service
   const carrier =
     (templateMode === args.mode &&
+      templateService?.shippingServiceCode?.trim() === resolvedService &&
       templateService?.shippingCarrierCode?.trim()) ||
     shippingCarrierForService(resolvedService)
 

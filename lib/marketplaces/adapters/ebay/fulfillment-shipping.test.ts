@@ -152,10 +152,10 @@ describe("fulfillment shipping classification", () => {
     assert.equal("default" in body.categoryTypes[0], false)
   })
 
-  it("clones carrier/service from an eBay.com template policy", () => {
+  it("keeps the listing's requested service instead of cloning a template service", () => {
     const template = {
       fulfillmentPolicyId: "ebay-native-1",
-      name: "Calculated: USPS Ground Advantage",
+      name: "ListWise Calculated · US_eBayStandardEnvelope",
       shippingOptions: [
         {
           optionType: "DOMESTIC",
@@ -164,7 +164,7 @@ describe("fulfillment shipping classification", () => {
             {
               sortOrder: 1,
               shippingCarrierCode: "USPS",
-              shippingServiceCode: "USPSGroundAdvantage",
+              shippingServiceCode: "US_eBayStandardEnvelope",
               freeShipping: false,
             },
           ],
@@ -176,7 +176,7 @@ describe("fulfillment shipping classification", () => {
       mode: "calculated",
       name: "Clone",
       handlingDays: 1,
-      shippingServiceCode: "USPSPriority",
+      shippingServiceCode: "USPSGroundAdvantage",
       template,
     })
     assert.equal(

@@ -13,6 +13,7 @@ import {
   handlingTimeLabel,
   shippingServiceLabel,
 } from "@/lib/seller/ebay-defaults"
+import { listingShippingServiceCode } from "@/lib/listings/listing-shipping"
 import type { Listing } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -173,10 +174,7 @@ export function EbayShippingPublishSummary({ listing }: { listing: Listing }) {
     typeof listing.specifics.handlingTimeDays === "number"
       ? listing.specifics.handlingTimeDays
       : 1
-  const service =
-    listing.specifics.shippingService ||
-    listing.specifics.extras?.shippingService ||
-    null
+  const service = listingShippingServiceCode(listing)
   const weight =
     pkg != null
       ? `${pkg.weightPounds || 0} lb ${pkg.weightOunces || 0} oz`

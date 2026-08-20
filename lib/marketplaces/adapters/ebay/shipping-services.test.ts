@@ -41,4 +41,35 @@ describe("eBay GeteBayDetails shipping services", () => {
       "USPSGroundAdvantage"
     )
   })
+
+  it("never falls back to Standard Envelope when it is first in GeteBayDetails", () => {
+    const envelopeFirst = `
+      <ShippingServiceDetails>
+        <ShippingService>US_eBayStandardEnvelope</ShippingService>
+        <ValidForSellingFlow>true</ValidForSellingFlow>
+        <ServiceType>Calculated</ServiceType>
+      </ShippingServiceDetails>
+      <ShippingServiceDetails>
+        <ShippingService>USPSGroundAdvantage</ShippingService>
+        <ValidForSellingFlow>true</ValidForSellingFlow>
+        <ServiceType>Flat</ServiceType>
+        <ServiceType>Calculated</ServiceType>
+      </ShippingServiceDetails>
+    `
+    const services = parseShippingServiceDetailsXml(envelopeFirst)
+    assert.equal(
+      pickValidDomesticServiceCode("USPSGroundAdvantage", services, {
+        preferCalculated: true,
+        allowStandardEnvelope: false,
+      }),
+      "USPSGroundAdvantage"
+    )
+    assert.equal(
+      pickValidDomesticServiceCode("NotARealService", services, {
+        preferCalculated: true,
+        allowStandardEnvelope: false,
+      }),
+      "USPSGroundAdvantage"
+    )
+  })
 })

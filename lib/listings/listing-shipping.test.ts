@@ -68,6 +68,27 @@ describe("listing shipping intent", () => {
     assert.match(reviewPackageSummary(baseListing()), /1 lb 8 oz/)
   })
 
+  it("shows USPS Ground Advantage — Buyer pays even if envelope was stored on apparel", () => {
+    const listing = baseListing({
+      title: "Women's skinny jeans",
+      specifics: {
+        ...baseListing().specifics,
+        ebayCategory: {
+          marketplaceId: "EBAY_US",
+          categoryTreeId: "0",
+          categoryId: "11554",
+          categoryName: "Jeans",
+          categoryPath:
+            "Clothing, Shoes & Accessories > Women > Women's Clothing > Jeans",
+          leafCategory: true,
+        },
+        shippingService: "US_eBayStandardEnvelope",
+      },
+    })
+    assert.equal(listingShippingIntent(listing).shippingServiceCode, "USPSGroundAdvantage")
+    assert.equal(reviewShippingSummary(listing), "USPS Ground Advantage — Buyer pays")
+  })
+
   it("maps calculated intent onto the known-good Account API shape", () => {
     const intent = listingShippingIntent(baseListing())
     const args = fulfillmentPolicyArgsFromIntent(intent)

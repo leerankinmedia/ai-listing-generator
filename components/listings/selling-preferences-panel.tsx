@@ -20,6 +20,7 @@ import {
   missingShippingPackageFields,
   type ShippingPackage,
 } from "@/lib/listings/shipping-package"
+import { listingShippingServiceCode } from "@/lib/listings/listing-shipping"
 import type { Listing } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -109,10 +110,7 @@ export function SellingPreferencesPanel({
 }) {
   const [edit, setEdit] = useState<EditKey>(null)
   const mode = defaultEbayShippingMode(listing.specifics.shippingMode)
-  const service =
-    listing.specifics.shippingService ||
-    listing.specifics.extras?.shippingService ||
-    "USPSGroundAdvantage"
+  const service = listingShippingServiceCode(listing)
   const pkg = listing.specifics.shippingPackage || blankPackage()
   const packageMissing = missingShippingPackageFields(
     listing.specifics.shippingPackage

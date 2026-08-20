@@ -18,6 +18,11 @@ import {
   fetchValidDomesticShippingServices,
   pickValidDomesticServiceCode,
 } from "@/lib/marketplaces/adapters/ebay/shipping-services"
+import {
+  isStandardEnvelopeService,
+  resolveEbayShippingService,
+  shippingServiceCodesEquivalent,
+} from "@/lib/marketplaces/adapters/ebay/shipping-service-resolve"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 
 type EbayPolicy = {
@@ -45,6 +50,21 @@ export type EnsureEbayPoliciesOptions = {
   handlingTimeDays?: number | null
   /** eBay shipping service code (e.g. USPSGroundAdvantage). */
   shippingServiceCode?: string | null
+  /** Listing category + package used to decide envelope eligibility. */
+  categoryId?: string | null
+  categoryName?: string | null
+  categoryPath?: string | null
+  listingCategory?: string | null
+  listingTitle?: string | null
+  listingPrice?: number | null
+  listingCurrency?: string | null
+  shippingPackage?: {
+    weightPounds?: number | null
+    weightOunces?: number | null
+    lengthInches?: number | null
+    widthInches?: number | null
+    heightInches?: number | null
+  } | null
   /** Domestic returns accepted. */
   returnsAccepted?: boolean
   /** Return window days (30 or 60). */
@@ -508,7 +528,8 @@ async function createFulfillmentPolicyForMode(
   template?: EbayFulfillmentPolicyRaw | null,
   setAsDefault = false,
   listingSnapshot?: Record<string, string | number | boolean | null | undefined>,
-  existingPolicies: EbayFulfillmentPolicyRaw[] = []
+  existingPolicies: EbayFulfillmentPolicyRaw[] = [],
+  allowStandardEnvelope = false
 ): Promise<{ id: string; usedMode: EbayShippingMode }> {
   const days = Math.max(0, Math.min(30, Math.floor(handlingDays || 1)))
   let service =
@@ -517,15 +538,15 @@ async function createFulfillmentPolicyForMode(
 
   const discovered = await fetchValidDomesticShippingServices(accessToken)
   if (discovered.length > 0) {
-    const resolved = pickValidDomesticServiceCode(
-      service,
-      discovered,
-      mode === "calculated"
-    )
+    const resolved = pickValidDomesticServiceCode(service, discovered, {
+      preferCalculated: mode === "calculated",
+      allowStandardEnvelope,
+    })
     if (resolved !== service) {
       logPolicies("remapped shippingServiceCode from GeteBayDetails", {
         requested: service,
         resolved,
+        allowStandardEnvelope: allowStandardEnvelope ? "true" : "false",
       })
       service = resolved
     }
@@ -804,15 +825,23 @@ export function pickFulfillmentForMode(
   let pool = withHandling.length > 0 ? withHandling : matching
 
   const serviceWanted = String(shippingServiceCode || "").trim()
+  const envelopeWanted = isStandardEnvelopeService(serviceWanted)
+
+  // Envelope policies are never a generic calculated/flat reuse target.
+  if (!envelopeWanted) {
+    pool = pool.filter((p) => {
+      const summary = summarizeFulfillmentPolicy(p)
+      return !isStandardEnvelopeService(summary?.serviceCode)
+    })
+  }
+
   if (serviceWanted) {
     const withService = pool.filter((p) => {
       const summary = summarizeFulfillmentPolicy(p)
-      return (
-        !summary?.serviceCode ||
-        summary.serviceCode.toLowerCase() === serviceWanted.toLowerCase()
-      )
+      return shippingServiceCodesEquivalent(summary?.serviceCode, serviceWanted)
     })
-    if (withService.length > 0) pool = withService
+    if (withService.length === 0) return undefined
+    pool = withService
   }
 
   if (mode === "flat" && flatAmount != null && Number.isFinite(flatAmount)) {
@@ -877,13 +906,30 @@ export function pickReturnPolicy(
 function cachedFulfillment(
   policies: EbayFulfillmentPolicyRaw[],
   cache: EbayPolicyCache,
-  key: string
+  key: string,
+  shippingServiceCode?: string | null
 ): EbayFulfillmentPolicyRaw | undefined {
   const id = cache.fulfillment[key]?.trim()
   if (!id) return undefined
   const found = policies.find((p) => p.fulfillmentPolicyId === id)
   if (!found) return undefined
   if (!fulfillmentPolicyHasUsableLogistics(found)) return undefined
+  const summary = summarizeFulfillmentPolicy(found)
+  const wanted = String(shippingServiceCode || "").trim()
+  const keyService = key.split("|")[1] || ""
+  const expected = wanted || keyService
+  if (
+    expected &&
+    !shippingServiceCodesEquivalent(summary?.serviceCode, expected)
+  ) {
+    return undefined
+  }
+  if (
+    isStandardEnvelopeService(summary?.serviceCode) &&
+    !isStandardEnvelopeService(expected)
+  ) {
+    return undefined
+  }
   return found
 }
 
@@ -895,6 +941,16 @@ export function invalidateUnusableFulfillmentCache(
   for (const [key, id] of Object.entries(cache.fulfillment)) {
     const policy = policies.find((p) => p.fulfillmentPolicyId === id)
     if (!policy || !fulfillmentPolicyHasUsableLogistics(policy)) {
+      delete cache.fulfillment[key]
+      dropped.push(id)
+      continue
+    }
+    const summary = summarizeFulfillmentPolicy(policy)
+    const keyService = key.split("|")[1] || ""
+    if (
+      keyService &&
+      !shippingServiceCodesEquivalent(summary?.serviceCode, keyService)
+    ) {
       delete cache.fulfillment[key]
       dropped.push(id)
     }
@@ -968,8 +1024,21 @@ export async function ensureEbayBusinessPolicyIds(
     Number.isFinite(options.handlingTimeDays)
       ? Math.max(0, Math.min(30, Math.floor(options.handlingTimeDays)))
       : 1
-  const shippingServiceCode =
-    String(options.shippingServiceCode || "").trim() || "USPSGroundAdvantage"
+  const serviceResolution = resolveEbayShippingService({
+    marketplaceId: marketplaceId(),
+    categoryId: options.categoryId,
+    categoryName: options.categoryName,
+    categoryPath: options.categoryPath,
+    listingCategory: options.listingCategory,
+    title: options.listingTitle,
+    price: options.listingPrice,
+    currency: options.listingCurrency,
+    package: options.shippingPackage || null,
+    sellerPreferredService: options.shippingServiceCode,
+    shippingMode,
+  })
+  const shippingServiceCode = serviceResolution.code
+  const allowStandardEnvelope = serviceResolution.envelopeEligible
   const returnsAccepted = options.returnsAccepted !== false
   const returnWindowDays = options.returnWindowDays === 60 ? 60 : 30
   const returnShippingPaidBy =
@@ -989,7 +1058,7 @@ export async function ensureEbayBusinessPolicyIds(
   )
 
   let selected =
-    cachedFulfillment(fulfillment, cache, fKey) ||
+    cachedFulfillment(fulfillment, cache, fKey, shippingServiceCode) ||
     pickFulfillmentForMode(
       fulfillment,
       shippingMode,
@@ -998,14 +1067,21 @@ export async function ensureEbayBusinessPolicyIds(
       shippingServiceCode
     )
 
-  if (!selected) {
-    selected = pickFulfillmentForMode(
-      fulfillment,
-      shippingMode,
-      options.flatShippingAmount,
-      null,
-      null
-    )
+  if (selected) {
+    const summary = summarizeFulfillmentPolicy(selected)
+    const compatible =
+      shippingServiceCodesEquivalent(summary?.serviceCode, shippingServiceCode) &&
+      (allowStandardEnvelope || !isStandardEnvelopeService(summary?.serviceCode))
+    if (!compatible) {
+      logPolicies("discarding incompatible cached/listed fulfillment policy", {
+        fulfillmentPolicyId: summary?.fulfillmentPolicyId,
+        policyService: summary?.serviceCode,
+        requestedService: shippingServiceCode,
+        envelopeEligible: allowStandardEnvelope ? "true" : "false",
+      })
+      delete cache.fulfillment[fKey]
+      selected = undefined
+    }
   }
 
   if (selected) {
@@ -1023,14 +1099,13 @@ export async function ensureEbayBusinessPolicyIds(
 
   if (!selected) {
     const template =
-      fulfillment.find((p) => classifyFulfillmentShippingMode(p) === shippingMode) ||
       fulfillment.find((p) => {
-        const m = classifyFulfillmentShippingMode(p)
-        return shippingMode === "free"
-          ? m === "flat" || m === "free"
-          : m === "calculated" || m === "flat"
-      }) ||
-      null
+        const summary = summarizeFulfillmentPolicy(p)
+        return (
+          classifyFulfillmentShippingMode(p) === shippingMode &&
+          shippingServiceCodesEquivalent(summary?.serviceCode, shippingServiceCode)
+        )
+      }) || null
 
     const created = await createFulfillmentPolicyForMode(
       accessToken,
@@ -1046,10 +1121,17 @@ export async function ensureEbayBusinessPolicyIds(
         shippingMode,
         handlingTimeDays: handlingDays,
         shippingServiceCode,
+        resolvedReason: serviceResolution.reason,
+        envelopeEligible: allowStandardEnvelope,
+        ordinaryParcel: serviceResolution.ordinaryParcelMerchandise,
+        categoryId: options.categoryId || null,
+        categoryPath: options.categoryPath || null,
+        listingPrice: options.listingPrice ?? null,
         flatShippingAmount: options.flatShippingAmount ?? null,
         existingFulfillmentCount: fulfillment.length,
       },
-      fulfillment
+      fulfillment,
+      allowStandardEnvelope
     )
     fulfillment = await listEbayFulfillmentPolicies(accessToken)
     selected =
@@ -1111,6 +1193,17 @@ export async function ensureEbayBusinessPolicyIds(
         400
       )
     }
+  }
+
+  if (
+    isStandardEnvelopeService(fulfillmentSummary.serviceCode) &&
+    !allowStandardEnvelope
+  ) {
+    throw new MarketplaceError(
+      "eBay Standard Envelope is not eligible for this listing. Choose a parcel service such as USPS Ground Advantage.",
+      "ebay_envelope_not_eligible",
+      400
+    )
   }
 
   cache.fulfillment[fKey] = fulfillmentSummary.fulfillmentPolicyId

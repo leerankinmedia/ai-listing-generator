@@ -127,6 +127,45 @@ describe("eBay policy reuse helpers", () => {
     assert.equal(cached?.payment.standard, "pay-lw")
   })
 
+  it("does not reuse a Standard Envelope policy for apparel / Ground Advantage", () => {
+    const envelopePolicy: EbayFulfillmentPolicyRaw = {
+      fulfillmentPolicyId: "f-env",
+      name: "ListWise Calculated · US_eBayStandardEnvelope",
+      handlingTime: { value: 1, unit: "DAY" },
+      shippingOptions: [
+        {
+          optionType: "DOMESTIC",
+          costType: "CALCULATED",
+          shippingServices: [
+            {
+              shippingCarrierCode: "USPS",
+              shippingServiceCode: "US_eBayStandardEnvelope",
+              freeShipping: false,
+            },
+          ],
+        },
+      ],
+    }
+    const picked = pickFulfillmentForMode(
+      [envelopePolicy, calculatedPolicy],
+      "calculated",
+      null,
+      1,
+      "USPSGroundAdvantage"
+    )
+    assert.equal(picked?.fulfillmentPolicyId, "f-calc-1")
+    assert.equal(
+      pickFulfillmentForMode(
+        [envelopePolicy],
+        "calculated",
+        null,
+        1,
+        "USPSGroundAdvantage"
+      ),
+      undefined
+    )
+  })
+
   it("only asks the seller to act when eBay explicitly requires a manual opt-in", () => {
     assert.equal(
       optInRequiresManualUserAction(
@@ -600,6 +639,112 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
         const body = c.body as { shippingOptions?: Array<{ costType?: string }> }
         return body.shippingOptions?.[0]?.costType === "FLAT_RATE"
       }),
+      true
+    )
+  })
+
+  it("rejects a cached Standard Envelope policy for apparel and creates Ground Advantage", async () => {
+    const envelopePolicy: EbayFulfillmentPolicyRaw = {
+      fulfillmentPolicyId: "f-env",
+      name: "ListWise Calculated · US_eBayStandardEnvelope",
+      handlingTime: { value: 1, unit: "DAY" },
+      shippingOptions: [
+        {
+          optionType: "DOMESTIC",
+          costType: "CALCULATED",
+          shippingServices: [
+            {
+              shippingCarrierCode: "USPS",
+              shippingServiceCode: "US_eBayStandardEnvelope",
+              freeShipping: false,
+            },
+          ],
+        },
+      ],
+    }
+    let created = false
+    mockEbay((url, method, body) => {
+      if (url.includes("/program/get_opted_in_programs")) {
+        return jsonResponse(200, {
+          programs: [{ programType: "SELLING_POLICY_MANAGEMENT" }],
+        })
+      }
+      if (url.includes("/fulfillment_policy") && method === "GET") {
+        return jsonResponse(200, {
+          fulfillmentPolicies: created
+            ? [
+                envelopePolicy,
+                { ...calculatedPolicy, fulfillmentPolicyId: "f-ga" },
+              ]
+            : [envelopePolicy],
+        })
+      }
+      if (url.includes("/fulfillment_policy") && method === "POST") {
+        created = true
+        const req = body as {
+          shippingOptions?: Array<{
+            shippingServices?: Array<{ shippingServiceCode?: string }>
+          }>
+        }
+        assert.equal(
+          req.shippingOptions?.[0]?.shippingServices?.[0]?.shippingServiceCode,
+          "USPSGroundAdvantage"
+        )
+        return jsonResponse(201, { fulfillmentPolicyId: "f-ga" })
+      }
+      if (url.includes("/payment_policy") && method === "GET") {
+        return jsonResponse(200, {
+          paymentPolicies: [
+            { paymentPolicyId: "pay-lw", name: "ListWise Payment", immediatePay: false },
+          ],
+        })
+      }
+      if (url.includes("/return_policy") && method === "GET") {
+        return jsonResponse(200, {
+          returnPolicies: [
+            {
+              returnPolicyId: "ret-30",
+              returnsAccepted: true,
+              returnPeriod: { value: 30, unit: "DAY" },
+              returnShippingCostPayer: "BUYER",
+            },
+          ],
+        })
+      }
+      return jsonResponse(500, { errors: [{ message: `unexpected ${method} ${url}` }] })
+    })
+
+    const key = fulfillmentCacheKey("calculated", "USPSGroundAdvantage", 1)
+    const result = await ensureEbayBusinessPolicyIds("token", {
+      shippingMode: "calculated",
+      shippingServiceCode: "US_eBayStandardEnvelope",
+      handlingTimeDays: 1,
+      categoryId: "11554",
+      categoryName: "Jeans",
+      categoryPath:
+        "Clothing, Shoes & Accessories > Women > Women's Clothing > Jeans",
+      listingTitle: "American Eagle Women's Jeans",
+      listingPrice: 28,
+      listingCurrency: "USD",
+      shippingPackage: {
+        weightPounds: 0,
+        weightOunces: 8,
+        lengthInches: 12,
+        widthInches: 9,
+        heightInches: 1,
+      },
+      policyCache: {
+        marketplaceId: "EBAY_US",
+        fulfillment: { [key]: "f-env" },
+        payment: { standard: "pay-lw" },
+        returns: { "1|30|BUYER": "ret-30" },
+      },
+    })
+    assert.equal(result.fulfillmentPolicyId, "f-ga")
+    assert.equal(result.fulfillmentSummary.serviceCode, "USPSGroundAdvantage")
+    assert.notEqual(result.policyCache.fulfillment[key], "f-env")
+    assert.equal(
+      calls.some((c) => c.method === "POST" && c.url.includes("/fulfillment_policy")),
       true
     )
   })

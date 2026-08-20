@@ -1,5 +1,15 @@
 import { xmlText } from "@/lib/marketplaces/adapters/ebay/trading-parse"
 import { ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
+import {
+  FEDEX_GROUND,
+  FEDEX_HOME_DELIVERY,
+  isParcelService,
+  isStandardEnvelopeService,
+  shippingServiceCodesEquivalent,
+  UPS_GROUND,
+  USPS_GROUND_ADVANTAGE,
+  USPS_PRIORITY,
+} from "@/lib/marketplaces/adapters/ebay/shipping-service-resolve"
 
 export type EbayDomesticShippingService = {
   code: string
@@ -44,28 +54,72 @@ export function parseShippingServiceDetailsXml(
 export function pickValidDomesticServiceCode(
   requested: string,
   services: EbayDomesticShippingService[],
-  preferCalculated: boolean
+  options: boolean | {
+    preferCalculated?: boolean
+    allowStandardEnvelope?: boolean
+  } = false
 ): string {
+  const preferCalculated =
+    typeof options === "boolean" ? options : Boolean(options.preferCalculated)
+  const allowStandardEnvelope =
+    typeof options === "boolean" ? false : Boolean(options.allowStandardEnvelope)
+
   const wanted = requested.trim()
   const domestic = services.filter(
     (s) => s.validForSellingFlow && !s.international
   )
-  if (domestic.length === 0) return wanted || "USPSGroundAdvantage"
+  if (domestic.length === 0) {
+    if (
+      wanted &&
+      (allowStandardEnvelope ||
+        !isStandardEnvelopeService(wanted))
+    ) {
+      return wanted
+    }
+    return USPS_GROUND_ADVANTAGE
+  }
 
-  const exact = domestic.find(
-    (s) => s.code.toLowerCase() === wanted.toLowerCase()
+  const usable = domestic.filter(
+    (s) => allowStandardEnvelope || !isStandardEnvelopeService(s.code)
+  )
+
+  const exact = usable.find((s) =>
+    shippingServiceCodesEquivalent(s.code, wanted)
   )
   if (exact) return exact.code
 
-  if (preferCalculated) {
-    const calculated = domestic.find((s) =>
-      s.serviceTypes.some((t) => t.toUpperCase() === "CALCULATED")
+  if (wanted && isStandardEnvelopeService(wanted) && !allowStandardEnvelope) {
+    // Specialized envelope was requested but this listing is not eligible.
+  } else if (wanted && isParcelService(wanted)) {
+    const parcelExact = usable.find((s) =>
+      shippingServiceCodesEquivalent(s.code, wanted)
     )
-    if (calculated) return calculated.code
+    if (parcelExact) return parcelExact.code
   }
 
-  const usps = domestic.find((s) => /^USPS/i.test(s.code))
-  return usps?.code || domestic[0].code
+  const pool = preferCalculated
+    ? usable.filter((s) =>
+        s.serviceTypes.some((t) => t.toUpperCase() === "CALCULATED")
+      )
+    : usable
+  const search = pool.length > 0 ? pool : usable
+
+  const preferredOrder = [
+    USPS_GROUND_ADVANTAGE,
+    UPS_GROUND,
+    FEDEX_HOME_DELIVERY,
+    FEDEX_GROUND,
+    USPS_PRIORITY,
+  ]
+  for (const code of preferredOrder) {
+    const hit = search.find((s) => shippingServiceCodesEquivalent(s.code, code))
+    if (hit) return hit.code
+  }
+
+  const parcel = search.find((s) => isParcelService(s.code))
+  if (parcel) return parcel.code
+
+  return USPS_GROUND_ADVANTAGE
 }
 
 /**

@@ -5,6 +5,7 @@
 
 import type { Listing, ListingShippingPackage } from "@/lib/types"
 import type { EbayShippingMode } from "@/lib/marketplaces/adapters/ebay/fulfillment-shipping"
+import { shippingServiceDisplayLabel } from "@/lib/marketplaces/adapters/ebay/shipping-service-resolve"
 import {
   DEFAULT_EBAY_PACKAGE_TYPE,
   shippingPackageIsComplete,
@@ -196,8 +197,7 @@ export function handlingTimeLabel(days: number | null | undefined): string {
 }
 
 export function shippingServiceLabel(code: string | null | undefined): string {
-  const match = EBAY_SHIPPING_SERVICE_OPTIONS.find((o) => o.value === code)
-  return match?.label || code || "USPS Ground Advantage"
+  return shippingServiceDisplayLabel(code)
 }
 
 export function shippingWhoPaysLabel(mode: EbayShippingMode): string {

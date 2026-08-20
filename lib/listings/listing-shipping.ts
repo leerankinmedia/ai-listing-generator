@@ -13,6 +13,7 @@ import {
   shippingServiceLabel,
   shippingWhoPaysLabel,
 } from "@/lib/seller/ebay-defaults"
+import { resolveEbayShippingService } from "@/lib/marketplaces/adapters/ebay/shipping-service-resolve"
 import {
   shippingPackageIsComplete,
   totalWeightPounds,
@@ -53,11 +54,23 @@ export function listingInternationalShipping(listing: Listing): boolean {
 }
 
 export function listingShippingServiceCode(listing: Listing): string {
-  return (
+  const preferred =
     listing.specifics.shippingService?.trim() ||
     listing.specifics.extras?.shippingService?.trim() ||
-    "USPSGroundAdvantage"
-  )
+    ""
+  return resolveEbayShippingService({
+    marketplaceId: listing.specifics.ebayCategory?.marketplaceId,
+    categoryId: listing.specifics.ebayCategory?.categoryId,
+    categoryName: listing.specifics.ebayCategory?.categoryName,
+    categoryPath: listing.specifics.ebayCategory?.categoryPath,
+    listingCategory: listing.specifics.category,
+    title: listing.title,
+    price: listing.price,
+    currency: listing.currency,
+    package: listing.specifics.shippingPackage || null,
+    sellerPreferredService: preferred || null,
+    shippingMode: listing.specifics.shippingMode,
+  }).code
 }
 
 export function listingShippingIntent(listing: Listing): ListingShippingIntent {

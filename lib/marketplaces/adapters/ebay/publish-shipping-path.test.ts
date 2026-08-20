@@ -301,7 +301,7 @@ describe("production-equivalent eBay publish path — calculated parcel services
         assert.equal(item.packageWeightAndSize?.dimensions?.length, 17)
         assert.equal(item.packageWeightAndSize?.dimensions?.width, 14)
         assert.equal(item.packageWeightAndSize?.dimensions?.height, 2)
-        return jsonResponse(204, {})
+        return new Response(null, { status: 204 })
       }
       if (url.includes("/sell/inventory/v1/offer") && method === "POST" && !url.includes("/publish")) {
         const offer = body as {

@@ -83,4 +83,26 @@ describe("toEbayPackageWeightAndSize", () => {
     assert.equal(n.weightOunces, 4)
     assert.equal(totalWeightPounds({ weightPounds: 0, weightOunces: 8 }), 0.5)
   })
+
+  it("includes shippingIrregular only when the package is irregular", () => {
+    const regular = toEbayPackageWeightAndSize({
+      weightPounds: 1,
+      weightOunces: 0,
+      lengthInches: 12,
+      widthInches: 9,
+      heightInches: 2,
+      packageType: "MAILING_BOX",
+    })
+    assert.equal(regular.shippingIrregular, undefined)
+    const irregular = toEbayPackageWeightAndSize({
+      weightPounds: 1,
+      weightOunces: 0,
+      lengthInches: 12,
+      widthInches: 9,
+      heightInches: 2,
+      packageType: "MAILING_BOX",
+      irregularPackage: true,
+    })
+    assert.equal(irregular.shippingIrregular, true)
+  })
 })

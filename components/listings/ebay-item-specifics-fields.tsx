@@ -5,6 +5,7 @@ import { Check, ChevronDown, ChevronRight, Sparkles } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
+  additionalReviewSpecificsCount,
   formatAiEmployeeBanner,
   readAspectValue,
   resolveSelectValue,
@@ -403,6 +404,10 @@ export function EbayItemSpecificsFields({
     variant === "review"
       ? splitAspectFieldsForReviewDraft(fields, listing)
       : splitAspectFieldsForDisplay(fields, listing)
+  const moreFilled =
+    variant === "review"
+      ? additionalReviewSpecificsCount(fields, listing)
+      : more.filter((view) => view.value.trim()).length
 
   return (
     <div className="space-y-4">
@@ -447,12 +452,21 @@ export function EbayItemSpecificsFields({
                 <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
               )}
               <div>
-                <p className="text-sm font-semibold">More item details</p>
+                <p className="text-sm font-semibold">
+                  {variant === "review"
+                    ? moreFilled > 0
+                      ? `${moreFilled} more…`
+                      : "More item details"
+                    : "More item details"}
+                </p>
                 <p className="text-xs text-muted-foreground">
-                  {summary.completed} of {summary.total} completed
-                  {autoFilledCount > 0
-                    ? ` · ${autoFilledCount} auto-filled`
-                    : ""}
+                  {variant === "review"
+                    ? "Optional specifics"
+                    : `${summary.completed} of ${summary.total} completed${
+                        autoFilledCount > 0
+                          ? ` · ${autoFilledCount} auto-filled`
+                          : ""
+                      }`}
                 </p>
               </div>
             </div>

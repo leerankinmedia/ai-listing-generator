@@ -102,7 +102,13 @@ Identity rules (critical):
 - Detect licensed characters, franchises, logos, embroidery, patches, and graphic details.
   Examples: Looney Tunes + Tweety Bird embroidery; Disney + Mickey; sports team logos.
 - photoKind must reflect the photo: garment | tag | label | graphic | detail | other.
-- Read EVERY visible tag/label with OCR-level care for brand, size, material, country, style number, and gender.
+- Read EVERY visible tag/label with OCR-level care for brand, size, material, country, style number, gender, waist, inseam, care, model, product line, and identifiers.
+- Clothing construction: when visible, fill fit, rise, closure, pocket type, fabric wash, fabric type, size type, and accents. Use Unknown when not clearly evidenced.
+- Never invent brands, sizes, labels, MPNs, UPCs, models, or product lines you cannot see.
+- MPN: only if the tag is labeled MPN / Manufacturer Part Number. Never copy a style number into MPN. Otherwise Unknown.
+- UPC: only if a barcode/UPC is readable. Otherwise Unknown.
+- Season: Unknown unless labeled. Do not default to All Seasons.
+- Never leave brand as Unknown when a licensed property or recognizable brand label is visible.
 - When a tag says Looney Tunes (or shows an official Looney Tunes label), brand AND licensedProperty = "Looney Tunes".
 - When Tweety (or Tweety Bird) is embroidered/printed/labeled, character = "Tweety Bird".
 - Theme example when cartoon IP is present: "Cartoon, Looney Tunes".
@@ -131,7 +137,8 @@ Identity rules (critical):
 const IDENTITY_SECOND_PASS_SYSTEM = `You are ListWise Identity Vision — a second-pass specialist.
 Your ONLY job is to inspect logos, characters, embroidery, patches, graphics, brand marks, and every readable tag/label across ALL photos together.
 Do not treat the item as a generic garment. Name franchises and characters when visually clear (e.g. Looney Tunes / Tweety Bird).
-Tag text overrides guesses from cover shots for brand, size, material, country, style number, and gender.
+Tag text overrides guesses from cover shots for brand, size, material, country, style number, waist, inseam, care, gender, model, product line, MPN, and UPC.
+MPN/UPC must stay Unknown unless the tag/barcode actually shows them. Never invent identifiers.
 If an official Looney Tunes label/tag is visible, brand and licensedProperty must be "Looney Tunes".
 Return Unknown only when truly not visible.`
 
@@ -197,8 +204,9 @@ async function detectSingleImage(
       type: "text",
       text: `Analyze photo ${photoNumber} of ${totalImages} individually.
 Classify photoKind (garment/tag/label/graphic/detail/other).
-Return brand, licensedProperty, character, theme, features, itemType, category, size, color, material, style, styleNumber, countryOfOrigin, pattern, gender, condition, and flaws.
-Prioritize readable tags for brand/size/material/country/style number/gender.
+Return brand, licensedProperty, character, theme, features, itemType, category, size, color, material, style, styleNumber, countryOfOrigin, waistSize, inseam, fit, rise, closure, fabricWash, pocketType, fabricType, garmentCare, sizeType, season, accents, model, productLine, mpn, upc, pattern, gender, condition, and flaws.
+Prioritize readable tags for brand/size/material/country/style number/waist/inseam/care/gender.
+MPN and UPC stay Unknown unless the tag/barcode is explicitly labeled and readable — never invent identifiers.
 Detect characters, franchises, logos, embroidery, and patches when visible.
 For flaws: use "None visible" unless a defect is clearly and strongly evidenced in this photo. Do not invent wrinkles or fading.${sellerContextBlock(sellerNotes)}`,
     },
@@ -247,8 +255,9 @@ async function detectBatch(
       type: "text",
       text: `Batch ${batchIndex + 1}: analyze EACH of these ${batch.length} photos individually (photos ${startIndex + 1}–${startIndex + batch.length} of ${totalImages}).
 Return one analysis object per photo in the same order.
-For every image: photoKind, brand, licensedProperty, character, theme, features, itemType, category, size, color, material, style, styleNumber, countryOfOrigin, pattern, gender, condition, and flaws.
+For every image: photoKind, brand, licensedProperty, character, theme, features, itemType, category, size, color, material, style, styleNumber, countryOfOrigin, waistSize, inseam, fit, rise, closure, fabricWash, pocketType, fabricType, garmentCare, sizeType, season, accents, model, productLine, mpn, upc, pattern, gender, condition, and flaws.
 Read tags carefully; detect characters/franchises/logos/embroidery/patches.
+MPN/UPC stay Unknown unless explicitly labeled and readable — never invent.
 For flaws: use "None visible" unless a defect is clearly and strongly evidenced in that photo. Do not invent wrinkles or fading.${sellerContextBlock(sellerNotes)}`,
     },
   ]
@@ -477,6 +486,11 @@ function mergeDetections(detections: ImageDetection[]): {
 function toIdentitySecondPass(
   result: IdentitySecondPassResult
 ): IdentitySecondPass {
+  const unk = {
+    value: "Unknown",
+    confidence: 0,
+    rationale: "Not returned",
+  }
   return {
     brand: result.brand,
     licensedProperty: result.licensedProperty,
@@ -489,6 +503,22 @@ function toIdentitySecondPass(
     material: result.material,
     styleNumber: result.styleNumber,
     countryOfOrigin: result.countryOfOrigin,
+    waistSize: result.waistSize || unk,
+    inseam: result.inseam || unk,
+    fit: result.fit || unk,
+    rise: result.rise || unk,
+    closure: result.closure || unk,
+    fabricWash: result.fabricWash || unk,
+    pocketType: result.pocketType || unk,
+    fabricType: result.fabricType || unk,
+    garmentCare: result.garmentCare || unk,
+    sizeType: result.sizeType || unk,
+    season: result.season || unk,
+    accents: result.accents || unk,
+    model: result.model || unk,
+    productLine: result.productLine || unk,
+    mpn: result.mpn || unk,
+    upc: result.upc || unk,
     pattern: result.pattern,
     logoAndGraphicSummary: result.logoAndGraphicSummary,
     tagTextSummary: result.tagTextSummary,
@@ -512,7 +542,9 @@ async function recognizeIdentitySecondPass(
 - Licensed franchises / brands on tags and marks
 - Characters (embroidery, prints, patches)
 - Logos, graphic details, text on garment
-- Full tag OCR: brand, size, material, country, style number, gender
+- Full tag OCR: brand, size, material, country, style number, waist, inseam, care, gender, model, product line
+- MPN only if labeled MPN; UPC only if barcode is readable — never invent identifiers
+- Construction when visible: fit, rise, closure, pocket type, fabric wash, fabric type, size type, accents
 
 First-pass garment summary (may be incomplete — correct and enrich):
 ${JSON.stringify(
@@ -525,6 +557,12 @@ ${JSON.stringify(
     itemType: firstPass.itemType,
     size: firstPass.size,
     pattern: firstPass.pattern,
+    waistSize: firstPass.waistSize,
+    fit: firstPass.fit,
+    rise: firstPass.rise,
+    closure: firstPass.closure,
+    mpn: firstPass.mpn,
+    upc: firstPass.upc,
   },
   null,
   2
@@ -991,6 +1029,19 @@ export async function generateListingFromImages(
         features: fields.features,
         itemType: fields.itemType,
         licensedProperty: fields.licensedProperty,
+        waistSize: fields.waistSize,
+        inseam: fields.inseam,
+        fit: fields.fit,
+        rise: fields.rise,
+        closure: fields.closure,
+        fabricWash: fields.fabricWash,
+        pocketType: fields.pocketType,
+        fabricType: fields.fabricType,
+        garmentCare: fields.garmentCare,
+        sizeType: fields.sizeType,
+        accents: fields.accents,
+        model: fields.model,
+        productLine: fields.productLine,
       },
       visionImages,
       detections.length,
@@ -1062,6 +1113,25 @@ export async function generateListingFromImages(
     theme: fields.theme,
     features: fields.features,
     itemType: fields.itemType,
+    licensedProperty: fields.licensedProperty,
+    styleNumber: fields.styleNumber,
+    countryOfOrigin: fields.countryOfOrigin,
+    waistSize: fields.waistSize,
+    inseam: fields.inseam,
+    fit: fields.fit,
+    rise: fields.rise,
+    closure: fields.closure,
+    fabricWash: fields.fabricWash,
+    pocketType: fields.pocketType,
+    fabricType: fields.fabricType,
+    garmentCare: fields.garmentCare,
+    sizeType: fields.sizeType,
+    season: fields.season,
+    accents: fields.accents,
+    model: fields.model,
+    productLine: fields.productLine,
+    mpn: fields.mpn,
+    upc: fields.upc,
     title: {
       value: copy.title.value,
       confidence: copy.title.confidence,

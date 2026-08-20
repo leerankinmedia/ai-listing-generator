@@ -46,6 +46,25 @@ export type DetectedFieldKey =
   | "theme"
   | "features"
   | "itemType"
+  | "licensedProperty"
+  | "styleNumber"
+  | "countryOfOrigin"
+  | "waistSize"
+  | "inseam"
+  | "fit"
+  | "rise"
+  | "closure"
+  | "fabricWash"
+  | "pocketType"
+  | "fabricType"
+  | "garmentCare"
+  | "sizeType"
+  | "season"
+  | "accents"
+  | "model"
+  | "productLine"
+  | "mpn"
+  | "upc"
   | "title"
   | "description"
   | "price"
@@ -104,6 +123,8 @@ export interface ListingShippingPackage {
   widthInches: number | null
   heightInches: number | null
   packageType: string
+  /** Inventory API shippingIrregular — default false. */
+  irregularPackage?: boolean
 }
 
 /** Selected leaf eBay category (Taxonomy) — never a hardcoded map. */
@@ -160,6 +181,10 @@ export interface ListingSpecifics {
   handlingTimeDays?: number
   /** Required when shippingMode is free. */
   freeShippingConfirmed?: boolean
+  /** Seller item location ZIP (Inventory location). Not an item specific. */
+  itemLocationZip?: string
+  /** International shipping off unless the seller explicitly enables it. */
+  internationalShipping?: boolean
   /** When true, enable eBay Best Offer on the listing. */
   allowOffers?: boolean
   /** Domestic returns accepted. */

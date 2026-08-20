@@ -46,6 +46,7 @@ export type EbayPackageWeightAndSize = {
     unit: "POUND" | "KILOGRAM" | "OUNCE" | "GRAM"
   }
   packageType: string
+  shippingIrregular?: boolean
 }
 
 export type EbayInventoryItemPayload = {
@@ -440,6 +441,7 @@ export function sanitizeEbayPackageWeightAndSize(
         unit: weightUnit,
       },
       packageType,
+      ...(obj.shippingIrregular === true ? { shippingIrregular: true } : {}),
     },
     issues,
     blockingIssues,

@@ -4,6 +4,10 @@
  */
 
 import type { ImageDetection } from "@/lib/listings/schema"
+import {
+  isVerifiedProductIdentifier,
+  type ProductIdentifierKind,
+} from "@/lib/listings/product-identifiers"
 import type { DetectedFieldKey, FieldConfidence } from "@/lib/types"
 
 export const IDENTITY_CONFIRM_THRESHOLD = 0.9
@@ -34,6 +38,22 @@ export type IdentityFields = {
   licensedProperty: FieldConfidence
   styleNumber: FieldConfidence
   countryOfOrigin: FieldConfidence
+  waistSize: FieldConfidence
+  inseam: FieldConfidence
+  fit: FieldConfidence
+  rise: FieldConfidence
+  closure: FieldConfidence
+  fabricWash: FieldConfidence
+  pocketType: FieldConfidence
+  fabricType: FieldConfidence
+  garmentCare: FieldConfidence
+  sizeType: FieldConfidence
+  season: FieldConfidence
+  accents: FieldConfidence
+  model: FieldConfidence
+  productLine: FieldConfidence
+  mpn: FieldConfidence
+  upc: FieldConfidence
 }
 
 export type IdentitySecondPass = {
@@ -48,10 +68,57 @@ export type IdentitySecondPass = {
   material: FieldConfidence
   styleNumber: FieldConfidence
   countryOfOrigin: FieldConfidence
+  waistSize: FieldConfidence
+  inseam: FieldConfidence
+  fit: FieldConfidence
+  rise: FieldConfidence
+  closure: FieldConfidence
+  fabricWash: FieldConfidence
+  pocketType: FieldConfidence
+  fabricType: FieldConfidence
+  garmentCare: FieldConfidence
+  sizeType: FieldConfidence
+  season: FieldConfidence
+  accents: FieldConfidence
+  model: FieldConfidence
+  productLine: FieldConfidence
+  mpn: FieldConfidence
+  upc: FieldConfidence
   pattern: FieldConfidence
   logoAndGraphicSummary: string
   tagTextSummary: string
 }
+
+/** Vision identity field → eBay extra / Taxonomy aspect name. */
+export const IDENTITY_EXTRA_ASPECT_MAP: Array<{
+  extraKey: string
+  field: keyof IdentityFields
+  identifier?: ProductIdentifierKind
+}> = [
+  { extraKey: "Character", field: "character" },
+  { extraKey: "Theme", field: "theme" },
+  { extraKey: "Features", field: "features" },
+  { extraKey: "Type", field: "itemType" },
+  { extraKey: "Style Number", field: "styleNumber" },
+  { extraKey: "Country of Origin", field: "countryOfOrigin" },
+  { extraKey: "Licensed Property", field: "licensedProperty" },
+  { extraKey: "Waist Size", field: "waistSize" },
+  { extraKey: "Inseam", field: "inseam" },
+  { extraKey: "Fit", field: "fit" },
+  { extraKey: "Rise", field: "rise" },
+  { extraKey: "Closure", field: "closure" },
+  { extraKey: "Fabric Wash", field: "fabricWash" },
+  { extraKey: "Pocket Type", field: "pocketType" },
+  { extraKey: "Fabric Type", field: "fabricType" },
+  { extraKey: "Garment Care", field: "garmentCare" },
+  { extraKey: "Size Type", field: "sizeType" },
+  { extraKey: "Season", field: "season" },
+  { extraKey: "Accents", field: "accents" },
+  { extraKey: "Model", field: "model" },
+  { extraKey: "Product Line", field: "productLine" },
+  { extraKey: "MPN", field: "mpn", identifier: "mpn" },
+  { extraKey: "UPC", field: "upc", identifier: "upc" },
+]
 
 const UNKNOWN = /^(unknown|n\/?a|none|not\s*applicable)$/i
 
@@ -279,6 +346,22 @@ export function mergeIdentitySecondPass(
       first.countryOfOrigin,
       second.countryOfOrigin
     ),
+    waistSize: preferSecond(first.waistSize, second.waistSize),
+    inseam: preferSecond(first.inseam, second.inseam),
+    fit: preferSecond(first.fit, second.fit),
+    rise: preferSecond(first.rise, second.rise),
+    closure: preferSecond(first.closure, second.closure),
+    fabricWash: preferSecond(first.fabricWash, second.fabricWash),
+    pocketType: preferSecond(first.pocketType, second.pocketType),
+    fabricType: preferSecond(first.fabricType, second.fabricType),
+    garmentCare: preferSecond(first.garmentCare, second.garmentCare),
+    sizeType: preferSecond(first.sizeType, second.sizeType),
+    season: preferSecond(first.season, second.season),
+    accents: preferSecond(first.accents, second.accents),
+    model: preferSecond(first.model, second.model),
+    productLine: preferSecond(first.productLine, second.productLine),
+    mpn: preferSecond(first.mpn, second.mpn),
+    upc: preferSecond(first.upc, second.upc),
     pattern: preferSecond(first.pattern, second.pattern),
   }
 
@@ -296,6 +379,14 @@ const TAG_PRIORITY_KEYS = new Set([
   "styleNumber",
   "countryOfOrigin",
   "licensedProperty",
+  "waistSize",
+  "inseam",
+  "garmentCare",
+  "sizeType",
+  "mpn",
+  "upc",
+  "model",
+  "productLine",
 ])
 
 export function mergeClothingDetections(detections: ImageDetection[]): {
@@ -361,6 +452,22 @@ export function mergeClothingDetections(detections: ImageDetection[]): {
     licensedProperty: vote("licensedProperty", true),
     styleNumber: vote("styleNumber", true),
     countryOfOrigin: vote("countryOfOrigin", true),
+    waistSize: vote("waistSize", true),
+    inseam: vote("inseam", true),
+    fit: vote("fit", false),
+    rise: vote("rise", false),
+    closure: vote("closure", false),
+    fabricWash: vote("fabricWash", false),
+    pocketType: vote("pocketType", false),
+    fabricType: vote("fabricType", true),
+    garmentCare: vote("garmentCare", true),
+    sizeType: vote("sizeType", true),
+    season: vote("season", true),
+    accents: vote("accents", false),
+    model: vote("model", true),
+    productLine: vote("productLine", true),
+    mpn: vote("mpn", true),
+    upc: vote("upc", true),
   }
 
   fields = {
@@ -396,26 +503,23 @@ export function mergeClothingDetections(detections: ImageDetection[]): {
 
 export function identityExtrasFromFields(fields: IdentityFields): Record<string, string> {
   const extras: Record<string, string> = {}
-  if (isKnownValue(fields.character.value)) {
-    extras.Character = fields.character.value
-  }
-  if (isKnownValue(fields.theme.value)) {
-    extras.Theme = fields.theme.value
-  }
-  if (isKnownValue(fields.features.value)) {
-    extras.Features = fields.features.value
-  }
-  if (isKnownValue(fields.itemType.value)) {
-    extras.Type = fields.itemType.value
-  }
-  if (isKnownValue(fields.styleNumber.value)) {
-    extras["Style Number"] = fields.styleNumber.value
-  }
-  if (isKnownValue(fields.countryOfOrigin.value)) {
-    extras["Country of Origin"] = fields.countryOfOrigin.value
-  }
-  if (isKnownValue(fields.licensedProperty.value)) {
-    extras["Licensed Property"] = fields.licensedProperty.value
+  for (const mapping of IDENTITY_EXTRA_ASPECT_MAP) {
+    const detected = fields[mapping.field]
+    if (!detected || !isKnownValue(detected.value)) continue
+    if (mapping.identifier) {
+      if (
+        !isVerifiedProductIdentifier({
+          kind: mapping.identifier,
+          value: detected.value,
+          confidence: detected.confidence,
+          rationale: detected.rationale,
+          sourceField: mapping.field,
+        })
+      ) {
+        continue
+      }
+    }
+    extras[mapping.extraKey] = detected.value
   }
   return extras
 }
@@ -438,6 +542,25 @@ export function identityFieldConfidence(
     theme: fields.theme,
     features: fields.features,
     itemType: fields.itemType,
+    licensedProperty: fields.licensedProperty,
+    styleNumber: fields.styleNumber,
+    countryOfOrigin: fields.countryOfOrigin,
+    waistSize: fields.waistSize,
+    inseam: fields.inseam,
+    fit: fields.fit,
+    rise: fields.rise,
+    closure: fields.closure,
+    fabricWash: fields.fabricWash,
+    pocketType: fields.pocketType,
+    fabricType: fields.fabricType,
+    garmentCare: fields.garmentCare,
+    sizeType: fields.sizeType,
+    season: fields.season,
+    accents: fields.accents,
+    model: fields.model,
+    productLine: fields.productLine,
+    mpn: fields.mpn,
+    upc: fields.upc,
   }
 }
 

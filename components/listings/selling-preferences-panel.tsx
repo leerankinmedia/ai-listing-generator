@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import Link from "next/link"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { NullableNumberInput } from "@/components/ui/nullable-number-input"
 import {
@@ -357,6 +358,40 @@ export function SellingPreferencesPanel({
               onValueChange={(n) => patchPackage({ heightInches: n })}
             />
           </div>
+        </div>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-1"
+            disabled={disabled}
+            checked={Boolean(pkg.irregularPackage)}
+            onChange={(e) => patchPackage({ irregularPackage: e.target.checked })}
+          />
+          <span>Irregular package</span>
+        </label>
+        <div className="space-y-1.5">
+          <Label htmlFor="pref-zip">Item location ZIP</Label>
+          <Input
+            id="pref-zip"
+            inputMode="numeric"
+            disabled={disabled}
+            value={
+              listing.specifics.itemLocationZip ||
+              listing.specifics.extras?.itemLocationZip ||
+              ""
+            }
+            placeholder="e.g. 43604"
+            onChange={(e) => {
+              const zip = e.target.value.replace(/\D/g, "").slice(0, 10)
+              patchSpecifics(
+                listing,
+                onChange,
+                { itemLocationZip: zip || undefined },
+                { itemLocationZip: zip || undefined }
+              )
+            }}
+            className="h-11 max-w-[12rem]"
+          />
         </div>
       </section>
 

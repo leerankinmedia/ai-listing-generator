@@ -13,9 +13,16 @@ import {
   ASPECT_AUTO_FILL_CONFIDENCE,
   ASPECT_REVIEW_CONFIDENCE,
   EBAY_SEO_ASPECT_PRIORITY,
+  confidenceForListingAspect,
   isMeasurementAspect,
   isSeoPriorityAspect,
 } from "@/lib/listings/ebay-aspect-fields"
+import {
+  doesNotApplyValue,
+  identifierKindFromAspect,
+  isProductIdentifierAspect,
+  isVerifiedProductIdentifier,
+} from "@/lib/listings/product-identifiers"
 
 export type EbayAspectValue = {
   localizedValue?: string
@@ -100,25 +107,7 @@ function isExactAllowed(value: string, allowed: string[]): boolean {
 }
 
 function confidenceForAspect(listing: Listing, aspectName: string): number | undefined {
-  const name = aspectName.toLowerCase()
-  const fc = listing.fieldConfidence || {}
-  if (name === "brand") return fc.brand?.confidence
-  if (name === "size" || name === "waist size") return fc.size?.confidence
-  if (name === "color" || name === "colour") return fc.color?.confidence
-  if (name === "material" || name === "fabric type") return fc.material?.confidence
-  if (name === "style" || name === "fit") {
-    return fc.style?.confidence
-  }
-  if (name === "type" || name === "item type") {
-    return fc.itemType?.confidence ?? fc.style?.confidence
-  }
-  if (name === "features") return fc.features?.confidence ?? fc.style?.confidence
-  if (name === "character") return fc.character?.confidence
-  if (name === "pattern") return fc.pattern?.confidence
-  if (name === "theme") return fc.theme?.confidence ?? fc.pattern?.confidence
-  if (name === "department" || name === "gender") return fc.gender?.confidence
-  if (name === "size type") return fc.size?.confidence
-  return undefined
+  return confidenceForListingAspect(listing, aspectName)
 }
 
 function listingCandidatesForAspect(
@@ -207,23 +196,75 @@ function listingCandidatesForAspect(
         listing.fieldConfidence?.features?.value,
       ]
     case "rise":
-      return [fromExtras, extras.Rise, extras.rise]
+      return [
+        fromExtras,
+        extras.Rise,
+        extras.rise,
+        listing.fieldConfidence?.rise?.value,
+      ]
     case "fit":
-      return [fromExtras, extras.Fit, extras.fit, listing.specifics.style]
+      return [
+        fromExtras,
+        extras.Fit,
+        extras.fit,
+        listing.fieldConfidence?.fit?.value,
+        fitHintFromStyle(listing.specifics.style),
+      ]
     case "fabric wash":
     case "wash":
-      return [fromExtras, extras["Fabric Wash"], extras.Wash]
+      return [
+        fromExtras,
+        extras["Fabric Wash"],
+        extras.Wash,
+        listing.fieldConfidence?.fabricWash?.value,
+      ]
     case "closure":
-      return [fromExtras, extras.Closure]
+      return [
+        fromExtras,
+        extras.Closure,
+        listing.fieldConfidence?.closure?.value,
+      ]
     case "vintage":
       // Only when explicitly known — never invent "No".
       return [fromExtras, extras.Vintage]
     case "season":
-      return [fromExtras, extras.Season]
+      return [fromExtras, extras.Season, listing.fieldConfidence?.season?.value]
     case "pocket type":
-      return [fromExtras, extras["Pocket Type"], extras.Pocket]
+      return [
+        fromExtras,
+        extras["Pocket Type"],
+        extras.Pocket,
+        listing.fieldConfidence?.pocketType?.value,
+      ]
     case "country of origin":
-      return [fromExtras, extras["Country of Origin"], extras.Country]
+      return [
+        fromExtras,
+        extras["Country of Origin"],
+        extras.Country,
+        listing.fieldConfidence?.countryOfOrigin?.value,
+      ]
+    case "garment care":
+      return [
+        fromExtras,
+        extras["Garment Care"],
+        listing.fieldConfidence?.garmentCare?.value,
+      ]
+    case "accents":
+      return [fromExtras, extras.Accents, listing.fieldConfidence?.accents?.value]
+    case "model":
+      return [fromExtras, extras.Model, listing.fieldConfidence?.model?.value]
+    case "product line":
+      return [
+        fromExtras,
+        extras["Product Line"],
+        listing.fieldConfidence?.productLine?.value,
+      ]
+    case "mpn":
+    case "manufacturer part number":
+    case "upc":
+    case "ean":
+    case "isbn":
+      return productIdentifierCandidates(listing, nameKey)
     default:
       return [
         fromExtras,
@@ -233,6 +274,52 @@ function listingCandidatesForAspect(
           .map(([, v]) => v),
       ]
   }
+}
+
+function fitHintFromStyle(style: string | undefined): string | undefined {
+  const raw = (style || "").trim()
+  if (!raw) return undefined
+  if (/\b(slim|skinny|relaxed|straight|bootcut|tapered|loose|regular)\b/i.test(raw)) {
+    const match = raw.match(
+      /\b(slim|skinny|relaxed|straight|bootcut|tapered|loose|regular)\b/i
+    )
+    return match?.[1]
+  }
+  return undefined
+}
+
+function productIdentifierCandidates(
+  listing: Listing,
+  aspectName: string
+): Array<string | undefined> {
+  const kind = identifierKindFromAspect(aspectName)
+  if (!kind) return []
+  const extras = listing.specifics.extras || {}
+  const fc =
+    kind === "mpn"
+      ? listing.fieldConfidence?.mpn
+      : kind === "upc"
+        ? listing.fieldConfidence?.upc
+        : undefined
+  const extraValue =
+    extras[aspectName] ||
+    Object.entries(extras).find(([k]) => k.toLowerCase() === aspectName)?.[1]
+  const values = [
+    extras[aspectName],
+    kind === "mpn" ? extras.MPN : undefined,
+    kind === "upc" ? extras.UPC : undefined,
+    extraValue,
+    fc?.value,
+  ]
+  return values.filter((value) =>
+    isVerifiedProductIdentifier({
+      kind,
+      value,
+      confidence: fc?.confidence,
+      rationale: fc?.rationale,
+      sourceField: kind,
+    })
+  )
 }
 
 function extractNumericWaist(text: string): string | undefined {
@@ -339,6 +426,52 @@ export function applyRequiredEbayAspects(
       (aspect.aspectConstraint?.aspectMode || "").toUpperCase() ===
       "SELECTION_ONLY"
     const conf = confidenceForAspect(listing, name)
+
+    if (isProductIdentifierAspect(name)) {
+      const kind = identifierKindFromAspect(name)
+      const current = aspects[name]?.[0]?.trim()
+      const candidates = listingCandidatesForAspect(listing, name)
+      const verified =
+        (kind &&
+        current &&
+        isVerifiedProductIdentifier({
+          kind,
+          value: current,
+          confidence: conf,
+          sourceField: name,
+        })
+          ? current
+          : undefined) ||
+        candidates.find((c) =>
+          kind
+            ? isVerifiedProductIdentifier({
+                kind,
+                value: c,
+                confidence: conf,
+                sourceField: name,
+              })
+            : false
+        )
+      if (verified) {
+        aspects[name] = [verified]
+        filledRequired.push(name)
+        resolvedFields.push({ name, value: verified })
+        continue
+      }
+      const dna = doesNotApplyValue(allowed)
+      if (dna) {
+        aspects[name] = [dna]
+        filledRequired.push(name)
+        resolvedFields.push({ name, value: dna })
+        continue
+      }
+      missingRequired.push({
+        name,
+        allowedValues: allowed.length > 0 ? allowed.slice(0, 80) : undefined,
+      })
+      continue
+    }
+
     const highConfidence = isHighConfidenceField(conf)
     // ≥95% enables fuzzy maps; Brand/Style/Size Type always attempt a match.
     const autoFillReady = (conf ?? 0) >= ASPECT_AUTO_FILL_CONFIDENCE
@@ -471,6 +604,7 @@ export function applyRequiredEbayAspects(
   for (const aspect of taxonomyAspects) {
     const name = aspect.localizedAspectName?.trim()
     if (!name || aspect.aspectConstraint?.aspectRequired) continue
+    if (isProductIdentifierAspect(name)) continue
     const key = name.toLowerCase()
     const allowed = allowedValues(aspect)
     const selectionOnly =

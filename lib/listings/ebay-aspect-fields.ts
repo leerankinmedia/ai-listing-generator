@@ -15,6 +15,11 @@ import {
   matchStyleToEbayList,
   resolveSizeTypeFromText,
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
+import {
+  isProductIdentifierAspect,
+  isVerifiedProductIdentifier,
+  identifierKindFromAspect,
+} from "@/lib/listings/product-identifiers"
 import type { Listing } from "@/lib/types"
 
 const KNOWN_SPECIFIC_KEYS = new Set([
@@ -96,6 +101,10 @@ export const EBAY_SEO_ASPECT_PRIORITY = [
   "Waist Size",
   "Inseam",
   "Vintage",
+  "Garment Care",
+  "Accents",
+  "Model",
+  "Product Line",
 ] as const
 
 export const EBAY_PRIMARY_VISIBLE_ASPECTS = [
@@ -142,28 +151,37 @@ export function confidenceForListingAspect(
   const name = aspectName.trim().toLowerCase()
   const fc = listing.fieldConfidence || {}
   if (name === "brand") return fc.brand?.confidence
-  if (name === "size" || name === "waist size") return fc.size?.confidence
+  if (name === "size") return fc.size?.confidence
+  if (name === "waist size") return fc.waistSize?.confidence ?? fc.size?.confidence
+  if (name === "inseam") return fc.inseam?.confidence
   if (name === "color" || name === "colour") return fc.color?.confidence
-  if (name === "material" || name === "fabric type") return fc.material?.confidence
-  if (
-    name === "style" ||
-    name === "fit" ||
-    name === "type" ||
-    name === "item type" ||
-    name === "closure" ||
-    name === "rise"
-  ) {
-    return fc.style?.confidence ?? fc.itemType?.confidence
+  if (name === "material") return fc.material?.confidence
+  if (name === "fabric type") {
+    return fc.fabricType?.confidence ?? fc.material?.confidence
   }
-  if (name === "features") return fc.features?.confidence ?? fc.style?.confidence
+  if (name === "style") return fc.style?.confidence ?? fc.itemType?.confidence
+  if (name === "fit") return fc.fit?.confidence
+  if (name === "rise") return fc.rise?.confidence
+  if (name === "closure") return fc.closure?.confidence
+  if (name === "type" || name === "item type") {
+    return fc.itemType?.confidence ?? fc.style?.confidence
+  }
+  if (name === "features") return fc.features?.confidence
   if (name === "character") return fc.character?.confidence
   if (name === "pattern") return fc.pattern?.confidence
   if (name === "theme") return fc.theme?.confidence ?? fc.pattern?.confidence
   if (name === "department" || name === "gender") return fc.gender?.confidence
-  if (name === "size type") return fc.size?.confidence
-  if (name === "season" || name === "pocket type") return fc.style?.confidence
-  if (name === "country of origin") return fc.brand?.confidence
-  if (name === "fabric wash") return fc.material?.confidence
+  if (name === "size type") return fc.sizeType?.confidence ?? fc.size?.confidence
+  if (name === "season") return fc.season?.confidence
+  if (name === "pocket type") return fc.pocketType?.confidence
+  if (name === "country of origin") return fc.countryOfOrigin?.confidence
+  if (name === "fabric wash") return fc.fabricWash?.confidence
+  if (name === "garment care") return fc.garmentCare?.confidence
+  if (name === "accents") return fc.accents?.confidence
+  if (name === "model") return fc.model?.confidence
+  if (name === "product line") return fc.productLine?.confidence
+  if (name === "mpn" || name === "manufacturer part number") return fc.mpn?.confidence
+  if (name === "upc") return fc.upc?.confidence
   return undefined
 }
 
@@ -231,22 +249,41 @@ export function detectedValueForAspect(
   const name = aspectName.trim().toLowerCase()
   const fc = listing.fieldConfidence || {}
   if (name === "brand") return fc.brand?.value || listing.specifics.brand
-  if (name === "size" || name === "waist size") {
-    return fc.size?.value || listing.specifics.size
+  if (name === "size") return fc.size?.value || listing.specifics.size
+  if (name === "waist size") {
+    return (
+      listing.specifics.extras?.["Waist Size"] ||
+      fc.waistSize?.value ||
+      undefined
+    )
+  }
+  if (name === "inseam") {
+    return listing.specifics.extras?.Inseam || fc.inseam?.value
   }
   if (name === "color" || name === "colour") {
     return fc.color?.value || listing.specifics.color
   }
-  if (name === "material" || name === "fabric type") {
+  if (name === "material") {
     return fc.material?.value || listing.specifics.material
   }
-  if (
-    name === "style" ||
-    name === "fit" ||
-    name === "closure" ||
-    name === "rise"
-  ) {
+  if (name === "fabric type") {
+    return (
+      listing.specifics.extras?.["Fabric Type"] ||
+      fc.fabricType?.value ||
+      listing.specifics.material
+    )
+  }
+  if (name === "style") {
     return fc.style?.value || listing.specifics.style
+  }
+  if (name === "fit") {
+    return listing.specifics.extras?.Fit || fc.fit?.value
+  }
+  if (name === "closure") {
+    return listing.specifics.extras?.Closure || fc.closure?.value
+  }
+  if (name === "rise") {
+    return listing.specifics.extras?.Rise || fc.rise?.value
   }
   if (name === "type" || name === "item type") {
     return (
@@ -283,8 +320,37 @@ export function detectedValueForAspect(
   if (name === "department" || name === "gender") {
     return fc.gender?.value || listing.specifics.gender
   }
-  if (name === "size type") return fc.size?.value || listing.specifics.size
-  return undefined
+  if (name === "size type") {
+    return listing.specifics.extras?.["Size Type"] || fc.sizeType?.value
+  }
+  if (name === "season") {
+    return listing.specifics.extras?.Season || fc.season?.value
+  }
+  if (name === "pocket type") {
+    return listing.specifics.extras?.["Pocket Type"] || fc.pocketType?.value
+  }
+  if (name === "garment care") {
+    return listing.specifics.extras?.["Garment Care"] || fc.garmentCare?.value
+  }
+  if (name === "fabric wash") {
+    return listing.specifics.extras?.["Fabric Wash"] || fc.fabricWash?.value
+  }
+  if (name === "accents") {
+    return listing.specifics.extras?.Accents || fc.accents?.value
+  }
+  if (name === "model") {
+    return listing.specifics.extras?.Model || fc.model?.value
+  }
+  if (name === "product line") {
+    return listing.specifics.extras?.["Product Line"] || fc.productLine?.value
+  }
+  if (name === "country of origin") {
+    return (
+      listing.specifics.extras?.["Country of Origin"] ||
+      fc.countryOfOrigin?.value
+    )
+  }
+  return listing.specifics.extras?.[aspectName]
 }
 
 export function applyExactAspectsToListing(
@@ -624,15 +690,16 @@ export function splitAspectFieldsForDisplay(
 /** Always-visible Magical Listing review fields. */
 export const REVIEW_DRAFT_PRIMARY_ASPECTS = [
   "Brand",
-  "Size",
+  "Style",
   "Size Type",
-  "Color",
+  "Size",
   "Department",
+  "Color",
 ] as const
 
 /**
- * Review Draft: keep Brand / Size / Size Type / Color / Department visible,
- * plus anything that still needs input. Remaining specifics go under More.
+ * Review Draft: keep Brand / Style / Size Type / Size / Department / Color
+ * visible, plus anything that still needs input. Remaining specifics go under More.
  */
 export function splitAspectFieldsForReviewDraft(
   fields: EbayAspectFormField[],
@@ -686,6 +753,16 @@ export function splitAspectFieldsForReviewDraft(
     reviewCount,
     hiddenBlankOptional,
   }
+}
+
+/** Remaining generated/taxonomy specifics behind the compact "X more…" control. */
+export function additionalReviewSpecificsCount(
+  fields: EbayAspectFormField[],
+  listing: Listing
+): number {
+  return splitAspectFieldsForReviewDraft(fields, listing).more.filter((view) =>
+    Boolean(view.value.trim())
+  ).length
 }
 
 export function summarizeAiEmployeeAspects(
@@ -755,6 +832,23 @@ export function autoFillHighConfidenceAspects(
     const raw = readAspectValue(listing, field.name)
 
     if (options.length) optionsByName.set(nameKey, options)
+
+    if (isProductIdentifierAspect(field.name)) {
+      const kind = identifierKindFromAspect(field.name)
+      const candidate = (raw || detected || "").trim()
+      if (
+        kind &&
+        isVerifiedProductIdentifier({
+          kind,
+          value: candidate,
+          confidence,
+          sourceField: field.name,
+        })
+      ) {
+        toApply.push({ name: field.name, value: candidate })
+      }
+      continue
+    }
 
     // Brand / Style / Size Type — always try must-fill resolvers.
     if (isMustFillAspect(field.name)) {

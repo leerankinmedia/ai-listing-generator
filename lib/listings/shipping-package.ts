@@ -27,6 +27,8 @@ export interface ShippingPackage {
   widthInches: number | null
   heightInches: number | null
   packageType: EbayPackageTypeValue | string
+  /** Maps to Inventory API shippingIrregular. */
+  irregularPackage?: boolean
 }
 
 export interface ShippingPackagePreset extends ShippingPackage {
@@ -145,6 +147,7 @@ export function toEbayPackageWeightAndSize(pkg: ShippingPackage): {
   }
   weight: { value: number; unit: "POUND" }
   packageType: string
+  shippingIrregular?: boolean
 } {
   const { weightPounds, weightOunces } = normalizeShippingWeight(
     asFiniteNumber(pkg.weightPounds) ?? 0,
@@ -165,6 +168,7 @@ export function toEbayPackageWeightAndSize(pkg: ShippingPackage): {
       unit: "POUND",
     },
     packageType,
+    ...(pkg.irregularPackage ? { shippingIrregular: true } : {}),
   }
 }
 

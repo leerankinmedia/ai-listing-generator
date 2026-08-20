@@ -15,6 +15,7 @@ import {
   relocateEbayColorAccentDetails,
 } from "@/lib/marketplaces/adapters/ebay/aspects"
 import { ebayShippingPackageBlockMessage } from "@/lib/listings/publish"
+import { listingShippingIntent } from "@/lib/listings/listing-shipping"
 import {
   shippingPackageIsComplete,
   toEbayPackageWeightAndSize,
@@ -153,38 +154,33 @@ export const ebayAdapter: MarketplaceAdapter = {
 
     // 1) Seller-owned Business Policies — match explicit shipping mode
     // (default: buyer pays calculated). Never silently use free shipping.
-    const shippingMode =
-      listing.specifics.shippingMode === "flat" ||
-      listing.specifics.shippingMode === "free" ||
-      listing.specifics.shippingMode === "calculated"
-        ? listing.specifics.shippingMode
-        : "calculated"
+    const shippingIntent = listingShippingIntent(listing)
+    const shippingMode = shippingIntent.mode
     console.info("[ebay/shipping] listing snapshot for fulfillment policy", {
+      deliveryMethod: shippingIntent.deliveryMethod,
       shippingMode,
-      handlingTimeDays: listing.specifics.handlingTimeDays ?? 1,
-      shippingService:
-        listing.specifics.shippingService ||
-        listing.specifics.extras?.shippingService ||
-        "USPSGroundAdvantage",
-      flatShippingAmount: listing.specifics.flatShippingAmount ?? null,
-      freeShippingConfirmed: Boolean(listing.specifics.freeShippingConfirmed),
+      whoPays: shippingIntent.whoPays,
+      costType: shippingIntent.costType,
+      handlingTimeDays: shippingIntent.handlingTimeDays,
+      shippingService: shippingIntent.shippingServiceCode,
+      flatShippingAmount: shippingIntent.flatAmount,
+      freeShippingConfirmed: shippingIntent.freeShippingConfirmed,
+      international: shippingIntent.international,
+      itemLocationZip: shippingIntent.itemLocationZip,
+      irregularPackage: shippingIntent.irregularPackage,
       packageComplete: shippingPackageIsComplete(
         listing.specifics.shippingPackage
       ),
     })
     const policies = await ensureEbayBusinessPolicyIds(auth.accessToken, {
       shippingMode,
-      freeShippingConfirmed: Boolean(listing.specifics.freeShippingConfirmed),
-      flatShippingAmount: listing.specifics.flatShippingAmount,
-      handlingTimeDays: listing.specifics.handlingTimeDays,
-      shippingServiceCode:
-        listing.specifics.shippingService ||
-        listing.specifics.extras?.shippingService ||
-        "USPSGroundAdvantage",
-      returnsAccepted: listing.specifics.returnsAccepted !== false,
-      returnWindowDays: listing.specifics.returnWindowDays === 60 ? 60 : 30,
-      returnShippingPaidBy:
-        listing.specifics.returnShippingPaidBy === "SELLER" ? "SELLER" : "BUYER",
+      freeShippingConfirmed: shippingIntent.freeShippingConfirmed,
+      flatShippingAmount: shippingIntent.flatAmount ?? undefined,
+      handlingTimeDays: shippingIntent.handlingTimeDays,
+      shippingServiceCode: shippingIntent.shippingServiceCode,
+      returnsAccepted: shippingIntent.returnsAccepted,
+      returnWindowDays: shippingIntent.returnWindowDays,
+      returnShippingPaidBy: shippingIntent.returnShippingPaidBy,
       requireImmediatePayment: Boolean(listing.specifics.requireImmediatePayment),
       policyCache: parseEbayPolicyCache(auth.meta?.ebayPolicyCache),
     })
@@ -199,17 +195,16 @@ export const ebayAdapter: MarketplaceAdapter = {
     }
     console.info("[ebay/shipping] publish using fulfillment policy", {
       shippingMode,
-      freeShippingConfirmed: Boolean(listing.specifics.freeShippingConfirmed),
-      handlingTimeDays: listing.specifics.handlingTimeDays ?? 1,
-      shippingService:
-        listing.specifics.shippingService || "USPSGroundAdvantage",
+      freeShippingConfirmed: shippingIntent.freeShippingConfirmed,
+      handlingTimeDays: shippingIntent.handlingTimeDays,
+      shippingService: shippingIntent.shippingServiceCode,
       policy: policies.fulfillmentSummary,
     })
 
     // 2) ENABLED inventory location with postalCode + country; persist verified key.
     const { merchantLocationKey, connection: withLocation } =
       await ensureEbayMerchantLocationKey(auth.accessToken, auth, {
-        postalCode: listing.specifics.extras?.itemLocationZip,
+        postalCode: shippingIntent.itemLocationZip,
       })
 
     const sourceUrls = [...listing.images]

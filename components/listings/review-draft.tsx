@@ -27,6 +27,13 @@ import {
   type EbayAspectMeta,
   type EbayLiveSummary,
 } from "@/lib/listings/review-draft"
+import {
+  reviewItemLocationSummary,
+  reviewOffersSummary,
+  reviewPackageSummary,
+  reviewReturnsHandlingSummary,
+  reviewShippingSummary,
+} from "@/lib/listings/listing-shipping"
 import { persistListing } from "@/lib/listings/repository"
 import {
   applyEbaySellerDefaultsToListing,
@@ -63,7 +70,7 @@ export function ReviewDraft({
   const [error, setError] = useState<string | null>(null)
   const [blockers, setBlockers] = useState<string[]>([])
   const [defaultsReady, setDefaultsReady] = useState<boolean | null>(null)
-  const [shippingOpen, setShippingOpen] = useState<ShippingOpen>("shipping")
+  const [shippingOpen, setShippingOpen] = useState<ShippingOpen>(null)
   const [aspectMeta, setAspectMeta] = useState<EbayAspectMeta>({
     missing: [],
     filled: 0,
@@ -339,6 +346,9 @@ export function ReviewDraft({
             }
             className="h-11"
           />
+          <p className="text-[11px] text-muted-foreground">
+            {reviewOffersSummary(listing)}
+          </p>
         </div>
       </section>
 
@@ -368,13 +378,18 @@ export function ReviewDraft({
             defaultsReady={defaultsReady === true}
           />
         ) : (
-          <p className="px-1 text-sm text-muted-foreground">
-            {listing.specifics.returnsAccepted === false
-              ? "Returns not accepted"
-              : `${listing.specifics.returnWindowDays === 60 ? 60 : 30}-day returns`}
-            {" · "}
-            Qty {qty}
-          </p>
+          <div className="space-y-1 px-1 text-sm">
+            <p className="font-medium">{reviewShippingSummary(listing)}</p>
+            <p className="text-muted-foreground">{reviewPackageSummary(listing)}</p>
+            <p className="text-muted-foreground">
+              {reviewReturnsHandlingSummary(listing)}
+            </p>
+            {reviewItemLocationSummary(listing) ? (
+              <p className="text-muted-foreground">
+                {reviewItemLocationSummary(listing)}
+              </p>
+            ) : null}
+          </div>
         )}
       </section>
 

@@ -1,4 +1,9 @@
 import type { GeneratedListingOutput } from "@/lib/listings/schema"
+import { IDENTITY_EXTRA_ASPECT_MAP } from "@/lib/listings/clothing-identity"
+import {
+  identifierKindFromAspect,
+  isVerifiedProductIdentifier,
+} from "@/lib/listings/product-identifiers"
 import type {
   DetectedFieldKey,
   FieldConfidence,
@@ -37,6 +42,19 @@ function asKeywords(value: unknown): string[] {
       .filter(Boolean)
   }
   return []
+}
+
+function mappingFallback(
+  specifics: ListingSpecifics,
+  key: DetectedFieldKey
+): string {
+  if (key in specifics) {
+    const value = specifics[key as keyof ListingSpecifics]
+    if (typeof value === "string") return value
+  }
+  const extraKey = IDENTITY_EXTRA_ASPECT_MAP.find((m) => m.field === key)?.extraKey
+  if (extraKey) return specifics.extras?.[extraKey] || ""
+  return ""
 }
 
 function asConfidence(
@@ -100,18 +118,43 @@ export function mapDraftToListingFields(draft: GeneratedListingOutput): {
       : {}
 
   // Promote identity fields from fieldConfidence into eBay extras.
-  const identityMaps: Array<[string, string]> = [
-    ["Character", "character"],
-    ["Theme", "theme"],
-    ["Features", "features"],
-    ["Type", "itemType"],
-  ]
-  for (const [extraKey, confKey] of identityMaps) {
-    if (!draftExtras[extraKey]?.trim()) {
-      const fromConf = asString(conf[confKey])
+  for (const mapping of IDENTITY_EXTRA_ASPECT_MAP) {
+    if (!draftExtras[mapping.extraKey]?.trim()) {
+      const fromConf = asString(conf[mapping.field])
       if (fromConf && !/^unknown$/i.test(fromConf)) {
-        draftExtras[extraKey] = fromConf
+        if (mapping.identifier === "mpn" || mapping.identifier === "upc") {
+          continue
+        }
+        draftExtras[mapping.extraKey] = fromConf
       }
+    }
+  }
+
+  for (const extraKey of ["MPN", "UPC", "EAN", "ISBN"]) {
+    const kind = identifierKindFromAspect(extraKey)
+    const value = draftExtras[extraKey]
+    if (!kind || !value?.trim()) continue
+    const fromConf = conf[kind]
+    if (
+      !isVerifiedProductIdentifier({
+        kind,
+        value,
+        confidence: asNumber(
+          fromConf && typeof fromConf === "object"
+            ? (fromConf as { confidence?: unknown }).confidence
+            : 0,
+          0
+        ),
+        rationale:
+          fromConf &&
+          typeof fromConf === "object" &&
+          typeof (fromConf as { rationale?: unknown }).rationale === "string"
+            ? (fromConf as { rationale: string }).rationale
+            : undefined,
+        sourceField: kind,
+      })
+    ) {
+      delete draftExtras[extraKey]
     }
   }
 
@@ -156,6 +199,25 @@ export function mapDraftToListingFields(draft: GeneratedListingOutput): {
     "theme",
     "features",
     "itemType",
+    "licensedProperty",
+    "styleNumber",
+    "countryOfOrigin",
+    "waistSize",
+    "inseam",
+    "fit",
+    "rise",
+    "closure",
+    "fabricWash",
+    "pocketType",
+    "fabricType",
+    "garmentCare",
+    "sizeType",
+    "season",
+    "accents",
+    "model",
+    "productLine",
+    "mpn",
+    "upc",
     "title",
     "description",
     "price",
@@ -171,10 +233,9 @@ export function mapDraftToListingFields(draft: GeneratedListingOutput): {
           ? description
           : key === "price"
             ? String(price)
-            : key === "keywords"
+              : key === "keywords"
               ? keywords.join(", ")
-              : (specifics[key as keyof ListingSpecifics] as string | undefined) ||
-                ""
+              : mappingFallback(specifics, key)
     const mapped = asConfidence(conf[key], fallback)
     if (mapped) fieldConfidence[key] = mapped
   }

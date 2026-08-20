@@ -83,10 +83,58 @@ export const imageDetectionSchema = z.object({
   ),
   style: confidentStringSchema,
   styleNumber: confidentStringSchema.describe(
-    "Style/RN/SKU number from tag when readable, else Unknown"
+    "Style/RN/SKU number from tag when readable, else Unknown. Never treat this as MPN unless the tag is labeled MPN."
   ),
   countryOfOrigin: confidentStringSchema.describe(
     "Country of origin from tag when readable, else Unknown"
+  ),
+  waistSize: confidentStringSchema.describe(
+    "Numeric waist from a pants/jeans tag (e.g. 32). Unknown if not visible. Never guess from photo scale."
+  ),
+  inseam: confidentStringSchema.describe(
+    "Numeric inseam from a pants tag (e.g. 30). Unknown if not visible."
+  ),
+  fit: confidentStringSchema.describe(
+    "Fit only when labeled or visually unambiguous (Slim, Regular, Relaxed, Skinny). Unknown otherwise."
+  ),
+  rise: confidentStringSchema.describe(
+    "Rise only when labeled or visually unambiguous (High, Mid, Low). Unknown otherwise."
+  ),
+  closure: confidentStringSchema.describe(
+    "Visible closure (Zip, Button, Drawstring, Hook & Eye). Unknown if not visible."
+  ),
+  fabricWash: confidentStringSchema.describe(
+    "Denim/fabric wash when clearly visible (Dark Wash, Light Wash, Medium Wash). Unknown otherwise — do not invent."
+  ),
+  pocketType: confidentStringSchema.describe(
+    "Pocket construction when visible (5-Pocket, Cargo, Slash). Unknown otherwise."
+  ),
+  fabricType: confidentStringSchema.describe(
+    "Fabric type from look/tag (Denim, Knit, Woven, Fleece). Unknown if unsure."
+  ),
+  garmentCare: confidentStringSchema.describe(
+    "Care instructions only from a readable care tag. Unknown if the tag is not readable."
+  ),
+  sizeType: confidentStringSchema.describe(
+    "Size type from tag when present (Regular, Petite, Tall, Plus, Juniors). Unknown if not labeled."
+  ),
+  season: confidentStringSchema.describe(
+    "Season only if labeled on the garment/tag. Unknown otherwise — never default to All Seasons."
+  ),
+  accents: confidentStringSchema.describe(
+    "Visible accent details (contrast stitching, embroidery, whiskering). Unknown if none."
+  ),
+  model: confidentStringSchema.describe(
+    "Model name only if printed on a tag/label. Unknown otherwise — never invent."
+  ),
+  productLine: confidentStringSchema.describe(
+    "Product line only if printed on a tag/label (e.g. AE Ne(X)t Level). Unknown otherwise."
+  ),
+  mpn: confidentStringSchema.describe(
+    "Manufacturer part number ONLY if the tag is explicitly labeled MPN (or Manufacturer Part Number) and the code is readable. Otherwise Unknown. Never copy a style number, RN, SKU, or size into MPN. Never invent."
+  ),
+  upc: confidentStringSchema.describe(
+    "UPC/barcode digits ONLY if a barcode or UPC is clearly readable. Otherwise Unknown. Never invent."
   ),
   pattern: confidentStringSchema.describe(
     "Pattern such as solid, striped, floral, gingham/check, logo, colorblock"
@@ -126,6 +174,26 @@ export const identitySecondPassSchema = z.object({
   material: confidentStringSchema,
   styleNumber: confidentStringSchema,
   countryOfOrigin: confidentStringSchema,
+  waistSize: confidentStringSchema,
+  inseam: confidentStringSchema,
+  fit: confidentStringSchema,
+  rise: confidentStringSchema,
+  closure: confidentStringSchema,
+  fabricWash: confidentStringSchema,
+  pocketType: confidentStringSchema,
+  fabricType: confidentStringSchema,
+  garmentCare: confidentStringSchema,
+  sizeType: confidentStringSchema,
+  season: confidentStringSchema,
+  accents: confidentStringSchema,
+  model: confidentStringSchema,
+  productLine: confidentStringSchema,
+  mpn: confidentStringSchema.describe(
+    "MPN only if a tag is labeled MPN and the code is readable. Otherwise Unknown. Never invent."
+  ),
+  upc: confidentStringSchema.describe(
+    "UPC only if a barcode is clearly readable. Otherwise Unknown. Never invent."
+  ),
   pattern: confidentStringSchema,
   logoAndGraphicSummary: z
     .string()

@@ -295,24 +295,32 @@ describe("AI employee banner", () => {
 })
 
 describe("splitAspectFieldsForReviewDraft", () => {
-  it("keeps Brand Size Size Type Color Department visible even when auto-filled", () => {
+  it("keeps Brand Style Size Type Size Department Color visible even when auto-filled", () => {
     const listing = baseListing({
       specifics: {
         brand: "Nike",
         size: "XL",
         color: "Black",
         gender: "Men",
-        extras: { "Size Type": "Regular", Color: "Black", Department: "Men" },
+        style: "Crew",
+        extras: {
+          "Size Type": "Regular",
+          Color: "Black",
+          Department: "Men",
+          Style: "Crew",
+        },
       },
       fieldConfidence: {
         brand: { value: "Nike", confidence: 0.99 },
         size: { value: "XL", confidence: 0.98 },
         color: { value: "Black", confidence: 0.99 },
         gender: { value: "Men", confidence: 0.99 },
+        style: { value: "Crew", confidence: 0.99 },
       },
     })
     const fields: EbayAspectFormField[] = [
       { name: "Brand", required: true, allowedValues: ["Nike"], value: "Nike" },
+      { name: "Style", required: true, allowedValues: ["Crew"], value: "Crew" },
       { name: "Size", required: true, value: "XL" },
       {
         name: "Size Type",
@@ -335,12 +343,13 @@ describe("splitAspectFieldsForReviewDraft", () => {
     ]
     const split = splitAspectFieldsForReviewDraft(fields, listing)
     const names = split.primary.map((v) => v.field.name)
-    assert.deepEqual(names.slice(0, 5), [
+    assert.deepEqual(names.slice(0, 6), [
       "Brand",
-      "Size",
+      "Style",
       "Size Type",
-      "Color",
+      "Size",
       "Department",
+      "Color",
     ])
     assert.equal(
       split.more.some((v) => v.field.name === "Features"),

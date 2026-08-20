@@ -8,7 +8,10 @@ import {
   ebayShippingPackageBlockMessage,
   listingHasCorePublishFields,
 } from "@/lib/listings/publish"
+import { REVIEW_DRAFT_PRIMARY_ASPECTS } from "@/lib/listings/ebay-aspect-fields"
 import type { Listing, OneClickPublishResult } from "@/lib/types"
+
+export { REVIEW_DRAFT_PRIMARY_ASPECTS }
 
 export type EbayAspectLoadStatus =
   | "loading"
@@ -41,14 +44,6 @@ function aspectSpecificsBlockers(aspectMeta?: EbayAspectMeta): string[] {
   }
   return aspectMeta.missing.map((name) => name.trim()).filter(Boolean)
 }
-
-export const REVIEW_DRAFT_PRIMARY_ASPECTS = [
-  "Brand",
-  "Size",
-  "Size Type",
-  "Color",
-  "Department",
-] as const
 
 export function listingQuantity(listing: Listing): number {
   const raw = listing.specifics.extras?.quantity

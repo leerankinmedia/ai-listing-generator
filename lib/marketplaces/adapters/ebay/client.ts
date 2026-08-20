@@ -16,6 +16,12 @@ import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { ebayConditionDescription } from "@/lib/listings/condition-details"
 import { pickPublishSku } from "@/lib/listings/sku"
 import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
+import { isOperationalListingExtraKey } from "@/lib/listings/listing-extras"
+import {
+  identifierKindFromAspect,
+  isProductIdentifierAspect,
+  isVerifiedProductIdentifier,
+} from "@/lib/listings/product-identifiers"
 
 export type EbayFetchInit = RequestInit & {
   contentLanguage?: string
@@ -77,7 +83,28 @@ export function mapListingToEbayInventory(listing: Listing) {
     const trimmed = value?.trim()
     if (!key.trim() || !trimmed) continue
     const keyLower = key.toLowerCase()
-    if (skipExtraKeys.has(keyLower) || keyLower.startsWith("ebay")) continue
+    if (skipExtraKeys.has(keyLower) || isOperationalListingExtraKey(key)) continue
+    if (isProductIdentifierAspect(key)) {
+      const kind = identifierKindFromAspect(key)
+      const fc =
+        kind === "mpn"
+          ? listing.fieldConfidence?.mpn
+          : kind === "upc"
+            ? listing.fieldConfidence?.upc
+            : undefined
+      if (
+        !kind ||
+        !isVerifiedProductIdentifier({
+          kind,
+          value: trimmed,
+          confidence: fc?.confidence,
+          rationale: fc?.rationale,
+          sourceField: key,
+        })
+      ) {
+        continue
+      }
+    }
     const isColor = keyLower === "color" || keyLower === "colour"
     if (
       isColor &&

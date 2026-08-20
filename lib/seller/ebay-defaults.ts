@@ -329,8 +329,18 @@ export function applyEbaySellerDefaultsToListing(
     specifics.promotedListingsPercent = defaults.promotedListingsPercent
   }
 
+  if (defaults.itemLocationZip && (!onlyIfUnset || !specifics.itemLocationZip)) {
+    specifics.itemLocationZip = defaults.itemLocationZip
+  }
   if (defaults.itemLocationZip && (!onlyIfUnset || !extras.itemLocationZip)) {
     extras.itemLocationZip = defaults.itemLocationZip
+  }
+  if (
+    specifics.internationalShipping == null &&
+    (!onlyIfUnset || extras.internationalShipping == null)
+  ) {
+    specifics.internationalShipping = false
+    extras.internationalShipping = "false"
   }
   if (defaults.minOfferAmount != null && (!onlyIfUnset || !extras.minOfferAmount)) {
     extras.minOfferAmount = String(defaults.minOfferAmount)

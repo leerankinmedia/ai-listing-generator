@@ -755,7 +755,7 @@ export function splitAspectFieldsForReviewDraft(
   }
 }
 
-/** Remaining generated/taxonomy specifics behind the compact "X more…" control. */
+/** Remaining generated/taxonomy specifics behind the compact expandable row. */
 export function additionalReviewSpecificsCount(
   fields: EbayAspectFormField[],
   listing: Listing
@@ -763,6 +763,32 @@ export function additionalReviewSpecificsCount(
   return splitAspectFieldsForReviewDraft(fields, listing).more.filter((view) =>
     Boolean(view.value.trim())
   ).length
+}
+
+/** Presentation-only Review Draft label. Hidden specifics stay on the listing. */
+export function additionalReviewSpecificsLabel(count: number): string {
+  if (count > 0) return `${count} more item specifics >`
+  return "Additional item specifics >"
+}
+
+export function identifierEvidenceFromListing(
+  listing: Listing,
+  kind: ReturnType<typeof identifierKindFromAspect>
+): {
+  confidence?: number
+  rationale?: string
+  styleNumber?: string
+} {
+  if (!kind) return {}
+  const fc = listing.fieldConfidence || {}
+  const selected =
+    kind === "mpn" ? fc.mpn : kind === "upc" ? fc.upc : undefined
+  return {
+    confidence: selected?.confidence,
+    rationale: selected?.rationale,
+    styleNumber:
+      fc.styleNumber?.value || listing.specifics.extras?.["Style Number"],
+  }
 }
 
 export function summarizeAiEmployeeAspects(
@@ -823,29 +849,35 @@ export function autoFillHighConfidenceAspects(
 ): Listing {
   const optionsByName = new Map<string, string[]>()
   const toApply: Array<{ name: string; value: string }> = []
+  let next = listing
 
   for (const field of fields) {
     const options = field.allowedValues || []
     const nameKey = field.name.trim().toLowerCase()
-    const confidence = confidenceForListingAspect(listing, field.name)
-    const detected = detectedValueForAspect(listing, field.name)
-    const raw = readAspectValue(listing, field.name)
+    const confidence = confidenceForListingAspect(next, field.name)
+    const detected = detectedValueForAspect(next, field.name)
+    const raw = readAspectValue(next, field.name)
 
     if (options.length) optionsByName.set(nameKey, options)
 
     if (isProductIdentifierAspect(field.name)) {
       const kind = identifierKindFromAspect(field.name)
       const candidate = (raw || detected || "").trim()
+      const evidence = identifierEvidenceFromListing(next, kind)
       if (
         kind &&
         isVerifiedProductIdentifier({
           kind,
           value: candidate,
-          confidence,
+          confidence: evidence.confidence ?? confidence,
+          rationale: evidence.rationale,
           sourceField: field.name,
+          styleNumber: evidence.styleNumber,
         })
       ) {
         toApply.push({ name: field.name, value: candidate })
+      } else if (candidate) {
+        next = writeAspectValue(next, field.name, "")
       }
       continue
     }
@@ -887,7 +919,7 @@ export function autoFillHighConfidenceAspects(
     if (free) toApply.push({ name: field.name, value: free })
   }
 
-  return applyExactAspectsToListing(listing, toApply, optionsByName)
+  return applyExactAspectsToListing(next, toApply, optionsByName)
 }
 
 export function validateAspectsAgainstOptions(

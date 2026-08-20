@@ -166,6 +166,45 @@ describe("eBay policy reuse helpers", () => {
     )
   })
 
+  it("does not reuse a cached UPS policy when the seller selected USPS", () => {
+    const upsPolicy: EbayFulfillmentPolicyRaw = {
+      fulfillmentPolicyId: "f-ups",
+      name: "ListWise Calculated · UPSGround · 1d",
+      handlingTime: { value: 1, unit: "DAY" },
+      shippingOptions: [
+        {
+          optionType: "DOMESTIC",
+          costType: "CALCULATED",
+          shippingServices: [
+            {
+              shippingCarrierCode: "UPS",
+              shippingServiceCode: "UPSGround",
+              freeShipping: false,
+            },
+          ],
+        },
+      ],
+    }
+    const picked = pickFulfillmentForMode(
+      [upsPolicy, calculatedPolicy],
+      "calculated",
+      null,
+      1,
+      "USPSGroundAdvantage"
+    )
+    assert.equal(picked?.fulfillmentPolicyId, "f-calc-1")
+    assert.equal(
+      pickFulfillmentForMode(
+        [upsPolicy],
+        "calculated",
+        null,
+        1,
+        "USPSGroundAdvantage"
+      ),
+      undefined
+    )
+  })
+
   it("only asks the seller to act when eBay explicitly requires a manual opt-in", () => {
     assert.equal(
       optInRequiresManualUserAction(

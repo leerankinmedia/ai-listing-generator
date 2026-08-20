@@ -1,6 +1,8 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
+  additionalReviewSpecificsCount,
+  additionalReviewSpecificsLabel,
   autoFillHighConfidenceAspects,
   classifyAspectField,
   formatAiEmployeeBanner,
@@ -353,6 +355,53 @@ describe("splitAspectFieldsForReviewDraft", () => {
     ])
     assert.equal(
       split.more.some((v) => v.field.name === "Features"),
+      true
+    )
+    assert.equal(additionalReviewSpecificsCount(fields, listing), 1)
+    assert.equal(
+      additionalReviewSpecificsLabel(1),
+      "1 more item specifics >"
+    )
+    assert.equal(
+      additionalReviewSpecificsLabel(12),
+      "12 more item specifics >"
+    )
+    assert.equal(
+      additionalReviewSpecificsLabel(0),
+      "Additional item specifics >"
+    )
+  })
+
+  it("keeps required blank specifics visible and does not invent MPN", () => {
+    const listing = baseListing({
+      specifics: {
+        brand: "Nike",
+        extras: { Features: "Dri-Fit", MPN: "AEMTADGO8USA" },
+      },
+      fieldConfidence: {
+        brand: { value: "Nike", confidence: 0.99, rationale: "Tag" },
+        mpn: {
+          value: "AEMTADGO8USA",
+          confidence: 0.99,
+          rationale: "Tag/label photo override.",
+        },
+      },
+    })
+    const fields: EbayAspectFormField[] = [
+      { name: "Brand", required: true, allowedValues: ["Nike"], value: "Nike" },
+      { name: "Style", required: true, allowedValues: ["Crew"] },
+      { name: "MPN", required: false, value: "AEMTADGO8USA" },
+      { name: "Features", required: false, value: "Dri-Fit" },
+    ]
+    const filled = autoFillHighConfidenceAspects(listing, fields)
+    assert.equal((filled.specifics.extras?.MPN || "").trim(), "")
+    const split = splitAspectFieldsForReviewDraft(fields, filled)
+    assert.equal(
+      split.primary.some((v) => v.field.name === "Style" && v.status === "needs_input"),
+      true
+    )
+    assert.equal(
+      split.more.some((v) => v.field.name === "Features" && v.value === "Dri-Fit"),
       true
     )
   })

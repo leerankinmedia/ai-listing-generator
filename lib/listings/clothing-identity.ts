@@ -365,10 +365,37 @@ export function mergeIdentitySecondPass(
     pattern: preferSecond(first.pattern, second.pattern),
   }
 
-  return {
+  return sanitizeIdentityIdentifiers({
     ...merged,
     ...applyLicensedBrandFallback(merged),
+  })
+}
+
+function sanitizeIdentityIdentifiers(fields: IdentityFields): IdentityFields {
+  const next = { ...fields }
+  const styleNumber = next.styleNumber?.value
+  for (const key of ["mpn", "upc"] as const) {
+    const detected = next[key]
+    if (!detected || !isKnownValue(detected.value)) continue
+    if (
+      isVerifiedProductIdentifier({
+        kind: key,
+        value: detected.value,
+        confidence: detected.confidence,
+        rationale: detected.rationale,
+        sourceField: key,
+        styleNumber,
+      })
+    ) {
+      continue
+    }
+    next[key] = {
+      value: "Unknown",
+      confidence: 0,
+      rationale: "unverified identifier dropped",
+    }
   }
+  return next
 }
 
 const TAG_PRIORITY_KEYS = new Set([
@@ -466,9 +493,11 @@ export function mergeClothingDetections(detections: ImageDetection[]): {
     accents: vote("accents", false),
     model: vote("model", true),
     productLine: vote("productLine", true),
-    mpn: vote("mpn", true),
-    upc: vote("upc", true),
+    mpn: vote("mpn", false),
+    upc: vote("upc", false),
   }
+
+  fields = sanitizeIdentityIdentifiers(fields)
 
   fields = {
     ...fields,
@@ -514,6 +543,7 @@ export function identityExtrasFromFields(fields: IdentityFields): Record<string,
           confidence: detected.confidence,
           rationale: detected.rationale,
           sourceField: mapping.field,
+          styleNumber: fields.styleNumber?.value,
         })
       ) {
         continue

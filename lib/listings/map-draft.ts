@@ -152,9 +152,24 @@ export function mapDraftToListingFields(draft: GeneratedListingOutput): {
             ? (fromConf as { rationale: string }).rationale
             : undefined,
         sourceField: kind,
+        styleNumber:
+          asString(conf.styleNumber) ||
+          asString(draftExtras["Style Number"]) ||
+          undefined,
       })
     ) {
       delete draftExtras[extraKey]
+      if (
+        (kind === "mpn" || kind === "upc") &&
+        conf[kind] &&
+        typeof conf[kind] === "object"
+      ) {
+        conf[kind] = {
+          value: "Unknown",
+          confidence: 0,
+          rationale: "unverified identifier dropped",
+        }
+      }
     }
   }
 

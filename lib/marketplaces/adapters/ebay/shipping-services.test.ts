@@ -72,4 +72,26 @@ describe("eBay GeteBayDetails shipping services", () => {
       "USPSGroundAdvantage"
     )
   })
+
+  it("does not switch a requested UPS service to USPS when UPS is available", () => {
+    const mixed = `
+      <ShippingServiceDetails>
+        <ShippingService>USPSGroundAdvantage</ShippingService>
+        <ValidForSellingFlow>true</ValidForSellingFlow>
+        <ServiceType>Calculated</ServiceType>
+      </ShippingServiceDetails>
+      <ShippingServiceDetails>
+        <ShippingService>UPSGround</ShippingService>
+        <ValidForSellingFlow>true</ValidForSellingFlow>
+        <ServiceType>Calculated</ServiceType>
+      </ShippingServiceDetails>
+    `
+    const services = parseShippingServiceDetailsXml(mixed)
+    assert.equal(
+      pickValidDomesticServiceCode("UPSGround", services, {
+        preferCalculated: true,
+      }),
+      "UPSGround"
+    )
+  })
 })

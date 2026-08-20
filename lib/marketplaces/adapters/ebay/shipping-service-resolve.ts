@@ -18,15 +18,73 @@ export const UPS_GROUND = "UPSGround"
 export const FEDEX_HOME_DELIVERY = "FedExHomeDelivery"
 export const FEDEX_GROUND = "FedExGround"
 export const USPS_PRIORITY = "USPSPriority"
+export const USPS_PARCEL = "USPSParcel"
+export const UPS_3RD_DAY = "UPS3rdDay"
+export const UPS_2ND_DAY = "UPS2ndDay"
 
 /** Parcel services Magical-style recommenders may choose among. */
 export const PARCEL_SERVICE_CODES = [
   USPS_GROUND_ADVANTAGE,
+  USPS_PRIORITY,
+  USPS_PARCEL,
   UPS_GROUND,
+  UPS_3RD_DAY,
+  UPS_2ND_DAY,
   FEDEX_HOME_DELIVERY,
   FEDEX_GROUND,
-  USPS_PRIORITY,
 ] as const
+
+export type ParcelCarrierId = "USPS" | "UPS" | "FedEx"
+
+export type ParcelShippingOption = {
+  value: string
+  label: string
+  carrier: ParcelCarrierId
+}
+
+/** Seller-selectable USPS / UPS / FedEx parcel services. Envelope is never listed here. */
+export const PARCEL_SHIPPING_CATALOG: ParcelShippingOption[] = [
+  {
+    value: USPS_GROUND_ADVANTAGE,
+    label: "USPS Ground Advantage",
+    carrier: "USPS",
+  },
+  {
+    value: USPS_PRIORITY,
+    label: "USPS Priority Mail",
+    carrier: "USPS",
+  },
+  {
+    value: USPS_PARCEL,
+    label: "USPS Parcel Select",
+    carrier: "USPS",
+  },
+  {
+    value: UPS_GROUND,
+    label: "UPS Ground",
+    carrier: "UPS",
+  },
+  {
+    value: UPS_3RD_DAY,
+    label: "UPS 3 Day Select",
+    carrier: "UPS",
+  },
+  {
+    value: UPS_2ND_DAY,
+    label: "UPS 2nd Day Air",
+    carrier: "UPS",
+  },
+  {
+    value: FEDEX_HOME_DELIVERY,
+    label: "FedEx Ground / Home Delivery",
+    carrier: "FedEx",
+  },
+  {
+    value: FEDEX_GROUND,
+    label: "FedEx Ground",
+    carrier: "FedEx",
+  },
+]
 
 export const SHIPPING_SERVICE_LABELS: Record<string, string> = {
   USPSGroundAdvantage: "USPS Ground Advantage",
@@ -34,8 +92,10 @@ export const SHIPPING_SERVICE_LABELS: Record<string, string> = {
   USPSFirstClass: "USPS First Class",
   USPSParcel: "USPS Parcel Select",
   UPSGround: "UPS Ground",
+  UPS3rdDay: "UPS 3 Day Select",
+  UPS2ndDay: "UPS 2nd Day Air",
   FedExHomeDelivery: "FedEx Ground / Home Delivery",
-  FedExGround: "FedEx Ground / Home Delivery",
+  FedExGround: "FedEx Ground",
   US_eBayStandardEnvelope: "eBay Standard Envelope",
   FreightOtherServices: "Freight",
 }
@@ -47,8 +107,16 @@ const SERVICE_ALIASES: Record<string, string> = {
   "usps ground advantage": USPS_GROUND_ADVANTAGE,
   uspspriority: USPS_PRIORITY,
   usps_priority: USPS_PRIORITY,
+  uspsparcel: USPS_PARCEL,
+  usps_parcel: USPS_PARCEL,
+  "usps parcel select": USPS_PARCEL,
   upsground: UPS_GROUND,
   ups_ground: UPS_GROUND,
+  ups3rdday: UPS_3RD_DAY,
+  ups_3rdday: UPS_3RD_DAY,
+  ups3dayselect: UPS_3RD_DAY,
+  ups2ndday: UPS_2ND_DAY,
+  ups_2ndday: UPS_2ND_DAY,
   fedexhomedelivery: FEDEX_HOME_DELIVERY,
   fedex_home_delivery: FEDEX_HOME_DELIVERY,
   fedexground: FEDEX_GROUND,
@@ -141,17 +209,65 @@ export function isStandardEnvelopeService(
   return normalized === STANDARD_ENVELOPE_SERVICE
 }
 
+export function parcelCarrierId(
+  code: string | null | undefined
+): ParcelCarrierId | null {
+  const normalized = normalizeShippingServiceCode(code)
+  if (!normalized || isStandardEnvelopeService(normalized)) return null
+  if (/^USPS/i.test(normalized)) return "USPS"
+  if (/^UPS/i.test(normalized)) return "UPS"
+  if (/^FedEx/i.test(normalized)) return "FedEx"
+  return null
+}
+
+export function isKnownParcelService(code: string | null | undefined): boolean {
+  const normalized = normalizeShippingServiceCode(code)
+  if (!normalized) return false
+  return PARCEL_SHIPPING_CATALOG.some((option) =>
+    shippingServiceCodesEquivalent(option.value, normalized)
+  )
+}
+
 export function isParcelService(code: string | null | undefined): boolean {
   const normalized = normalizeShippingServiceCode(code)
   if (!normalized || isStandardEnvelopeService(normalized)) return false
   return (
-    PARCEL_SERVICE_CODES.some(
-      (c) => c.toLowerCase() === normalized.toLowerCase()
-    ) ||
+    isKnownParcelService(normalized) ||
     /^USPS/i.test(normalized) ||
     /^UPS/i.test(normalized) ||
     /^FedEx/i.test(normalized)
   )
+}
+
+export function groupedParcelShippingOptions(
+  input?: Pick<
+    ShippingServiceResolveInput,
+    | "availableServices"
+    | "categoryId"
+    | "categoryName"
+    | "categoryPath"
+    | "listingCategory"
+    | "title"
+    | "price"
+    | "currency"
+    | "package"
+    | "marketplaceId"
+  >
+): Array<{ carrier: ParcelCarrierId; options: ParcelShippingOption[] }> {
+  const available = validDomestic(input?.availableServices)
+  const compatible = PARCEL_SHIPPING_CATALOG.filter((option) => {
+    if (available.length === 0) return true
+    return available.some((service) =>
+      shippingServiceCodesEquivalent(service.code, option.value)
+    )
+  })
+  const groups: ParcelCarrierId[] = ["USPS", "UPS", "FedEx"]
+  return groups
+    .map((carrier) => ({
+      carrier,
+      options: compatible.filter((option) => option.carrier === carrier),
+    }))
+    .filter((group) => group.options.length > 0)
 }
 
 export function shippingServiceDisplayLabel(
@@ -266,18 +382,37 @@ function availableHas(
   return list.some((s) => shippingServiceCodesEquivalent(s.code, code))
 }
 
+function firstAvailableParcelForCarrier(
+  services: EbayDomesticShippingService[] | undefined,
+  carrier: ParcelCarrierId,
+  preferCalculated: boolean
+): string | undefined {
+  const list = validDomestic(services)
+  if (list.length === 0) return undefined
+  const pool = preferCalculated
+    ? list.filter((s) =>
+        s.serviceTypes.some((t) => t.toUpperCase() === "CALCULATED")
+      )
+    : list
+  const search = (pool.length > 0 ? pool : list).filter(
+    (s) =>
+      parcelCarrierId(s.code) === carrier && !isStandardEnvelopeService(s.code)
+  )
+  for (const option of PARCEL_SHIPPING_CATALOG.filter((o) => o.carrier === carrier)) {
+    const hit = search.find((s) =>
+      shippingServiceCodesEquivalent(s.code, option.value)
+    )
+    if (hit) return hit.code
+  }
+  return search[0]?.code
+}
+
 function firstAvailableParcel(
   services: EbayDomesticShippingService[] | undefined,
   preferCalculated: boolean
 ): string {
   const list = validDomestic(services)
-  const preferred = [
-    USPS_GROUND_ADVANTAGE,
-    UPS_GROUND,
-    FEDEX_HOME_DELIVERY,
-    FEDEX_GROUND,
-    USPS_PRIORITY,
-  ]
+  const preferred = PARCEL_SHIPPING_CATALOG.map((option) => option.value)
   const pool = preferCalculated
     ? list.filter((s) =>
         s.serviceTypes.some((t) => t.toUpperCase() === "CALCULATED")
@@ -304,10 +439,20 @@ export function recommendedParcelService(
   if (
     preferred &&
     isParcelService(preferred) &&
-    !isStandardEnvelopeService(preferred) &&
-    availableHas(input.availableServices, preferred)
+    !isStandardEnvelopeService(preferred)
   ) {
-    return preferred
+    if (availableHas(input.availableServices, preferred)) {
+      return preferred
+    }
+    const carrier = parcelCarrierId(preferred)
+    if (carrier) {
+      const sameCarrier = firstAvailableParcelForCarrier(
+        input.availableServices,
+        carrier,
+        preferCalculated
+      )
+      if (sameCarrier) return sameCarrier
+    }
   }
   if (availableHas(input.availableServices, USPS_GROUND_ADVANTAGE)) {
     return USPS_GROUND_ADVANTAGE

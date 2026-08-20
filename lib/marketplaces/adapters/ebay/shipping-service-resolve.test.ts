@@ -1,6 +1,7 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
+  groupedParcelShippingOptions,
   isOrdinaryParcelMerchandise,
   isStandardEnvelopeEligible,
   isStandardEnvelopeService,
@@ -286,5 +287,72 @@ describe("eBay shipping service resolution", () => {
       shippingMode: "calculated",
     })
     assert.equal(isStandardEnvelopeService(cheapest), false)
+  })
+
+  it("keeps a seller UPS choice instead of substituting USPS Ground Advantage", () => {
+    const resolved = resolveEbayShippingService({
+      categoryPath: jeansCategory.categoryPath,
+      categoryName: jeansCategory.categoryName,
+      package: apparelPackage8oz,
+      sellerPreferredService: UPS_GROUND,
+      availableServices: envelopeFirstServices,
+    })
+    assert.equal(resolved.code, UPS_GROUND)
+    assert.equal(
+      pickValidDomesticServiceCode(UPS_GROUND, envelopeFirstServices, {
+        preferCalculated: true,
+      }),
+      UPS_GROUND
+    )
+  })
+
+  it("remaps a missing UPS service to another UPS service, not USPS", () => {
+    const upsOnlyMissingGround: EbayDomesticShippingService[] = [
+      {
+        code: USPS_GROUND_ADVANTAGE,
+        carrier: "USPS",
+        validForSellingFlow: true,
+        international: false,
+        serviceTypes: ["Flat", "Calculated"],
+      },
+      {
+        code: "UPS3rdDay",
+        carrier: "UPS",
+        validForSellingFlow: true,
+        international: false,
+        serviceTypes: ["Flat", "Calculated"],
+      },
+    ]
+    assert.equal(
+      pickValidDomesticServiceCode("UPSGround", upsOnlyMissingGround, {
+        preferCalculated: true,
+      }),
+      "UPS3rdDay"
+    )
+    assert.equal(
+      recommendedParcelService({
+        sellerPreferredService: "UPSGround",
+        availableServices: upsOnlyMissingGround,
+        shippingMode: "calculated",
+      }),
+      "UPS3rdDay"
+    )
+  })
+
+  it("lists grouped USPS/UPS/FedEx parcel services and never envelope", () => {
+    const groups = groupedParcelShippingOptions()
+    assert.deepEqual(
+      groups.map((g) => g.carrier),
+      ["USPS", "UPS", "FedEx"]
+    )
+    assert.ok(groups.some((g) => g.options.some((o) => o.value === USPS_GROUND_ADVANTAGE)))
+    assert.ok(groups.some((g) => g.options.some((o) => o.value === UPS_GROUND)))
+    assert.ok(
+      groups.some((g) => g.options.some((o) => o.value === FEDEX_HOME_DELIVERY))
+    )
+    assert.equal(
+      groups.some((g) => g.options.some((o) => isStandardEnvelopeService(o.value))),
+      false
+    )
   })
 })

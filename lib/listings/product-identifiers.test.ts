@@ -22,7 +22,10 @@ describe("product identifiers", () => {
     assert.equal(looksLikeMpn("32x30"), false)
     assert.equal(looksLikeMpn("American Eagle"), false)
     assert.equal(looksLikeMpn("XL"), false)
-    assert.equal(looksLikeMpn("AE12345"), true)
+    assert.equal(looksLikeMpn("AEMTADGO8USA"), false)
+    assert.equal(looksLikeMpn("AEJEANS32"), false)
+    assert.equal(looksLikeMpn("AE12345"), false)
+    assert.equal(looksLikeMpn("0773-2341"), true)
   })
 
   it("validates UPC/EAN length", () => {
@@ -39,6 +42,56 @@ describe("product identifiers", () => {
         confidence: 0.99,
         rationale: "Style number from tag",
         sourceField: "styleNumber",
+      }),
+      false
+    )
+  })
+
+  it("rejects the American Eagle fabricated MPN even from a tag photo", () => {
+    assert.equal(
+      isVerifiedProductIdentifier({
+        kind: "mpn",
+        value: "AEMTADGO8USA",
+        confidence: 0.96,
+        rationale: "Tag/label photo override. Code on the care tag.",
+        sourceField: "mpn",
+      }),
+      false
+    )
+    assert.equal(
+      isVerifiedProductIdentifier({
+        kind: "mpn",
+        value: "AEMTADGO8USA",
+        confidence: 0.99,
+        rationale: "Tag labeled MPN AEMTADGO8USA",
+        sourceField: "mpn",
+      }),
+      false
+    )
+  })
+
+  it("does not verify MPN from high confidence without an explicit MPN label", () => {
+    assert.equal(
+      isVerifiedProductIdentifier({
+        kind: "mpn",
+        value: "0773-2341",
+        confidence: 0.96,
+        rationale: "Tag/label photo override.",
+        sourceField: "mpn",
+      }),
+      false
+    )
+  })
+
+  it("does not convert a style number into MPN", () => {
+    assert.equal(
+      isVerifiedProductIdentifier({
+        kind: "mpn",
+        value: "0118-2341",
+        confidence: 0.99,
+        rationale: "Tag labeled MPN 0118-2341",
+        sourceField: "mpn",
+        styleNumber: "0118-2341",
       }),
       false
     )

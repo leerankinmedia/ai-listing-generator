@@ -11,12 +11,12 @@ import {
   DEFAULT_EBAY_SELLER_DEFAULTS,
   EBAY_HANDLING_TIME_OPTIONS,
   EBAY_RETURN_WINDOW_OPTIONS,
-  EBAY_SHIPPING_SERVICE_OPTIONS,
   missingEbaySellerDefaultFields,
   normalizeEbaySellerDefaults,
   type EbaySellerDefaults,
   type EbayPromotedListingsMode,
 } from "@/lib/seller/ebay-defaults"
+import { ShippingServiceSelect } from "@/components/listings/shipping-service-select"
 import {
   DEFAULT_EBAY_PACKAGE_TYPE,
   type ShippingPackage,
@@ -213,23 +213,11 @@ export function EbaySellerSettingsForm() {
         </div>
         <div className="space-y-2">
           <Label htmlFor="ship-service">Default carrier / service</Label>
-          <select
+          <ShippingServiceSelect
             id="ship-service"
             value={defaults.shippingService}
-            onChange={(e) =>
-              patch({
-                shippingService:
-                  e.target.value as EbaySellerDefaults["shippingService"],
-              })
-            }
-            className="flex h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm"
-          >
-            {EBAY_SHIPPING_SERVICE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+            onChange={(code) => patch({ shippingService: code })}
+          />
         </div>
         {defaults.shippingMode === "flat" && (
           <div className="space-y-2">

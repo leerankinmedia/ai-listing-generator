@@ -369,3 +369,22 @@ describe("clothing identity — Tweety photo set", () => {
     assert.equal(mapped.fieldConfidence.character?.value, "Tweety Bird")
   })
 })
+
+describe("clothing identity identifiers", () => {
+  it("drops a fabricated American Eagle MPN even from a tag photo", () => {
+    const { fields } = mergeClothingDetections([
+      detection({
+        photoKind: "tag",
+        imageSummary: "American Eagle care tag",
+        brand: field("American Eagle", 0.97, "Brand tag"),
+        mpn: field("AEMTADGO8USA", 0.96, "Code on the care tag"),
+        styleNumber: field("0118-2341", 0.94, "Style number on tag"),
+      }),
+    ])
+    assert.equal(fields.mpn.value, "Unknown")
+    assert.equal(fields.styleNumber.value, "0118-2341")
+    const extras = identityExtrasFromFields(fields)
+    assert.equal(extras.MPN, undefined)
+    assert.equal(extras["Style Number"], "0118-2341")
+  })
+})

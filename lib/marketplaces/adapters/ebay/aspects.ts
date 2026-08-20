@@ -14,6 +14,7 @@ import {
   ASPECT_REVIEW_CONFIDENCE,
   EBAY_SEO_ASPECT_PRIORITY,
   confidenceForListingAspect,
+  identifierEvidenceFromListing,
   isMeasurementAspect,
   isSeoPriorityAspect,
 } from "@/lib/listings/ebay-aspect-fields"
@@ -304,6 +305,7 @@ function productIdentifierCandidates(
   const extraValue =
     extras[aspectName] ||
     Object.entries(extras).find(([k]) => k.toLowerCase() === aspectName)?.[1]
+  const evidence = identifierEvidenceFromListing(listing, kind)
   const values = [
     extras[aspectName],
     kind === "mpn" ? extras.MPN : undefined,
@@ -315,9 +317,10 @@ function productIdentifierCandidates(
     isVerifiedProductIdentifier({
       kind,
       value,
-      confidence: fc?.confidence,
-      rationale: fc?.rationale,
+      confidence: evidence.confidence ?? fc?.confidence,
+      rationale: evidence.rationale ?? fc?.rationale,
       sourceField: kind,
+      styleNumber: evidence.styleNumber,
     })
   )
 }
@@ -431,14 +434,17 @@ export function applyRequiredEbayAspects(
       const kind = identifierKindFromAspect(name)
       const current = aspects[name]?.[0]?.trim()
       const candidates = listingCandidatesForAspect(listing, name)
+      const evidence = identifierEvidenceFromListing(listing, kind)
       const verified =
         (kind &&
         current &&
         isVerifiedProductIdentifier({
           kind,
           value: current,
-          confidence: conf,
+          confidence: evidence.confidence ?? conf,
+          rationale: evidence.rationale,
           sourceField: name,
+          styleNumber: evidence.styleNumber,
         })
           ? current
           : undefined) ||
@@ -447,8 +453,10 @@ export function applyRequiredEbayAspects(
             ? isVerifiedProductIdentifier({
                 kind,
                 value: c,
-                confidence: conf,
+                confidence: evidence.confidence ?? conf,
+                rationale: evidence.rationale,
                 sourceField: name,
+                styleNumber: evidence.styleNumber,
               })
             : false
         )

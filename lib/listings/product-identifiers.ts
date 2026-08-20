@@ -52,8 +52,36 @@ function looksLikeIsbn(value: string): boolean {
 }
 
 /**
+ * Common vision hallucinations: brand initials + garment/country mashups
+ * with no separators (e.g. AEMTADGO8USA, AEJEANS32).
+ */
+export function looksFabricatedMpn(value: string): boolean {
+  const raw = value.trim()
+  if (!raw) return false
+  const compact = raw.replace(/[\s._\-\/]/g, "")
+  if (/\b(jeans?|pants?|shirts?|tees?\b|hoodie|denim|apparel)\b/i.test(raw)) {
+    return true
+  }
+  if (/USA$/i.test(compact) && !/[.\-\/]/.test(raw)) return true
+  if (
+    /^(USA|UK|CN|CA|MX|JP)$/i.test(compact.slice(-2)) &&
+    !/[.\-\/]/.test(raw) &&
+    compact.length > 6
+  ) {
+    return true
+  }
+  if (
+    /^(AE|AEO|LEVIS?|NIKE|GAP)[A-Z0-9]{5,}$/i.test(compact) &&
+    !/[.\-\/]/.test(raw)
+  ) {
+    return true
+  }
+  return false
+}
+
+/**
  * Real MPNs are tag/part codes — not sizes, brands, garment words, or
- * style-ish guesses like "AE123".
+ * concatenated guesses like "AEMTADGO8USA".
  */
 export function looksLikeMpn(value: string): boolean {
   const raw = value.trim()
@@ -69,6 +97,7 @@ export function looksLikeMpn(value: string): boolean {
   ) {
     return false
   }
+  if (looksFabricatedMpn(raw)) return false
   // Require at least one digit so brand/style words are not treated as MPNs.
   if (!/\d/.test(raw)) return false
   return /^[A-Za-z0-9][A-Za-z0-9._\-\/]*$/.test(raw)
@@ -108,9 +137,32 @@ export function identifierLooksValid(
   }
 }
 
+function hasExplicitIdentifierLabel(
+  rationale: string | undefined,
+  kind: ProductIdentifierKind
+): boolean {
+  const text = (rationale || "").toLowerCase()
+  if (!text.trim()) return false
+  if (kind === "upc") return /\b(upc|barcode|bar\s*code|scanned)\b/.test(text)
+  if (kind === "ean") return /\b(ean|barcode|bar\s*code)\b/.test(text)
+  if (kind === "isbn") return /\bisbn\b/.test(text)
+  // MPN must be explicitly labeled — a generic "tag photo" is not enough.
+  return (
+    /\b(labeled|labelled|printed|reads?|says?)\b.{0,32}\b(mpn|manufacturer part number)\b/.test(
+      text
+    ) ||
+    /\b(mpn|manufacturer part number)\s*[:#]/.test(text) ||
+    /\bmanufacturer part number\b/.test(text)
+  )
+}
+
+function compactIdentifier(value: string): string {
+  return value.replace(/[\s._\-\/]/g, "").toLowerCase()
+}
+
 /**
  * Style / RN / SKU numbers are not MPNs unless the model explicitly labeled
- * the value as MPN with tag evidence.
+ * the value as MPN with tag evidence. High confidence alone is not enough.
  */
 export function isVerifiedProductIdentifier(opts: {
   kind: ProductIdentifierKind
@@ -118,19 +170,24 @@ export function isVerifiedProductIdentifier(opts: {
   confidence?: number
   rationale?: string
   sourceField?: string
+  styleNumber?: string | null
 }): boolean {
   const value = (opts.value || "").trim()
   if (!identifierLooksValid(opts.kind, value)) return false
   if (opts.sourceField && /style\s*number|stylenumber|rn\b/i.test(opts.sourceField)) {
     return false
   }
-  if ((opts.confidence ?? 1) < 0.85) return false
-  const rationale = (opts.rationale || "").toLowerCase()
+  const style = (opts.styleNumber || "").trim()
   if (
-    rationale &&
-    /guess|infer|likely|probably|assume|invent/i.test(rationale) &&
-    !/tag|label|barcode|printed|readable|ocr/i.test(rationale)
+    style &&
+    compactIdentifier(style) === compactIdentifier(value)
   ) {
+    return false
+  }
+  if ((opts.confidence ?? 0) < 0.85) return false
+  if (!hasExplicitIdentifierLabel(opts.rationale, opts.kind)) return false
+  const rationale = (opts.rationale || "").toLowerCase()
+  if (/guess|infer|likely|probably|assume|invent|fabricat/i.test(rationale)) {
     return false
   }
   return true

@@ -7,9 +7,9 @@ import { Label } from "@/components/ui/label"
 import { NullableNumberInput } from "@/components/ui/nullable-number-input"
 import {
   EBAY_HANDLING_TIME_OPTIONS,
-  EBAY_SHIPPING_SERVICE_OPTIONS,
   shippingWhoPaysLabel,
 } from "@/lib/seller/ebay-defaults"
+import { ShippingServiceSelect } from "@/components/listings/shipping-service-select"
 import {
   defaultEbayShippingMode,
   shippingModeLabel,
@@ -208,23 +208,20 @@ export function SellingPreferencesPanel({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="pref-service">Shipping service</Label>
-            <select
+            <ShippingServiceSelect
               id="pref-service"
               disabled={disabled}
+              listing={listing}
               value={service}
-              onChange={(e) =>
-                patchSpecifics(listing, onChange, {
-                  shippingService: e.target.value,
-                })
+              onChange={(code) =>
+                patchSpecifics(
+                  listing,
+                  onChange,
+                  { shippingService: code },
+                  { shippingService: code }
+                )
               }
-              className="flex h-11 w-full rounded-lg border border-input bg-card px-3.5 text-sm"
-            >
-              {EBAY_SHIPPING_SERVICE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+            />
           </div>
         </div>
 

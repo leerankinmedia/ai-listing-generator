@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
   additionalReviewSpecificsCount,
+  additionalReviewSpecificsLabel,
   formatAiEmployeeBanner,
   readAspectValue,
   resolveSelectValue,
@@ -443,6 +444,7 @@ export function EbayItemSpecificsFields({
           <button
             type="button"
             className="flex min-h-12 w-full items-center justify-between gap-3 px-3 py-3 text-left"
+            aria-expanded={moreOpen}
             onClick={() => setMoreOpen((o) => !o)}
           >
             <div className="flex items-start gap-2">
@@ -454,14 +456,12 @@ export function EbayItemSpecificsFields({
               <div>
                 <p className="text-sm font-semibold">
                   {variant === "review"
-                    ? moreFilled > 0
-                      ? `${moreFilled} more…`
-                      : "More item details"
+                    ? additionalReviewSpecificsLabel(moreFilled)
                     : "More item details"}
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {variant === "review"
-                    ? "Optional specifics"
+                    ? "Tap to review or edit. Hidden specifics still publish."
                     : `${summary.completed} of ${summary.total} completed${
                         autoFilledCount > 0
                           ? ` · ${autoFilledCount} auto-filled`

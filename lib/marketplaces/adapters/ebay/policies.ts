@@ -20,6 +20,7 @@ import {
 } from "@/lib/marketplaces/adapters/ebay/shipping-services"
 import {
   isStandardEnvelopeService,
+  parcelCarrierId,
   resolveEbayShippingService,
   shippingServiceCodesEquivalent,
 } from "@/lib/marketplaces/adapters/ebay/shipping-service-resolve"
@@ -492,7 +493,10 @@ export function fulfillmentCreateVariants(opts: {
       shape: "minimal",
       service,
     })
-    if (service.toLowerCase() !== "uspspriority") {
+    if (
+      service.toLowerCase() !== "uspspriority" &&
+      parcelCarrierId(service) === "USPS"
+    ) {
       variants.push({
         id: "flat-usps-priority",
         mode: "flat",

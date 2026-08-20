@@ -83,6 +83,37 @@ describe("ebay seller defaults", () => {
     assert.equal(next.specifics.shippingPackage?.weightPounds, 1)
   })
 
+  it("persists a seller-level UPS/FedEx preference without rewriting it to USPS", () => {
+    const listing = createEmptyListing("user_1")
+    const defaults = normalizeEbaySellerDefaults({
+      shippingService: "UPS3rdDay",
+      itemLocationZip: "43604",
+      package: {
+        weightPounds: 1,
+        weightOunces: 0,
+        lengthInches: 12,
+        widthInches: 9,
+        heightInches: 1,
+        packageType: "PACKAGE_THICK_ENVELOPE",
+      },
+    })
+    assert.equal(defaults.shippingService, "UPS3rdDay")
+    const next = applyEbaySellerDefaultsToListing(listing, defaults)
+    assert.equal(next.specifics.shippingService, "UPS3rdDay")
+    assert.equal(next.specifics.extras?.shippingService, "UPS3rdDay")
+  })
+
+  it("does not treat factory USPS Ground Advantage as a global hard-code for saved sellers", () => {
+    const saved = normalizeEbaySellerDefaults({
+      shippingService: "FedExHomeDelivery",
+    })
+    assert.equal(saved.shippingService, "FedExHomeDelivery")
+    assert.equal(
+      normalizeEbaySellerDefaults({}).shippingService,
+      "USPSGroundAdvantage"
+    )
+  })
+
   it("resolves offer floors from amount or percent", () => {
     assert.equal(resolveOfferPriceFloor(100, 40, null), 40)
     assert.equal(resolveOfferPriceFloor(100, null, 50), 50)

@@ -60,4 +60,43 @@ describe("matchExactEbayAspectValue color primary", () => {
     )
     assert.equal(value, "Levi's")
   })
+
+  it("maps clothing construction wording onto eBay aspect options", () => {
+    assert.equal(
+      matchExactEbayAspectValue(
+        "Fit",
+        ["relaxed fit"],
+        ["Slim", "Regular", "Relaxed"],
+        { selectionOnly: true, highConfidence: true }
+      ),
+      "Relaxed"
+    )
+    assert.equal(
+      matchExactEbayAspectValue(
+        "Rise",
+        ["mid-rise"],
+        ["Low", "Mid", "High"],
+        { selectionOnly: true, highConfidence: true }
+      ),
+      "Mid"
+    )
+    assert.equal(
+      matchExactEbayAspectValue(
+        "Closure",
+        ["zip fly"],
+        ["Button", "Zipper", "Pullover"],
+        { selectionOnly: true, highConfidence: true }
+      ),
+      "Zipper"
+    )
+    assert.equal(
+      matchExactEbayAspectValue(
+        "Fabric Wash",
+        ["medium wash"],
+        ["Light Wash", "Medium Wash", "Dark Wash"],
+        { selectionOnly: true, highConfidence: true }
+      ),
+      "Medium Wash"
+    )
+  })
 })

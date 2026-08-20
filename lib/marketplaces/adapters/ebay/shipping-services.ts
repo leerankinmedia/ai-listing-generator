@@ -1,14 +1,12 @@
 import { xmlText } from "@/lib/marketplaces/adapters/ebay/trading-parse"
 import { ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
 import {
-  FEDEX_GROUND,
-  FEDEX_HOME_DELIVERY,
   isParcelService,
   isStandardEnvelopeService,
+  parcelCarrierId,
+  PARCEL_SHIPPING_CATALOG,
   shippingServiceCodesEquivalent,
-  UPS_GROUND,
   USPS_GROUND_ADVANTAGE,
-  USPS_PRIORITY,
 } from "@/lib/marketplaces/adapters/ebay/shipping-service-resolve"
 
 export type EbayDomesticShippingService = {
@@ -91,10 +89,29 @@ export function pickValidDomesticServiceCode(
   if (wanted && isStandardEnvelopeService(wanted) && !allowStandardEnvelope) {
     // Specialized envelope was requested but this listing is not eligible.
   } else if (wanted && isParcelService(wanted)) {
-    const parcelExact = usable.find((s) =>
-      shippingServiceCodesEquivalent(s.code, wanted)
-    )
-    if (parcelExact) return parcelExact.code
+    const carrier = parcelCarrierId(wanted)
+    const pool = preferCalculated
+      ? usable.filter((s) =>
+          s.serviceTypes.some((t) => t.toUpperCase() === "CALCULATED")
+        )
+      : usable
+    const search = pool.length > 0 ? pool : usable
+    if (carrier) {
+      const sameCarrier = search.filter(
+        (s) =>
+          parcelCarrierId(s.code) === carrier &&
+          !isStandardEnvelopeService(s.code)
+      )
+      for (const option of PARCEL_SHIPPING_CATALOG.filter(
+        (o) => o.carrier === carrier
+      )) {
+        const hit = sameCarrier.find((s) =>
+          shippingServiceCodesEquivalent(s.code, option.value)
+        )
+        if (hit) return hit.code
+      }
+      if (sameCarrier[0]) return sameCarrier[0].code
+    }
   }
 
   const pool = preferCalculated
@@ -104,13 +121,7 @@ export function pickValidDomesticServiceCode(
     : usable
   const search = pool.length > 0 ? pool : usable
 
-  const preferredOrder = [
-    USPS_GROUND_ADVANTAGE,
-    UPS_GROUND,
-    FEDEX_HOME_DELIVERY,
-    FEDEX_GROUND,
-    USPS_PRIORITY,
-  ]
+  const preferredOrder = PARCEL_SHIPPING_CATALOG.map((option) => option.value)
   for (const code of preferredOrder) {
     const hit = search.find((s) => shippingServiceCodesEquivalent(s.code, code))
     if (hit) return hit.code

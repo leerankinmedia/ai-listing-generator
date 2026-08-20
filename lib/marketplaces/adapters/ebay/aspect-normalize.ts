@@ -172,6 +172,71 @@ const TYPE_SYNONYMS: Record<string, string[]> = {
   leggings: ["leggings", "tights"],
 }
 
+const FIT_SYNONYMS: Record<string, string[]> = {
+  slim: ["slim", "slim fit"],
+  skinny: ["skinny", "skinny fit"],
+  regular: ["regular", "regular fit", "standard fit"],
+  relaxed: ["relaxed", "relaxed fit"],
+  athletic: ["athletic", "athletic fit"],
+  loose: ["loose", "loose fit"],
+  tailored: ["tailored", "tailored fit"],
+  straight: ["straight", "straight fit"],
+}
+
+const RISE_SYNONYMS: Record<string, string[]> = {
+  high: ["high", "high rise", "high-rise"],
+  mid: ["mid", "mid rise", "mid-rise", "medium", "medium rise"],
+  low: ["low", "low rise", "low-rise"],
+}
+
+const CLOSURE_SYNONYMS: Record<string, string[]> = {
+  zipper: ["zipper", "zip", "zip fly", "zip-fly", "zippered"],
+  button: ["button", "button fly", "button-fly"],
+  pullover: ["pullover", "pull on", "pull-on"],
+  snap: ["snap", "snaps", "snap button"],
+  hook: ["hook", "hook and eye", "hook & eye"],
+}
+
+const FABRIC_WASH_SYNONYMS: Record<string, string[]> = {
+  "light wash": ["light wash", "lightwash", "light"],
+  "medium wash": ["medium wash", "mediumwash", "medium"],
+  "dark wash": ["dark wash", "darkwash", "dark"],
+  "acid wash": ["acid wash", "acidwash"],
+  stonewashed: ["stonewashed", "stone wash", "stone-washed"],
+  raw: ["raw", "unwashed", "dry denim"],
+}
+
+const POCKET_TYPE_SYNONYMS: Record<string, string[]> = {
+  "5-pocket": ["5-pocket", "5 pocket", "five pocket", "5-pockets", "five-pocket"],
+  "slash pocket": ["slash pocket", "slash pockets"],
+  "patch pocket": ["patch pocket", "patch pockets"],
+  "cargo pocket": ["cargo pocket", "cargo pockets"],
+}
+
+const FABRIC_TYPE_SYNONYMS: Record<string, string[]> = {
+  denim: ["denim", "jean", "jeans fabric"],
+  knit: ["knit", "jersey", "jersey knit"],
+  woven: ["woven"],
+  fleece: ["fleece"],
+  stretch: ["stretch", "stretch denim"],
+  cotton: ["cotton", "cotton blend"],
+}
+
+const SEASON_SYNONYMS: Record<string, string[]> = {
+  spring: ["spring"],
+  summer: ["summer"],
+  fall: ["fall", "autumn"],
+  winter: ["winter"],
+  "all season": ["all season", "all-season", "year round", "year-round"],
+}
+
+const GARMENT_CARE_SYNONYMS: Record<string, string[]> = {
+  "machine wash": ["machine wash", "machine washable", "machine-wash"],
+  "hand wash": ["hand wash", "hand-wash"],
+  "dry clean": ["dry clean", "dry clean only", "dry-clean"],
+  "tumble dry": ["tumble dry", "tumble dry low"],
+}
+
 function collapse(value: string): string {
   return value
     .trim()
@@ -206,6 +271,14 @@ const MATERIAL_LOOKUP = buildSynonymLookup(MATERIAL_SYNONYMS)
 const PATTERN_LOOKUP = buildSynonymLookup(PATTERN_SYNONYMS)
 const STYLE_LOOKUP = buildSynonymLookup(STYLE_SYNONYMS)
 const TYPE_LOOKUP = buildSynonymLookup(TYPE_SYNONYMS)
+const FIT_LOOKUP = buildSynonymLookup(FIT_SYNONYMS)
+const RISE_LOOKUP = buildSynonymLookup(RISE_SYNONYMS)
+const CLOSURE_LOOKUP = buildSynonymLookup(CLOSURE_SYNONYMS)
+const FABRIC_WASH_LOOKUP = buildSynonymLookup(FABRIC_WASH_SYNONYMS)
+const POCKET_TYPE_LOOKUP = buildSynonymLookup(POCKET_TYPE_SYNONYMS)
+const FABRIC_TYPE_LOOKUP = buildSynonymLookup(FABRIC_TYPE_SYNONYMS)
+const SEASON_LOOKUP = buildSynonymLookup(SEASON_SYNONYMS)
+const GARMENT_CARE_LOOKUP = buildSynonymLookup(GARMENT_CARE_SYNONYMS)
 
 /**
  * Split compound color wording into an eBay primary color + accent detail.
@@ -341,6 +414,27 @@ function expandCandidates(
     for (const word of collapsed.split(" ").filter(Boolean)) {
       addCanonical(TYPE_LOOKUP.get(word))
     }
+  } else if (name === "fit") {
+    addCanonical(FIT_LOOKUP.get(collapsed))
+    const stripped = collapsed.replace(/\bfit\b/g, "").trim()
+    if (stripped) addCanonical(FIT_LOOKUP.get(stripped))
+  } else if (name === "rise") {
+    addCanonical(RISE_LOOKUP.get(collapsed))
+    const stripped = collapsed.replace(/\brise\b/g, "").trim()
+    if (stripped) addCanonical(RISE_LOOKUP.get(stripped))
+  } else if (name === "closure") {
+    addCanonical(CLOSURE_LOOKUP.get(collapsed))
+  } else if (name === "fabric wash") {
+    addCanonical(FABRIC_WASH_LOOKUP.get(collapsed))
+  } else if (name === "pocket type") {
+    addCanonical(POCKET_TYPE_LOOKUP.get(collapsed))
+  } else if (name === "fabric type") {
+    addCanonical(FABRIC_TYPE_LOOKUP.get(collapsed))
+    addCanonical(MATERIAL_LOOKUP.get(collapsed))
+  } else if (name === "season") {
+    addCanonical(SEASON_LOOKUP.get(collapsed))
+  } else if (name === "garment care") {
+    addCanonical(GARMENT_CARE_LOOKUP.get(collapsed))
   } else if (name === "brand") {
     // Normalize casing / strip common prefixes for free-text + selection lists.
     const stripped = collapsed.replace(/^(brand|by)\s+/i, "").trim()

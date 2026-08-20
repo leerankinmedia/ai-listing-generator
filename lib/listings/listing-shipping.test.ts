@@ -152,4 +152,28 @@ describe("listing shipping intent", () => {
     assert.equal(body.shippingOptions[0].shippingServices[0].freeShipping, true)
     assert.equal(body.shippingOptions[0].shippingServices[0].shippingCost?.value, "0.0")
   })
+
+  it("persists the seller-selected UPS/FedEx service onto the fulfillment create body", () => {
+    const listing = baseListing({
+      specifics: {
+        ...baseListing().specifics,
+        shippingService: "UPSGround",
+        extras: { shippingService: "UPSGround" },
+      },
+    })
+    const intent = listingShippingIntent(listing)
+    assert.equal(intent.shippingServiceCode, "UPSGround")
+    const body = buildFulfillmentPolicyCreateRequest({
+      ...fulfillmentPolicyArgsFromIntent(intent),
+      name: "ups",
+    })
+    assert.equal(
+      body.shippingOptions[0].shippingServices[0].shippingServiceCode,
+      "UPSGround"
+    )
+    assert.equal(
+      body.shippingOptions[0].shippingServices[0].shippingCarrierCode,
+      "UPS"
+    )
+  })
 })

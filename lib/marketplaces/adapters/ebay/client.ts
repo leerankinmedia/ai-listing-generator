@@ -100,6 +100,9 @@ export function mapListingToEbayInventory(listing: Listing) {
           confidence: fc?.confidence,
           rationale: fc?.rationale,
           sourceField: key,
+          styleNumber:
+            listing.fieldConfidence?.styleNumber?.value ||
+            listing.specifics.extras?.["Style Number"],
         })
       ) {
         continue

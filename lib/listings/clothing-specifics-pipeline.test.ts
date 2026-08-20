@@ -282,4 +282,24 @@ describe("clothing listing specifics pipeline", () => {
     const applied = applyRequiredEbayAspects(listing, taxonomy, {})
     assert.equal(applied.aspects.MPN?.[0], "Does not apply")
   })
+
+  it("never publishes the fabricated American Eagle MPN AEMTADGO8USA", () => {
+    const listing = jeansListing()
+    listing.specifics.extras = {
+      ...listing.specifics.extras,
+      MPN: "AEMTADGO8USA",
+    }
+    listing.fieldConfidence = {
+      ...listing.fieldConfidence,
+      mpn: fc("AEMTADGO8USA", 0.99, "Tag/label photo override. Code on the care tag."),
+    }
+    const { inventoryItem } = mapListingToEbayInventory(listing)
+    assert.equal(inventoryItem.product.aspects.MPN, undefined)
+    const applied = applyRequiredEbayAspects(
+      listing,
+      [aspect("MPN", { required: true, values: ["Does not apply"] })],
+      inventoryItem.product.aspects
+    )
+    assert.equal(applied.aspects.MPN?.[0], "Does not apply")
+  })
 })

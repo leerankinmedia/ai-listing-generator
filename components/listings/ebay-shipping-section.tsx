@@ -14,6 +14,7 @@ import {
   shippingServiceLabel,
 } from "@/lib/seller/ebay-defaults"
 import { listingShippingServiceCode } from "@/lib/listings/listing-shipping"
+import { ShippingServiceSelect } from "@/components/listings/shipping-service-select"
 import type { Listing } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -114,6 +115,21 @@ export function EbayShippingModeFields({
           />
         </div>
       )}
+
+      <div className="space-y-2">
+        <Label htmlFor="shipping-service">Carrier / service</Label>
+        <ShippingServiceSelect
+          id="shipping-service"
+          disabled={disabled}
+          listing={listing}
+          value={listingShippingServiceCode(listing)}
+          onChange={(code) =>
+            patchSpecifics(listing, onChange, {
+              shippingService: code,
+            })
+          }
+        />
+      </div>
 
       <div className="space-y-2">
         <Label htmlFor="handling-time-days">Handling time</Label>

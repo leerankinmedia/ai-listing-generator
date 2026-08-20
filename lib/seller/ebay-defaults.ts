@@ -5,7 +5,15 @@
 
 import type { Listing, ListingShippingPackage } from "@/lib/types"
 import type { EbayShippingMode } from "@/lib/marketplaces/adapters/ebay/fulfillment-shipping"
-import { shippingServiceDisplayLabel } from "@/lib/marketplaces/adapters/ebay/shipping-service-resolve"
+import {
+  groupedParcelShippingOptions,
+  isKnownParcelService,
+  isParcelService,
+  isStandardEnvelopeService,
+  normalizeShippingServiceCode,
+  shippingServiceDisplayLabel,
+  USPS_GROUND_ADVANTAGE,
+} from "@/lib/marketplaces/adapters/ebay/shipping-service-resolve"
 import {
   DEFAULT_EBAY_PACKAGE_TYPE,
   shippingPackageIsComplete,
@@ -28,27 +36,17 @@ export const EBAY_HANDLING_TIME_OPTIONS = [
 export type EbayHandlingTimeDays =
   (typeof EBAY_HANDLING_TIME_OPTIONS)[number]["value"]
 
-export const EBAY_SHIPPING_SERVICE_OPTIONS = [
-  {
-    value: "USPSGroundAdvantage",
-    label: "USPS Ground Advantage",
-  },
-  {
-    value: "USPSPriority",
-    label: "USPS Priority Mail",
-  },
-  {
-    value: "UPSGround",
-    label: "UPS Ground",
-  },
-  {
-    value: "FedExHomeDelivery",
-    label: "FedEx Ground / Home Delivery",
-  },
-] as const
+export const EBAY_SHIPPING_SERVICE_OPTIONS = groupedParcelShippingOptions()
+  .flatMap((group) =>
+    group.options.map((option) => ({
+      value: option.value,
+      label: option.label,
+    }))
+  )
 
-export type EbayShippingServiceCode =
-  (typeof EBAY_SHIPPING_SERVICE_OPTIONS)[number]["value"]
+export const EBAY_SHIPPING_SERVICE_GROUPS = groupedParcelShippingOptions()
+
+export type EbayShippingServiceCode = string
 
 export const EBAY_RETURN_WINDOW_OPTIONS = [
   { value: 30, label: "30 days" },
@@ -125,9 +123,11 @@ function asHandlingDays(value: unknown): EbayHandlingTimeDays {
 }
 
 function asShippingService(value: unknown): EbayShippingServiceCode {
-  const raw = String(value || "").trim()
-  const match = EBAY_SHIPPING_SERVICE_OPTIONS.find((o) => o.value === raw)
-  return match?.value || "USPSGroundAdvantage"
+  const raw = normalizeShippingServiceCode(String(value || "").trim())
+  if (!raw) return USPS_GROUND_ADVANTAGE
+  if (isStandardEnvelopeService(raw)) return USPS_GROUND_ADVANTAGE
+  if (isKnownParcelService(raw) || isParcelService(raw)) return raw
+  return USPS_GROUND_ADVANTAGE
 }
 
 function asShippingMode(value: unknown): EbayShippingMode {
@@ -275,6 +275,12 @@ export function applyEbaySellerDefaultsToListing(
     defaults.shippingService,
     !specifics.shippingService
   )
+  if (
+    defaults.shippingService &&
+    (!onlyIfUnset || !extras.shippingService)
+  ) {
+    extras.shippingService = defaults.shippingService
+  }
   if (
     defaults.shippingMode === "flat" &&
     defaults.flatShippingAmount != null &&

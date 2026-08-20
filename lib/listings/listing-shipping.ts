@@ -125,7 +125,6 @@ export function fulfillmentPolicyArgsFromIntent(
     shippingServiceCode: intent.shippingServiceCode,
     flatAmount: intent.flatAmount ?? undefined,
     setAsDefault: false,
-    includePackageHandlingCost: false,
   }
 }
 

@@ -133,15 +133,19 @@ describe("fulfillment shipping classification", () => {
       "USPS"
     )
     assert.equal(body.shippingOptions[0].shippingServices[0].freeShipping, false)
+    assert.equal(body.shippingOptions[0].shippingServices[0].sortOrder, 1)
+    assert.equal(
+      body.shippingOptions[0].shippingServices[0].buyerResponsibleForShipping,
+      false
+    )
+    assert.equal(
+      body.shippingOptions[0].shippingServices[0].buyerResponsibleForPickup,
+      false
+    )
+    assert.equal(body.shippingOptions[0].packageHandlingCost?.value, "0.0")
     assert.equal(
       body.shippingOptions[0].shippingServices[0].shippingCost,
       undefined
-    )
-    // Motors-only true is invalid; default production shape omits the flags.
-    assert.equal(
-      "buyerResponsibleForShipping" in
-        body.shippingOptions[0].shippingServices[0],
-      false
     )
     assert.equal("shipToLocations" in body, false)
     assert.equal(
@@ -292,11 +296,17 @@ describe("fulfillment shipping classification", () => {
     assert.equal(presence.costType, "CALCULATED")
     assert.equal(presence.shippingServiceCode, "USPSGroundAdvantage")
     assert.equal(presence.shippingCarrierCode, "USPS")
+    assert.equal(presence.sortOrder, 1)
     assert.equal(presence.shippingCost, null)
+    assert.equal(presence.buyerResponsibleForShipping, false)
+    assert.equal(presence.buyerResponsibleForPickup, false)
+    assert.deepEqual(presence.packageHandlingCost, {
+      value: "0.0",
+      currency: "USD",
+    })
     assert.equal(presence.hasTopLevelShipToLocations, false)
     assert.equal(presence.hasServiceShipToLocations, false)
     assert.equal(presence.hasInsuranceOffered, false)
-    assert.equal(presence.buyerResponsibleForShipping, null)
     assert.equal(JSON.stringify(finalJson).includes("shipToLocations"), false)
   })
 

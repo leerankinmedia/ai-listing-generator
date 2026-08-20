@@ -105,6 +105,11 @@ describe("listing shipping intent", () => {
       "USPSGroundAdvantage"
     )
     assert.equal(
+      body.shippingOptions[0].shippingServices[0].shippingCarrierCode,
+      "USPS"
+    )
+    assert.equal(body.shippingOptions[0].packageHandlingCost?.value, "0.0")
+    assert.equal(
       body.shippingOptions[0].shippingServices[0].shippingCost,
       undefined
     )

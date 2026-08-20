@@ -4,9 +4,13 @@ import {
   isParcelService,
   isStandardEnvelopeService,
   normalizeShippingServiceCode,
+  parcelCarrierId,
   shippingServiceCodesEquivalent,
+  shippingServiceDisplayLabel,
   USPS_GROUND_ADVANTAGE,
 } from "@/lib/marketplaces/adapters/ebay/shipping-service-resolve"
+
+export type EbayShippingCostType = "CALCULATED" | "FLAT_RATE"
 
 export type EbayDomesticShippingService = {
   code: string
@@ -14,6 +18,76 @@ export type EbayDomesticShippingService = {
   validForSellingFlow: boolean
   international: boolean
   serviceTypes: string[]
+  dimensionsRequired?: boolean
+  weightRequired?: boolean
+}
+
+export type ShippingServiceValidationOk = {
+  ok: true
+  code: string
+  carrier: string
+  serviceTypes: string[]
+  validForSellingFlow: true
+  metadataAvailable: boolean
+  dimensionsRequired: boolean
+  weightRequired: boolean
+}
+
+export type ShippingServiceValidationFail = {
+  ok: false
+  code: string
+  reason:
+    | "not_found"
+    | "not_valid_for_selling_flow"
+    | "international"
+    | "envelope_not_allowed"
+    | "cost_type_unsupported"
+    | "carrier_mismatch"
+  message: string
+  metadataAvailable: true
+}
+
+export type ShippingServiceValidation =
+  | ShippingServiceValidationOk
+  | ShippingServiceValidationFail
+
+function xmlFlag(block: string, tag: string): boolean {
+  return xmlText(block, tag).toLowerCase() === "true"
+}
+
+export function normalizeEbayCarrierCode(
+  raw: string | null | undefined
+): string | null {
+  const value = String(raw || "").trim()
+  if (!value) return null
+  if (/^usps$/i.test(value)) return "USPS"
+  if (/^ups$/i.test(value)) return "UPS"
+  if (/^fedex$/i.test(value)) return "FedEx"
+  return value
+}
+
+export function serviceSupportsCostType(
+  serviceTypes: string[],
+  costType: EbayShippingCostType
+): boolean {
+  if (serviceTypes.length === 0) return true
+  const types = serviceTypes.map((t) => t.trim().toUpperCase())
+  if (costType === "CALCULATED") {
+    return types.some((t) => t === "CALCULATED" || t === "CALCULATED_SHIPPING")
+  }
+  return types.some(
+    (t) => t === "FLAT" || t === "FLAT_RATE" || t === "FLAT_RATE_SHIPPING"
+  )
+}
+
+function carriersPaired(
+  serviceCode: string,
+  metadataCarrier: string | null
+): boolean {
+  const actual = normalizeEbayCarrierCode(metadataCarrier)
+  if (!actual) return true
+  const expected = parcelCarrierId(serviceCode) || "USPS"
+  return actual.toUpperCase() === expected.toUpperCase()
 }
 
 function tradingEndpoint() {
@@ -37,12 +111,12 @@ export function parseShippingServiceDetailsXml(
       )
       return {
         code,
-        carrier: xmlText(block, "ShippingCarrier") || null,
-        validForSellingFlow:
-          xmlText(block, "ValidForSellingFlow").toLowerCase() === "true",
-        international:
-          xmlText(block, "InternationalService").toLowerCase() === "true",
+        carrier: normalizeEbayCarrierCode(xmlText(block, "ShippingCarrier")),
+        validForSellingFlow: xmlFlag(block, "ValidForSellingFlow"),
+        international: xmlFlag(block, "InternationalService"),
         serviceTypes: types,
+        dimensionsRequired: xmlFlag(block, "DimensionsRequired"),
+        weightRequired: xmlFlag(block, "WeightRequired"),
       }
     })
     .filter((s) => s.code)
@@ -112,6 +186,106 @@ export function pickValidDomesticServiceCode(
   return USPS_GROUND_ADVANTAGE
 }
 
+export function findEbayDomesticShippingService(
+  requested: string,
+  services: EbayDomesticShippingService[]
+): EbayDomesticShippingService | undefined {
+  const wanted = normalizeShippingServiceCode(requested) || requested.trim()
+  if (!wanted) return undefined
+  return services.find((s) => shippingServiceCodesEquivalent(s.code, wanted))
+}
+
+function unsupportedMessage(
+  code: string,
+  costType: EbayShippingCostType,
+  reason: ShippingServiceValidationFail["reason"]
+): string {
+  const label = shippingServiceDisplayLabel(code) || code || "That shipping service"
+  const costLabel = costType === "CALCULATED" ? "calculated" : "flat"
+  switch (reason) {
+    case "not_found":
+      return `${label} is not a valid eBay US shipping service for selling. ListWise did not substitute another carrier or service. Choose a supported USPS, UPS, or FedEx service.`
+    case "not_valid_for_selling_flow":
+      return `${label} is not valid for eBay US selling. ListWise did not substitute another shipping service.`
+    case "international":
+      return `${label} is an international eBay shipping service. This listing is domestic US only.`
+    case "envelope_not_allowed":
+      return `eBay Standard Envelope is not eligible for this listing. Choose a parcel service such as USPS Ground Advantage.`
+    case "cost_type_unsupported":
+      return `${label} does not support ${costLabel} shipping on eBay US. ListWise did not change the service or shipping-cost type.`
+    case "carrier_mismatch":
+      return `${label} is not paired with its eBay carrier code. ListWise did not substitute another shipping service.`
+  }
+}
+
+/**
+ * Confirm the seller's selected service against GeteBayDetails for EBAY_US.
+ * Never substitutes a different service. Empty metadata means the lookup
+ * failed — callers keep the selected catalog service instead of guessing.
+ */
+export function validateSelectedShippingService(opts: {
+  requested: string
+  costType: EbayShippingCostType
+  services: EbayDomesticShippingService[]
+  allowStandardEnvelope?: boolean
+}): ShippingServiceValidation {
+  const requested =
+    normalizeShippingServiceCode(opts.requested) || opts.requested.trim()
+  const code = requested || USPS_GROUND_ADVANTAGE
+  const catalogCarrier = parcelCarrierId(code) || "USPS"
+
+  if (opts.services.length === 0) {
+    return {
+      ok: true,
+      code,
+      carrier: catalogCarrier,
+      serviceTypes: [],
+      validForSellingFlow: true,
+      metadataAvailable: false,
+      dimensionsRequired: opts.costType === "CALCULATED",
+      weightRequired: opts.costType === "CALCULATED",
+    }
+  }
+
+  const match = findEbayDomesticShippingService(code, opts.services)
+  const fail = (
+    reason: ShippingServiceValidationFail["reason"],
+    serviceCode = code
+  ): ShippingServiceValidationFail => ({
+    ok: false,
+    code: serviceCode,
+    reason,
+    metadataAvailable: true,
+    message: unsupportedMessage(serviceCode, opts.costType, reason),
+  })
+
+  if (!match) return fail("not_found")
+  if (!match.validForSellingFlow) {
+    return fail("not_valid_for_selling_flow", match.code)
+  }
+  if (match.international) return fail("international", match.code)
+  if (isStandardEnvelopeService(match.code) && !opts.allowStandardEnvelope) {
+    return fail("envelope_not_allowed", match.code)
+  }
+  if (!serviceSupportsCostType(match.serviceTypes, opts.costType)) {
+    return fail("cost_type_unsupported", match.code)
+  }
+  if (!carriersPaired(match.code, match.carrier)) {
+    return fail("carrier_mismatch", match.code)
+  }
+
+  return {
+    ok: true,
+    code: match.code,
+    carrier: normalizeEbayCarrierCode(match.carrier) || catalogCarrier,
+    serviceTypes: match.serviceTypes,
+    validForSellingFlow: true,
+    metadataAvailable: true,
+    dimensionsRequired: Boolean(match.dimensionsRequired),
+    weightRequired: Boolean(match.weightRequired),
+  }
+}
+
 /**
  * Discover marketplace-valid domestic shipping service codes for this seller.
  * Failures are non-fatal — callers keep the listing's requested code.
@@ -145,10 +319,17 @@ export async function fetchValidDomesticShippingServices(
       return []
     }
     const parsed = parseShippingServiceDetailsXml(xml)
+    const validDomestic = parsed.filter(
+      (s) => s.validForSellingFlow && !s.international
+    )
     console.info("[ebay/policies] GeteBayDetails domestic services", {
+      marketplaceId: "EBAY_US",
       total: parsed.length,
-      validDomestic: parsed.filter((s) => s.validForSellingFlow && !s.international)
-        .length,
+      validDomestic: validDomestic.length,
+      calculated: validDomestic.filter((s) =>
+        serviceSupportsCostType(s.serviceTypes, "CALCULATED")
+      ).length,
+      codes: validDomestic.map((s) => s.code).slice(0, 40),
     })
     return parsed
   } catch (err) {

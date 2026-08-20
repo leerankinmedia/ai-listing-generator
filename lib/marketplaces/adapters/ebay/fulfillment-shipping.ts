@@ -259,14 +259,21 @@ export function currencyForMarketplace(marketplaceId: string): string {
 /**
  * Production createFulfillmentPolicy shapes.
  *
- * `minimal` matches the known-good EBAY_US Account API sketch (optionType,
- * costType, shippingServiceCode, shippingCost for flat). Do NOT send
- * shipToLocations on DOMESTIC services — Account API docs say that container
- * is for INTERNATIONAL, and production 20403 LOGISTICS_INFO_IS_MISSING /
- * LSAS 216118 appeared after we added it.
+ * Calculated buyer-pays logistics (EBAY_US Account API / LSAS):
+ * - optionType DOMESTIC
+ * - costType CALCULATED
+ * - sortOrder 1
+ * - shippingServiceCode + shippingCarrierCode paired from GeteBayDetails
+ * - freeShipping false
+ * - buyerResponsibleForShipping / Pickup false (Motors-only true is invalid)
+ * - packageHandlingCost 0.0 (calculated handling; not a flat rate)
+ * - omit shippingCost (flat-rate-only)
+ * - omit shipToLocations on DOMESTIC services (that container is international;
+ *   sending it previously caused 20403 LOGISTICS_INFO_IS_MISSING / LSAS 216118)
  *
- * `carrier` adds shippingCarrierCode (Dev Support AU example included it).
- * `devsupport` also sets buyerResponsible* false. Never set those true.
+ * `minimal` drops carrier/flags/packageHandlingCost for retry only.
+ * `carrier` is the default complete shape.
+ * `devsupport` matches the known eBay Dev Support false-flag example.
  */
 export type FulfillmentCreateShape = "minimal" | "carrier" | "devsupport"
 
@@ -288,8 +295,8 @@ export type FulfillmentPolicyCreateRequest = {
       shippingServiceCode: string
       shippingCarrierCode?: string
       freeShipping: boolean
-      buyerResponsibleForShipping?: false
-      buyerResponsibleForPickup?: false
+      buyerResponsibleForShipping?: boolean
+      buyerResponsibleForPickup?: boolean
       shippingCost?: { value: string; currency: string }
     }>
   }>
@@ -301,6 +308,7 @@ export type BuildFulfillmentPolicyArgs = {
   name: string
   handlingDays: number
   shippingServiceCode: string
+  shippingCarrierCode?: string
   flatAmount?: number
   template?: EbayFulfillmentPolicyRaw | null
   setAsDefault?: boolean
@@ -328,6 +336,7 @@ export function buildFulfillmentPolicyCreateRequest(
   // resolved service is the source of truth.
   const resolvedService = service
   const carrier =
+    args.shippingCarrierCode?.trim() ||
     (templateMode === args.mode &&
       templateService?.shippingServiceCode?.trim() === resolvedService &&
       templateService?.shippingCarrierCode?.trim()) ||
@@ -345,8 +354,8 @@ export function buildFulfillmentPolicyCreateRequest(
 
   if (shape !== "minimal") {
     shippingService.shippingCarrierCode = carrier
-  }
-  if (shape === "devsupport") {
+    // Explicit false keeps LSAS from dropping the service. Never send true
+    // (Motors-only) on ALL_EXCLUDING_MOTORS_VEHICLES policies.
     shippingService.buyerResponsibleForShipping = false
     shippingService.buyerResponsibleForPickup = false
   }
@@ -356,13 +365,17 @@ export function buildFulfillmentPolicyCreateRequest(
   } else if (args.mode === "free") {
     shippingService.shippingCost = { value: "0.0", currency }
   }
+  // Calculated: omit shippingCost. Flat-rate-only field.
+
+  const includePackageHandling =
+    args.includePackageHandlingCost ?? args.mode === "calculated"
 
   const option: FulfillmentPolicyCreateRequest["shippingOptions"][0] = {
     optionType: "DOMESTIC",
     costType,
     shippingServices: [shippingService],
   }
-  if (args.includePackageHandlingCost) {
+  if (includePackageHandling && args.mode === "calculated") {
     option.packageHandlingCost = { value: "0.0", currency }
   }
 
@@ -401,10 +414,12 @@ export type FulfillmentRequestPresence = {
   costType: string | null
   shippingServiceCode: string | null
   shippingCarrierCode: string | null
+  sortOrder: number | null
   shippingCost: unknown
   freeShipping: unknown
   buyerResponsibleForShipping: unknown
   buyerResponsibleForPickup: unknown
+  packageHandlingCost: unknown
   hasTopLevelShipToLocations: boolean
   hasServiceShipToLocations: boolean
   hasInsuranceOffered: boolean
@@ -451,10 +466,12 @@ export function fulfillmentRequestPresence(
       typeof service.shippingCarrierCode === "string"
         ? service.shippingCarrierCode
         : null,
+    sortOrder: typeof service.sortOrder === "number" ? service.sortOrder : null,
     shippingCost: service.shippingCost ?? null,
     freeShipping: service.freeShipping ?? null,
     buyerResponsibleForShipping: service.buyerResponsibleForShipping ?? null,
     buyerResponsibleForPickup: service.buyerResponsibleForPickup ?? null,
+    packageHandlingCost: option.packageHandlingCost ?? null,
     hasTopLevelShipToLocations: Object.prototype.hasOwnProperty.call(
       finalJson,
       "shipToLocations"

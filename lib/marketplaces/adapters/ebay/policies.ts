@@ -7,6 +7,7 @@ import {
   fulfillmentPolicyHasUsableLogistics,
   fulfillmentPolicyIsFreeShipping,
   logFulfillmentCreateDiagnostics,
+  shippingCarrierForService,
   summarizeFulfillmentPolicy,
   type EbayFulfillmentPolicyRaw,
   type EbayFulfillmentShippingSummary,
@@ -16,7 +17,7 @@ import {
 } from "@/lib/marketplaces/adapters/ebay/fulfillment-shipping"
 import {
   fetchValidDomesticShippingServices,
-  pickValidDomesticServiceCode,
+  validateSelectedShippingService,
 } from "@/lib/marketplaces/adapters/ebay/shipping-services"
 import {
   isStandardEnvelopeService,
@@ -385,7 +386,7 @@ function throwFulfillmentCreateFailed(
             : null,
           diagnosis.xpath ? `xpath=${diagnosis.xpath}` : null,
           diagnosis.logisticsInfoMissing
-            ? "LOGISTICS_INFO_IS_MISSING: LSAS dropped shippingOptions; retrying known-good EBAY_US shapes without domestic shipToLocations"
+            ? "LOGISTICS_INFO_IS_MISSING: LSAS dropped shippingOptions; selected service was not substituted"
             : null,
           ...extraDiagnosis,
         ].filter((line): line is string => Boolean(line)),
@@ -446,29 +447,25 @@ export function fulfillmentCreateVariants(opts: {
   const variants: CreateVariant[] = []
   if (opts.mode === "calculated") {
     variants.push({
+      id: "calculated-complete",
+      mode: "calculated",
+      shape: "carrier",
+      service,
+      includePackageHandlingCost: true,
+    })
+    variants.push({
       id: "calculated-carrier",
       mode: "calculated",
       shape: "carrier",
       service,
+      includePackageHandlingCost: false,
     })
     variants.push({
       id: "calculated-minimal",
       mode: "calculated",
       shape: "minimal",
       service,
-    })
-    variants.push({
-      id: "calculated-devsupport",
-      mode: "calculated",
-      shape: "devsupport",
-      service,
-    })
-    variants.push({
-      id: "calculated-package-handling",
-      mode: "calculated",
-      shape: "carrier",
-      service,
-      includePackageHandlingCost: true,
+      includePackageHandlingCost: false,
     })
   }
   if (opts.mode === "free") {
@@ -479,7 +476,7 @@ export function fulfillmentCreateVariants(opts: {
       service,
     })
   }
-  if (opts.mode !== "free") {
+  if (opts.mode === "flat") {
     variants.push({
       id: "flat-carrier",
       mode: "flat",
@@ -519,7 +516,7 @@ async function createFulfillmentPolicyForMode(
   template?: EbayFulfillmentPolicyRaw | null,
   setAsDefault = false,
   listingSnapshot?: Record<string, string | number | boolean | null | undefined>,
-  existingPolicies: EbayFulfillmentPolicyRaw[] = [],
+  _existingPolicies: EbayFulfillmentPolicyRaw[] = [],
   allowStandardEnvelope = false
 ): Promise<{ id: string; usedMode: EbayShippingMode }> {
   const days = Math.max(0, Math.min(30, Math.floor(handlingDays || 1)))
@@ -528,20 +525,52 @@ async function createFulfillmentPolicyForMode(
   const amount = Math.max(0.01, Number(flatAmount) || 5.99).toFixed(2)
 
   const discovered = await fetchValidDomesticShippingServices(accessToken)
-  if (discovered.length > 0) {
-    const resolved = pickValidDomesticServiceCode(service, discovered, {
-      preferCalculated: mode === "calculated",
-      allowStandardEnvelope,
+  const costType = mode === "calculated" ? "CALCULATED" : "FLAT_RATE"
+  const validation = validateSelectedShippingService({
+    requested: service,
+    costType,
+    services: discovered,
+    allowStandardEnvelope,
+  })
+  if (!validation.ok) {
+    logPolicies("selected shipping service failed GeteBayDetails validation", {
+      requested: service,
+      reason: validation.reason,
+      costType,
+      metadataCount: discovered.length,
     })
-    if (resolved !== service) {
-      logPolicies("remapped shippingServiceCode from GeteBayDetails", {
-        requested: service,
-        resolved,
-        allowStandardEnvelope: allowStandardEnvelope ? "true" : "false",
-      })
-      service = resolved
-    }
+    throw new MarketplaceError(validation.message, "ebay_shipping_unsupported", 400, {
+      ebay: {
+        step: "validateShippingService",
+        diagnosis: [
+          `reason=${validation.reason}`,
+          `requested=${service}`,
+          `costType=${costType}`,
+          `marketplaceId=${marketplaceId()}`,
+          `metadataCount=${discovered.length}`,
+          "ListWise did not substitute another shipping service",
+        ],
+      },
+    })
   }
+  if (validation.code !== service) {
+    logPolicies("canonicalized shippingServiceCode from GeteBayDetails", {
+      requested: service,
+      resolved: validation.code,
+    })
+  }
+  service = validation.code
+  const shippingCarrierCode = validation.carrier
+  logPolicies("validated shipping service against GeteBayDetails", {
+    service,
+    carrier: shippingCarrierCode,
+    costType,
+    metadataAvailable: validation.metadataAvailable ? "true" : "false",
+    validForSellingFlow: "true",
+    dimensionsRequired: validation.dimensionsRequired ? "true" : "false",
+    weightRequired: validation.weightRequired ? "true" : "false",
+    existingPolicyCount: _existingPolicies.length,
+  })
 
   const variants = fulfillmentCreateVariants({ mode, service })
   let lastFailure: {
@@ -553,37 +582,6 @@ async function createFulfillmentPolicyForMode(
   } | null = null
 
   for (const variant of variants) {
-    if (
-      lastFailure &&
-      mode === "calculated" &&
-      variant.mode === "flat"
-    ) {
-      const existingFlat = pickFulfillmentForMode(
-        existingPolicies,
-        "flat",
-        Number(amount),
-        days,
-        variant.service
-      )
-      if (existingFlat?.fulfillmentPolicyId) {
-        logPolicies(
-          "reusing existing flat fulfillment policy after calculated LSAS rejection",
-          {
-            fulfillmentPolicyId: existingFlat.fulfillmentPolicyId,
-            name: existingFlat.name,
-          }
-        )
-        return {
-          id: existingFlat.fulfillmentPolicyId,
-          usedMode: "flat",
-        }
-      }
-      const diagnosis = diagnoseFulfillmentCreateErrors(lastFailure.errors)
-      if (!diagnosis.shouldRetryFlat && lastFailure.status !== 400) {
-        break
-      }
-    }
-
     const name = policyNameForVariant(variant, days, amount)
     const requestBody = buildFulfillmentPolicyCreateRequest({
       marketplaceId: marketplaceId(),
@@ -591,6 +589,7 @@ async function createFulfillmentPolicyForMode(
       name,
       handlingDays: days,
       shippingServiceCode: variant.service,
+      shippingCarrierCode,
       flatAmount: Number(amount),
       template: variant.mode === mode ? template : null,
       setAsDefault,
@@ -1137,7 +1136,7 @@ export async function ensureEbayBusinessPolicyIds(
             costType: created.usedMode === "calculated" ? "CALCULATED" : "FLAT_RATE",
             shippingServices: [
               {
-                shippingCarrierCode: "USPS",
+                shippingCarrierCode: shippingCarrierForService(shippingServiceCode),
                 shippingServiceCode,
                 freeShipping: created.usedMode === "free",
                 buyerResponsibleForShipping: false,

@@ -244,6 +244,12 @@ describe("fulfillment create variants keep the selected service", () => {
       false
     )
     assert.ok(variants.every((v) => v.service === "USPSGroundAdvantage"))
+    assert.equal(
+      variants.some((v) => v.mode === "flat"),
+      false
+    )
+    assert.equal(variants[0]?.id, "calculated-complete")
+    assert.equal(variants[0]?.includePackageHandlingCost, true)
   })
 
   it("keeps USPS Priority, UPS Ground, and FedEx when those are selected", () => {
@@ -264,6 +270,48 @@ describe("fulfillment create variants keep the selected service", () => {
 
 type FetchCall = { url: string; method: string; body: unknown }
 
+const EBAY_US_PARCEL_DETAILS_XML = `<?xml version="1.0" encoding="utf-8"?>
+<GeteBayDetailsResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+  <Ack>Success</Ack>
+  <ShippingServiceDetails>
+    <ShippingService>USPSGroundAdvantage</ShippingService>
+    <ShippingCarrier>USPS</ShippingCarrier>
+    <ValidForSellingFlow>true</ValidForSellingFlow>
+    <ServiceType>Flat</ServiceType>
+    <ServiceType>Calculated</ServiceType>
+    <DimensionsRequired>true</DimensionsRequired>
+    <WeightRequired>true</WeightRequired>
+  </ShippingServiceDetails>
+  <ShippingServiceDetails>
+    <ShippingService>USPSPriority</ShippingService>
+    <ShippingCarrier>USPS</ShippingCarrier>
+    <ValidForSellingFlow>true</ValidForSellingFlow>
+    <ServiceType>Flat</ServiceType>
+    <ServiceType>Calculated</ServiceType>
+  </ShippingServiceDetails>
+  <ShippingServiceDetails>
+    <ShippingService>UPSGround</ShippingService>
+    <ShippingCarrier>UPS</ShippingCarrier>
+    <ValidForSellingFlow>true</ValidForSellingFlow>
+    <ServiceType>Flat</ServiceType>
+    <ServiceType>Calculated</ServiceType>
+  </ShippingServiceDetails>
+  <ShippingServiceDetails>
+    <ShippingService>FedExHomeDelivery</ShippingService>
+    <ShippingCarrier>FedEx</ShippingCarrier>
+    <ValidForSellingFlow>true</ValidForSellingFlow>
+    <ServiceType>Flat</ServiceType>
+    <ServiceType>Calculated</ServiceType>
+  </ShippingServiceDetails>
+  <ShippingServiceDetails>
+    <ShippingService>FedExGround</ShippingService>
+    <ShippingCarrier>FedEx</ShippingCarrier>
+    <ValidForSellingFlow>true</ValidForSellingFlow>
+    <ServiceType>Flat</ServiceType>
+    <ServiceType>Calculated</ServiceType>
+  </ShippingServiceDetails>
+</GeteBayDetailsResponse>`
+
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
     status,
@@ -280,7 +328,10 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
     calls = []
   })
 
-  function mockEbay(handler: (url: string, method: string, body: unknown) => Response) {
+  function mockEbay(
+    handler: (url: string, method: string, body: unknown) => Response,
+    geteBayDetailsXml = "<GeteBayDetailsResponse><Ack>Success</Ack></GeteBayDetailsResponse>"
+  ) {
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const method = (init?.method || "GET").toUpperCase()
@@ -295,10 +346,10 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
       }
       calls.push({ url, method, body })
       if (url.includes("/ws/api.dll")) {
-        return new Response(
-          "<GeteBayDetailsResponse><Ack>Success</Ack></GeteBayDetailsResponse>",
-          { status: 200, headers: { "Content-Type": "text/xml" } }
-        )
+        return new Response(geteBayDetailsXml, {
+          status: 200,
+          headers: { "Content-Type": "text/xml" },
+        })
       }
       return handler(url, method, body)
     }) as typeof fetch
@@ -413,7 +464,12 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
         assert.equal(
           req.shippingOptions?.[0]?.shippingServices?.[0]
             ?.buyerResponsibleForShipping,
-          undefined
+          false
+        )
+        assert.equal(
+          (req.shippingOptions?.[0] as { packageHandlingCost?: { value?: string } })
+            ?.packageHandlingCost?.value,
+          "0.0"
         )
         return jsonResponse(201, { fulfillmentPolicyId: "f-new" })
       }
@@ -586,8 +642,8 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
     )
   })
 
-  it("retries to a flat US payload after production LOGISTICS_INFO_IS_MISSING / LSAS 216118", async () => {
-    const productionError = {
+  it("creates calculated USPS Ground Advantage with complete logistics instead of falling back to Priority Mail", async () => {
+    const incompleteError = {
       errors: [
         {
           errorId: 20403,
@@ -606,7 +662,7 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
         },
       ],
     }
-    let createdFlat = false
+    let created = false
     mockEbay((url, method, body) => {
       if (url.includes("/program/get_opted_in_programs")) {
         return jsonResponse(200, {
@@ -615,22 +671,23 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
       }
       if (url.includes("/fulfillment_policy") && method === "GET") {
         return jsonResponse(200, {
-          fulfillmentPolicies: createdFlat
+          fulfillmentPolicies: created
             ? [
                 {
-                  fulfillmentPolicyId: "f-flat",
-                  name: "ListWise Flat $5.99 · USPSGroundAdvantage · 1d",
+                  fulfillmentPolicyId: "f-ga-calc",
+                  name: "ListWise Calculated · USPSGroundAdvantage · 1d",
                   handlingTime: { value: 1, unit: "DAY" },
                   shippingOptions: [
                     {
                       optionType: "DOMESTIC",
-                      costType: "FLAT_RATE",
+                      costType: "CALCULATED",
                       shippingServices: [
                         {
                           shippingServiceCode: "USPSGroundAdvantage",
                           shippingCarrierCode: "USPS",
                           freeShipping: false,
-                          shippingCost: { value: "5.99", currency: "USD" },
+                          buyerResponsibleForShipping: false,
+                          sortOrder: 1,
                         },
                       ],
                     },
@@ -644,25 +701,33 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
         const req = body as {
           shipToLocations?: unknown
           shippingOptions?: Array<{
+            optionType?: string
             costType?: string
+            packageHandlingCost?: { value?: string }
             shippingServices?: Array<{
+              sortOrder?: number
               shippingServiceCode?: string
-              shippingCost?: { value?: string }
+              shippingCarrierCode?: string
+              buyerResponsibleForShipping?: boolean
+              shippingCost?: unknown
             }>
           }>
         }
-        assert.equal(req.shipToLocations, undefined)
-        if (req.shippingOptions?.[0]?.costType === "CALCULATED") {
-          return jsonResponse(400, productionError)
-        }
-        createdFlat = true
-        assert.equal(req.shippingOptions?.[0]?.costType, "FLAT_RATE")
-        assert.equal(
-          req.shippingOptions?.[0]?.shippingServices?.[0]?.shippingServiceCode,
-          "USPSGroundAdvantage"
-        )
-        assert.ok(req.shippingOptions?.[0]?.shippingServices?.[0]?.shippingCost)
-        return jsonResponse(201, { fulfillmentPolicyId: "f-flat" })
+        const option = req.shippingOptions?.[0]
+        const service = option?.shippingServices?.[0]
+        const complete =
+          option?.optionType === "DOMESTIC" &&
+          option?.costType === "CALCULATED" &&
+          service?.shippingServiceCode === "USPSGroundAdvantage" &&
+          service?.shippingCarrierCode === "USPS" &&
+          service?.sortOrder === 1 &&
+          service?.buyerResponsibleForShipping === false &&
+          service?.shippingCost == null &&
+          option?.packageHandlingCost?.value === "0.0" &&
+          req.shipToLocations === undefined
+        if (!complete) return jsonResponse(400, incompleteError)
+        created = true
+        return jsonResponse(201, { fulfillmentPolicyId: "f-ga-calc" })
       }
       if (url.includes("/payment_policy")) {
         if (method === "GET") {
@@ -690,25 +755,112 @@ describe("ensureEbayBusinessPolicyIds retrieve/reuse/create", () => {
         return jsonResponse(201, { returnPolicyId: "ret-30" })
       }
       return jsonResponse(500, { errors: [{ message: `unexpected ${method} ${url}` }] })
-    })
+    }, EBAY_US_PARCEL_DETAILS_XML)
 
     const result = await ensureEbayBusinessPolicyIds("token", {
       shippingMode: "calculated",
       shippingServiceCode: "USPSGroundAdvantage",
       handlingTimeDays: 1,
     })
-    assert.equal(result.fulfillmentPolicyId, "f-flat")
-    assert.equal(result.fulfillmentSummary.mode, "flat")
+    assert.equal(result.fulfillmentPolicyId, "f-ga-calc")
+    assert.equal(result.fulfillmentSummary.mode, "calculated")
+    assert.equal(result.fulfillmentSummary.serviceCode, "USPSGroundAdvantage")
     const fulfillmentPosts = calls.filter(
       (c) => c.method === "POST" && c.url.includes("/fulfillment_policy")
     )
-    assert.ok(fulfillmentPosts.length > 1)
+    assert.equal(fulfillmentPosts.length, 1)
+    const createdBody = fulfillmentPosts[0]?.body as {
+      shippingOptions?: Array<{
+        costType?: string
+        shippingServices?: Array<{ shippingServiceCode?: string }>
+      }>
+    }
+    assert.equal(createdBody.shippingOptions?.[0]?.costType, "CALCULATED")
     assert.equal(
-      fulfillmentPosts.some((c) => {
-        const body = c.body as { shippingOptions?: Array<{ costType?: string }> }
-        return body.shippingOptions?.[0]?.costType === "FLAT_RATE"
-      }),
-      true
+      createdBody.shippingOptions?.[0]?.shippingServices?.[0]?.shippingServiceCode,
+      "USPSGroundAdvantage"
+    )
+    assert.equal(
+      JSON.stringify(createdBody).includes("USPSPriority"),
+      false
+    )
+  })
+
+  it("returns a clear ListWise error when the selected service is missing from eBay US metadata", async () => {
+    const priorityOnlyXml = `<?xml version="1.0" encoding="utf-8"?>
+<GeteBayDetailsResponse>
+  <Ack>Success</Ack>
+  <ShippingServiceDetails>
+    <ShippingService>USPSPriority</ShippingService>
+    <ShippingCarrier>USPS</ShippingCarrier>
+    <ValidForSellingFlow>true</ValidForSellingFlow>
+    <ServiceType>Flat</ServiceType>
+    <ServiceType>Calculated</ServiceType>
+  </ShippingServiceDetails>
+</GeteBayDetailsResponse>`
+    mockEbay((url, method) => {
+      if (url.includes("/program/get_opted_in_programs")) {
+        return jsonResponse(200, {
+          programs: [{ programType: "SELLING_POLICY_MANAGEMENT" }],
+        })
+      }
+      if (url.includes("/fulfillment_policy") && method === "GET") {
+        return jsonResponse(200, { fulfillmentPolicies: [] })
+      }
+      if (url.includes("/payment_policy") && method === "GET") {
+        return jsonResponse(200, {
+          paymentPolicies: [
+            { paymentPolicyId: "pay-lw", name: "ListWise Payment", immediatePay: false },
+          ],
+        })
+      }
+      if (url.includes("/return_policy") && method === "GET") {
+        return jsonResponse(200, {
+          returnPolicies: [
+            {
+              returnPolicyId: "ret-30",
+              returnsAccepted: true,
+              returnPeriod: { value: 30, unit: "DAY" },
+              returnShippingCostPayer: "BUYER",
+            },
+          ],
+        })
+      }
+      return jsonResponse(500, { errors: [{ message: `unexpected ${method} ${url}` }] })
+    }, priorityOnlyXml)
+
+    await assert.rejects(
+      () =>
+        ensureEbayBusinessPolicyIds("token", {
+          shippingMode: "calculated",
+          shippingServiceCode: "USPSGroundAdvantage",
+          handlingTimeDays: 1,
+        }),
+      (err: unknown) => {
+        assert.ok(err && typeof err === "object")
+        const error = err as { code?: string; message?: string }
+        assert.equal(error.code, "ebay_shipping_unsupported")
+        assert.match(String(error.message), /USPS Ground Advantage/i)
+        assert.match(String(error.message), /did not substitute/i)
+        return true
+      }
+    )
+    assert.equal(
+      calls.some(
+        (c) => c.method === "POST" && c.url.includes("/fulfillment_policy")
+      ),
+      false
+    )
+    assert.equal(
+      JSON.stringify(calls).includes("USPSPriority") &&
+        calls.some(
+          (c) =>
+            c.method === "POST" &&
+            typeof c.body === "object" &&
+            c.body !== null &&
+            JSON.stringify(c.body).includes("USPSPriority")
+        ),
+      false
     )
   })
 

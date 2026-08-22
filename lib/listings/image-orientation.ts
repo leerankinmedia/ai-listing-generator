@@ -1,19 +1,20 @@
 /**
- * Browser EXIF orientation bake-in for listing originals.
+ * Browser orientation bake-in for listing originals.
  *
- * createImageBitmap's default imageOrientation is not consistent across
- * browsers (none vs from-image). We parse JPEG EXIF ourselves, rotate/flip
- * pixels to the visual orientation the seller sees in <img>, then re-encode
- * so eBay never depends on the Orientation tag.
+ * ListWise previews photos with HTML `<img>`. Capture THAT painted result
+ * (or the stored pixels when `<img>` does not change them) and persist it
+ * with orientation=1. Never apply an extra EXIF canvas matrix on top of
+ * createImageBitmap({ imageOrientation: 'from-image' }) — that second
+ * transform is what rotated already-correct photos on eBay.
  *
  * Cover and additional photos share this exact path.
  */
 import {
-  applyExifOrientationToCanvas,
   jpegNeedsOrientationBake,
   readJpegExifOrientation,
   readJpegStoredSize,
-  visualSizeForOrientation,
+  stripJpegExifKeepPixels,
+  visualPixelStrategy,
 } from "@/lib/listings/exif-orientation"
 
 function listingFileName(fileName: string, preferPng: boolean) {
@@ -59,30 +60,32 @@ async function tryCreateBitmap(
   }
 }
 
-function drawVisualBitmap(
-  bitmap: ImageBitmap,
-  orientation: number,
-  decoderAlreadyOriented: boolean
-): HTMLCanvasElement {
-  const storedWidth = bitmap.width
-  const storedHeight = bitmap.height
-  const visual = decoderAlreadyOriented
-    ? { width: storedWidth, height: storedHeight }
-    : visualSizeForOrientation(storedWidth, storedHeight, orientation)
-
-  const canvas = document.createElement("canvas")
-  canvas.width = Math.max(1, visual.width)
-  canvas.height = Math.max(1, visual.height)
-  const ctx = canvas.getContext("2d")
-  if (!ctx) {
-    throw new Error("Could not create canvas for photo orientation")
+function loadHtmlImage(source: Blob): Promise<HTMLImageElement | null> {
+  if (typeof document === "undefined" || typeof Image === "undefined") {
+    return Promise.resolve(null)
   }
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(source)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve(img)
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      resolve(null)
+    }
+    img.src = url
+  })
+}
 
-  if (!decoderAlreadyOriented && orientation > 1) {
-    applyExifOrientationToCanvas(ctx, storedWidth, storedHeight, orientation)
+function jpegBlobFromBytes(bytes: Uint8Array, fileName: string) {
+  const copy = new Uint8Array(bytes)
+  return {
+    blob: new Blob([copy], { type: "image/jpeg" }),
+    contentType: "image/jpeg",
+    fileName: listingFileName(fileName, false),
   }
-  ctx.drawImage(bitmap, 0, 0)
-  return canvas
 }
 
 export async function normalizeImageOrientation(
@@ -109,54 +112,81 @@ export async function normalizeImageOrientation(
 
   const jpegOrientation = readJpegExifOrientation(bytes)
   const jpegSize = readJpegStoredSize(bytes)
-  const isJpeg = Boolean(jpegSize)
   const isHeicLike =
     /heic|heif|avif/i.test(source.type || "") ||
     /\.hei[cf]$/i.test(fileName)
 
-  // JPEG that is already visual: keep original bytes (no quality loss).
-  if (isJpeg && !jpegNeedsOrientationBake(bytes)) {
-    return passthrough
-  }
-
+  const htmlImage = await loadHtmlImage(source)
   const raw = await tryCreateBitmap(source, "none")
   const fromImage =
     (await tryCreateBitmap(source, "from-image")) ||
     (await tryCreateBitmap(source))
-  const bitmap = fromImage || raw
-  if (!bitmap) {
-    return passthrough
-  }
+
+  const decodedIgnoringExif = raw
+    ? { width: raw.width, height: raw.height }
+    : jpegSize
+  const decodedAsHtmlImage = htmlImage
+    ? { width: htmlImage.naturalWidth, height: htmlImage.naturalHeight }
+    : fromImage
+      ? { width: fromImage.width, height: fromImage.height }
+      : null
+
+  const strategy = visualPixelStrategy({
+    orientation: jpegOrientation || 1,
+    stored: jpegSize,
+    decodedIgnoringExif,
+    decodedAsHtmlImage,
+  })
 
   try {
-    const orientation = jpegOrientation || 1
-    const decoderAppliesExif = Boolean(
-      raw &&
-        fromImage &&
-        (raw.width !== fromImage.width || raw.height !== fromImage.height)
-    )
-    const matchesStored =
-      jpegSize &&
-      bitmap.width === jpegSize.width &&
-      bitmap.height === jpegSize.height
-    const alreadyOriented = decoderAppliesExif || (Boolean(fromImage) && !matchesStored)
+    if (strategy.action === "passthrough" && !isHeicLike) {
+      closeBitmap(raw)
+      closeBitmap(fromImage)
+      return passthrough
+    }
 
-    const sourceBitmap =
-      alreadyOriented && fromImage
-        ? fromImage
-        : raw && matchesStored
-          ? raw
-          : bitmap
+    if (strategy.action === "keep-pixels-strip-exif" && jpegSize) {
+      closeBitmap(raw)
+      closeBitmap(fromImage)
+      const stripped = stripJpegExifKeepPixels(bytes)
+      return jpegBlobFromBytes(stripped, fileName)
+    }
 
-    const canvas = drawVisualBitmap(
-      sourceBitmap,
-      orientation,
-      alreadyOriented || (orientation === 1 && !isHeicLike)
-    )
+    // Display decoder already applied EXIF (size changed) OR HEIC: paint
+    // the HTMLImageElement / from-image bitmap 1:1. No extra EXIF matrix.
+    const displayWidth =
+      decodedAsHtmlImage?.width || fromImage?.width || raw?.width || 0
+    const displayHeight =
+      decodedAsHtmlImage?.height || fromImage?.height || raw?.height || 0
+    if (!displayWidth || !displayHeight) {
+      closeBitmap(raw)
+      closeBitmap(fromImage)
+      return passthrough
+    }
+
+    const canvas = document.createElement("canvas")
+    canvas.width = Math.max(1, displayWidth)
+    canvas.height = Math.max(1, displayHeight)
+    const ctx = canvas.getContext("2d")
+    if (!ctx) {
+      closeBitmap(raw)
+      closeBitmap(fromImage)
+      return passthrough
+    }
+    if (htmlImage) {
+      ctx.drawImage(htmlImage, 0, 0)
+    } else if (fromImage) {
+      ctx.drawImage(fromImage, 0, 0)
+    } else if (raw) {
+      ctx.drawImage(raw, 0, 0)
+    } else {
+      closeBitmap(raw)
+      closeBitmap(fromImage)
+      return passthrough
+    }
     const blob = await encodeCanvas(canvas, preferPng)
     closeBitmap(raw)
-    if (fromImage && fromImage !== raw) closeBitmap(fromImage)
-
+    closeBitmap(fromImage)
     return {
       blob,
       contentType: preferPng ? "image/png" : "image/jpeg",
@@ -165,6 +195,10 @@ export async function normalizeImageOrientation(
   } catch {
     closeBitmap(raw)
     closeBitmap(fromImage)
+    if (jpegNeedsOrientationBake(bytes)) {
+      const stripped = stripJpegExifKeepPixels(bytes)
+      return jpegBlobFromBytes(stripped, fileName)
+    }
     return passthrough
   }
 }

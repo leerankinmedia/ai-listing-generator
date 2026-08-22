@@ -2,11 +2,10 @@ import assert from "node:assert/strict"
 import { afterEach, describe, it } from "node:test"
 import sharp from "sharp"
 import {
-  jpegNeedsOrientationBake,
   jpegWithExifOrientation,
   readJpegExifOrientation,
   readJpegStoredSize,
-  applyExifOrientationToRgb,
+  stripJpegExifKeepPixels,
   type ExifOrientation,
 } from "@/lib/listings/exif-orientation"
 import {
@@ -56,7 +55,7 @@ async function samplePixel(
   x: number,
   y: number
 ): Promise<Rgb> {
-  const { data, info } = await sharp(buffer)
+  const { data, info } = await sharp(buffer, { autoOrient: false })
     .removeAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true })
@@ -77,17 +76,22 @@ function effectiveOrientation(buffer: Buffer): number {
   return readJpegExifOrientation(buffer) ?? 1
 }
 
-describe("marketplace image orientation bake-in", () => {
-  it("parses injected JPEG EXIF orientation tags", async () => {
+describe("strip EXIF without rotating pixels", () => {
+  it("parses injected JPEG EXIF orientation tags then strips them losslessly", async () => {
     const base = await jpegFromRgb(32, 64, paintTopBottom(32, 64))
     assert.equal(readJpegExifOrientation(base), null)
     assert.deepEqual(readJpegStoredSize(base), { width: 32, height: 64 })
     const tagged = Buffer.from(jpegWithExifOrientation(base, 6))
     assert.equal(readJpegExifOrientation(tagged), 6)
-    assert.equal(jpegNeedsOrientationBake(tagged), true)
-    assert.deepEqual(readJpegStoredSize(tagged), { width: 32, height: 64 })
+    const stripped = stripJpegExifKeepPixels(tagged)
+    assert.equal(readJpegExifOrientation(stripped), null)
+    assert.deepEqual(readJpegStoredSize(stripped), { width: 32, height: 64 })
+    assertColor(await samplePixel(Buffer.from(stripped), 8, 8), RED, "top after strip")
+    assertColor(await samplePixel(Buffer.from(stripped), 8, 56), BLUE, "bottom after strip")
   })
+})
 
+describe("marketplace image orientation — do not re-apply EXIF", () => {
   it("keeps a native portrait JPEG (orientation 1) unrotated", async () => {
     const stored = await jpegFromRgb(32, 64, paintTopBottom(32, 64), 1)
     const result = await normalizeMarketplaceImage(stored, "image/jpeg")
@@ -99,158 +103,108 @@ describe("marketplace image orientation bake-in", () => {
     assertColor(await samplePixel(result.buffer, 8, 56), BLUE, "portrait bottom")
   })
 
-  it("bakes EXIF 6 so visual top matches what ListWise <img> showed", async () => {
-    // Seller-visible portrait: red on top, blue on bottom (32x64).
-    // Phone stores that as landscape + Orientation 6 (90 CW to display).
-    const visualWidth = 32
-    const visualHeight = 64
-    const visualRgb = paintTopBottom(visualWidth, visualHeight)
-    const stored = applyExifOrientationToRgb(
-      visualRgb,
-      visualWidth,
-      visualHeight,
-      3,
-      8
-    )
-    const jpeg = await jpegFromRgb(stored.width, stored.height, Buffer.from(stored.data), 6)
-    assert.equal(readJpegExifOrientation(jpeg) ?? 6, 6)
-    assert.deepEqual(readJpegStoredSize(jpeg), {
-      width: stored.width,
-      height: stored.height,
-    })
+  it("does not rotate already-visual pixels that still have stale EXIF 6", async () => {
+    // Seller-visible portrait (red on top). iOS/browser already baked pixels
+    // but left Orientation=6. ListWise <img> shows this correctly; sharp.rotate()
+    // would swap it to landscape.
+    const visual = await jpegFromRgb(32, 64, paintTopBottom(32, 64), 6)
+    assert.equal(readJpegExifOrientation(visual) ?? 6, 6)
+    assert.deepEqual(readJpegStoredSize(visual), { width: 32, height: 64 })
 
-    const result = await normalizeMarketplaceImage(jpeg, "image/jpeg")
-    assert.equal(result.changed, true)
-    assert.equal(result.orientationWas, 6)
-    assert.equal(result.width, visualWidth)
-    assert.equal(result.height, visualHeight)
+    const result = await normalizeMarketplaceImage(visual, "image/jpeg")
+    assert.equal(result.strategy, "keep-pixels-strip-exif")
+    assert.equal(result.width, 32)
+    assert.equal(result.height, 64)
     assert.equal(effectiveOrientation(result.buffer), 1)
-
-    const meta = await sharp(result.buffer).metadata()
-    assert.ok(!meta.orientation || meta.orientation === 1)
-
-    assertColor(await samplePixel(result.buffer, 8, 8), RED, "exif6 visual top")
-    assertColor(await samplePixel(result.buffer, 8, 56), BLUE, "exif6 visual bottom")
+    assertColor(await samplePixel(result.buffer, 8, 8), RED, "stale-exif6 visual top")
+    assertColor(await samplePixel(result.buffer, 8, 56), BLUE, "stale-exif6 visual bottom")
   })
 
-  it("normalizes every photo in a multi-image gallery, not just the cover", async () => {
-    const cover = await jpegFromRgb(48, 32, paintTopBottom(48, 32), 1)
-    const tag = await jpegFromRgb(64, 32, paintTopBottom(64, 32), 6)
-    const back = await jpegFromRgb(32, 48, paintTopBottom(32, 48), 8)
-    const side = await jpegFromRgb(40, 40, paintTopBottom(40, 40), 3)
+  it("does not rotate already-visual landscape leftover EXIF 8", async () => {
+    const visual = await jpegFromRgb(64, 32, paintTopBottom(64, 32), 8)
+    const result = await normalizeMarketplaceImage(visual, "image/jpeg")
+    assert.equal(result.width, 64)
+    assert.equal(result.height, 32)
+    assert.equal(effectiveOrientation(result.buffer), 1)
+    assertColor(await samplePixel(result.buffer, 8, 8), RED, "stale-exif8 top")
+    assertColor(await samplePixel(result.buffer, 8, 24), BLUE, "stale-exif8 bottom")
+  })
+})
+
+describe("mixed gallery matching production jeans/tag photos", () => {
+  it("preserves ListWise visual pixels for every photo handed to eBay", async () => {
+    const cover = await jpegFromRgb(64, 40, paintTopBottom(64, 40), 1)
+    const folded = await jpegFromRgb(80, 48, paintTopBottom(80, 48), 1)
+    const tag = await jpegFromRgb(32, 64, paintTopBottom(32, 64), 6)
+    const waistband = await jpegFromRgb(36, 60, paintTopBottom(36, 60), 8)
+    const front = await jpegFromRgb(64, 40, paintTopBottom(64, 40), 1)
+    const back = await jpegFromRgb(64, 40, paintTopBottom(64, 40), 3)
 
     const results = await normalizeMarketplaceImages([
       { buffer: cover, contentType: "image/jpeg" },
+      { buffer: folded, contentType: "image/jpeg" },
       { buffer: tag, contentType: "image/jpeg" },
+      { buffer: waistband, contentType: "image/jpeg" },
+      { buffer: front, contentType: "image/jpeg" },
       { buffer: back, contentType: "image/jpeg" },
-      { buffer: side, contentType: "image/jpeg" },
     ])
 
-    assert.equal(results.length, 4)
+    assert.equal(results.length, 6)
+    const expected = [
+      { w: 64, h: 40 },
+      { w: 80, h: 48 },
+      { w: 32, h: 64 },
+      { w: 36, h: 60 },
+      { w: 64, h: 40 },
+      { w: 64, h: 40 },
+    ]
     for (const [index, image] of results.entries()) {
       assert.equal(
         effectiveOrientation(image.buffer),
         1,
-        `photo ${index} still has EXIF orientation ${effectiveOrientation(image.buffer)}`
+        `photo ${index} orientation`
       )
-    }
-
-    assert.equal(results[0].changed, false)
-    assert.equal(results[0].width, 48)
-    assert.equal(results[0].height, 32)
-
-    assert.equal(results[1].changed, true)
-    assert.equal(results[1].orientationWas, 6)
-    assert.equal(results[1].width, 32)
-    assert.equal(results[1].height, 64)
-
-    assert.equal(results[2].changed, true)
-    assert.equal(results[2].orientationWas, 8)
-    assert.equal(results[2].width, 48)
-    assert.equal(results[2].height, 32)
-
-    assert.equal(results[3].changed, true)
-    assert.equal(results[3].orientationWas, 3)
-    assert.equal(results[3].width, 40)
-    assert.equal(results[3].height, 40)
-  })
-
-  it("round-trips seller-visible pixels for EXIF 2, 3, 6, and 8", async () => {
-    const visualWidth = 32
-    const visualHeight = 48
-    const visualRgb = paintTopBottom(visualWidth, visualHeight)
-    const inverse: Record<2 | 3 | 6 | 8, 2 | 3 | 6 | 8> = {
-      2: 2,
-      3: 3,
-      6: 8,
-      8: 6,
-    }
-
-    for (const orientation of [2, 3, 6, 8] as const) {
-      const stored = applyExifOrientationToRgb(
-        visualRgb,
-        visualWidth,
-        visualHeight,
-        3,
-        inverse[orientation]
-      )
-      const jpeg = await jpegFromRgb(
-        stored.width,
-        stored.height,
-        Buffer.from(stored.data),
-        orientation
-      )
-      const result = await normalizeMarketplaceImage(jpeg, "image/jpeg")
-      assert.equal(result.changed, true, `orientation ${orientation} should bake`)
-      assert.equal(result.width, visualWidth, `orientation ${orientation} width`)
-      assert.equal(result.height, visualHeight, `orientation ${orientation} height`)
-      assert.equal(effectiveOrientation(result.buffer), 1)
+      assert.equal(image.width, expected[index].w, `photo ${index} width`)
+      assert.equal(image.height, expected[index].h, `photo ${index} height`)
       assertColor(
-        await samplePixel(result.buffer, 8, 8),
+        await samplePixel(image.buffer, 6, 6),
         RED,
-        `orientation ${orientation} visual top`
-      )
-      assertColor(
-        await samplePixel(result.buffer, 8, visualHeight - 8),
-        BLUE,
-        `orientation ${orientation} visual bottom`
+        `photo ${index} visual top marker`
       )
     }
   })
 })
 
-describe("eBay publish path uses baked bytes for every photo", () => {
+describe("eBay publish path uses ListWise pixels for every photo", () => {
   const originalFetch = globalThis.fetch
 
   afterEach(() => {
     globalThis.fetch = originalFetch
   })
 
-  it("preserves seller order and bakes additional photos, not only image[0]", async () => {
-    const cover = await jpegFromRgb(48, 32, paintTopBottom(48, 32), 1)
-    const extra6 = await jpegFromRgb(64, 32, paintTopBottom(64, 32), 6)
-    const extra8 = await jpegFromRgb(32, 48, paintTopBottom(32, 48), 8)
-    const extra3 = await jpegFromRgb(40, 40, paintTopBottom(40, 40), 3)
+  it("does not apply a second EXIF rotate to additional photos", async () => {
+    const cover = await jpegFromRgb(64, 40, paintTopBottom(64, 40), 1)
+    const tag = await jpegFromRgb(32, 64, paintTopBottom(32, 64), 6)
+    const waistband = await jpegFromRgb(36, 60, paintTopBottom(36, 60), 8)
+    const folded = await jpegFromRgb(80, 48, paintTopBottom(80, 48), 1)
 
     const sources = [
       "https://cdn.listwise.test/listing-images/u/originals/cover.jpg",
       "https://cdn.listwise.test/listing-images/u/originals/tag.jpg",
-      "https://cdn.listwise.test/listing-images/u/originals/back.jpg",
-      "https://cdn.listwise.test/listing-images/u/originals/side.jpg",
+      "https://cdn.listwise.test/listing-images/u/originals/waistband.jpg",
+      "https://cdn.listwise.test/listing-images/u/originals/folded.jpg",
     ]
     const byUrl = new Map<string, Buffer>([
       [sources[0], cover],
-      [sources[1], extra6],
-      [sources[2], extra8],
-      [sources[3], extra3],
+      [sources[1], tag],
+      [sources[2], waistband],
+      [sources[3], folded],
     ])
 
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input)
       const body = byUrl.get(url)
-      if (!body) {
-        return new Response("missing", { status: 404 })
-      }
+      if (!body) return new Response("missing", { status: 404 })
       return new Response(body, {
         status: 200,
         headers: { "content-type": "image/jpeg" },
@@ -264,37 +218,26 @@ describe("eBay publish path uses baked bytes for every photo", () => {
       sources
     )
 
-    assert.equal(prepared[0].normalized.changed, false)
-    assert.equal(prepared[0].keepPublicUrl, sources[0])
-    assert.equal(effectiveOrientation(prepared[0].normalized.buffer), 1)
-
-    assert.equal(prepared[1].normalized.changed, true)
-    assert.equal(prepared[1].normalized.orientationWas, 6)
-    assert.equal(effectiveOrientation(prepared[1].normalized.buffer), 1)
+    assert.equal(prepared[0].normalized.width, 64)
+    assert.equal(prepared[0].normalized.height, 40)
     assert.equal(prepared[1].normalized.width, 32)
     assert.equal(prepared[1].normalized.height, 64)
+    assert.equal(prepared[2].normalized.width, 36)
+    assert.equal(prepared[2].normalized.height, 60)
+    assert.equal(prepared[3].normalized.width, 80)
+    assert.equal(prepared[3].normalized.height, 48)
 
-    assert.equal(prepared[2].normalized.changed, true)
-    assert.equal(prepared[2].normalized.orientationWas, 8)
-    assert.equal(effectiveOrientation(prepared[2].normalized.buffer), 1)
-
-    assert.equal(prepared[3].normalized.changed, true)
-    assert.equal(prepared[3].normalized.orientationWas, 3)
-    assert.equal(effectiveOrientation(prepared[3].normalized.buffer), 1)
-
-    assertColor(
-      await samplePixel(prepared[1].normalized.buffer, 8, 16),
-      BLUE,
-      "publish extra photo left after 90 CW"
-    )
-  })
-
-  it("bakes data-URL photos the same way as hosted URLs (no cover special case)", async () => {
-    const extra = await jpegFromRgb(64, 32, paintTopBottom(64, 32), 6)
-    const dataUrl = `data:image/jpeg;base64,${extra.toString("base64")}`
-    const prepared = await normalizeEbayListingPhotoBytes([dataUrl])
-    assert.equal(prepared[0].normalized.changed, true)
-    assert.equal(effectiveOrientation(prepared[0].normalized.buffer), 1)
-    assert.equal(prepared[0].keepPublicUrl, null)
+    for (const [index, photo] of prepared.entries()) {
+      assert.equal(
+        effectiveOrientation(photo.normalized.buffer),
+        1,
+        `publish photo ${index} still has EXIF orientation`
+      )
+      assertColor(
+        await samplePixel(photo.normalized.buffer, 6, 6),
+        RED,
+        `publish photo ${index} visual top`
+      )
+    }
   })
 })

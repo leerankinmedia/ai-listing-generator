@@ -276,6 +276,116 @@ export function applyExifOrientationToCanvas(
   }
 }
 
+export type PixelSize = { width: number; height: number }
+
+export function sizesEqual(
+  a: PixelSize | null | undefined,
+  b: PixelSize | null | undefined
+): boolean {
+  return Boolean(a && b && a.width === b.width && a.height === b.height)
+}
+
+/**
+ * How to produce the pixels ListWise already shows, without a second EXIF pass.
+ *
+ * ListWise previews via HTML `<img>`, which may or may not apply EXIF depending
+ * on the browser and whether a previous decoder already baked the pixels.
+ *
+ * - `use-display-pixels`: display decoder size differs from stored/raw — the
+ *   browser already applied EXIF. Use those pixels; do NOT apply EXIF again.
+ * - `keep-pixels-strip-exif`: display matches stored pixels — already visual
+ *   (stale EXIF tag). Keep pixels, drop the orientation tag.
+ * - `passthrough`: orientation 1 / no work.
+ *
+ * Never rotate because width>height. Never apply EXIF twice.
+ */
+export type VisualPixelStrategy =
+  | { action: "passthrough" }
+  | { action: "keep-pixels-strip-exif" }
+  | { action: "use-display-pixels" }
+
+export function visualPixelStrategy(input: {
+  orientation: number
+  stored?: PixelSize | null
+  decodedIgnoringExif?: PixelSize | null
+  decodedAsHtmlImage?: PixelSize | null
+}): VisualPixelStrategy {
+  const orientation = input.orientation || 1
+  const raw = input.decodedIgnoringExif || input.stored
+  const display = input.decodedAsHtmlImage
+
+  if (display && raw && !sizesEqual(display, raw)) {
+    return { action: "use-display-pixels" }
+  }
+
+  if (orientation > 1) {
+    return { action: "keep-pixels-strip-exif" }
+  }
+
+  return { action: "passthrough" }
+}
+
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((sum, part) => sum + part.length, 0)
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const part of parts) {
+    out.set(part, offset)
+    offset += part.length
+  }
+  return out
+}
+
+/**
+ * Remove JPEG EXIF APP1 segments (including Orientation) without touching
+ * Huffman/SOS pixel data. Missing orientation is treated as 1.
+ */
+export function stripJpegExifKeepPixels(jpeg: Uint8Array): Uint8Array {
+  if (jpeg.length < 4 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return jpeg
+  const parts: Uint8Array[] = [jpeg.subarray(0, 2)]
+  let offset = 2
+  while (offset + 1 < jpeg.length) {
+    if (jpeg[offset] !== 0xff) {
+      parts.push(jpeg.subarray(offset))
+      break
+    }
+    const marker = jpeg[offset + 1]
+    if (marker === 0xda || marker === 0xd9) {
+      parts.push(jpeg.subarray(offset))
+      break
+    }
+    if (marker === 0x00 || marker === 0xff) {
+      parts.push(jpeg.subarray(offset, offset + 1))
+      offset += 1
+      continue
+    }
+    if (offset + 3 >= jpeg.length) {
+      parts.push(jpeg.subarray(offset))
+      break
+    }
+    const size = (jpeg[offset + 2] << 8) | jpeg[offset + 3]
+    const next = offset + 2 + size
+    if (size < 2 || next > jpeg.length) {
+      parts.push(jpeg.subarray(offset))
+      break
+    }
+    const isExifApp1 =
+      marker === 0xe1 &&
+      offset + 9 < jpeg.length &&
+      jpeg[offset + 4] === 0x45 &&
+      jpeg[offset + 5] === 0x78 &&
+      jpeg[offset + 6] === 0x69 &&
+      jpeg[offset + 7] === 0x66 &&
+      jpeg[offset + 8] === 0x00 &&
+      jpeg[offset + 9] === 0x00
+    if (!isExifApp1) {
+      parts.push(jpeg.subarray(offset, next))
+    }
+    offset = next
+  }
+  return concatBytes(parts)
+}
+
 /**
  * Insert or replace a tiny APP1 EXIF Orientation tag after SOI.
  * Used for fixtures; production encode strips EXIF by re-encoding pixels.

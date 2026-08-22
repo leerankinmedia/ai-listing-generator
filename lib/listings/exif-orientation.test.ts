@@ -2,10 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
   applyExifOrientationToRgb,
-  jpegNeedsOrientationBake,
-  jpegWithExifOrientation,
-  readJpegExifOrientation,
-  readJpegStoredSize,
+  visualPixelStrategy,
   visualSizeForOrientation,
 } from "@/lib/listings/exif-orientation"
 
@@ -70,5 +67,48 @@ describe("EXIF orientation mapping", () => {
     const o2 = applyExifOrientationToRgb(src, width, height, 3, 2)
     assert.equal(at(o2.data, 3, 0, 0), 3)
     assert.equal(at(o2.data, 3, 2, 0), 1)
+  })
+})
+
+describe("visual pixel strategy (no double EXIF)", () => {
+  it("does not re-apply EXIF when the HTML <img> decoder already changed size", () => {
+    const strategy = visualPixelStrategy({
+      orientation: 6,
+      stored: { width: 64, height: 32 },
+      decodedIgnoringExif: { width: 64, height: 32 },
+      decodedAsHtmlImage: { width: 32, height: 64 },
+    })
+    assert.equal(strategy.action, "use-display-pixels")
+  })
+
+  it("keeps already-visual pixels when display size matches stored (stale EXIF)", () => {
+    const strategy = visualPixelStrategy({
+      orientation: 6,
+      stored: { width: 32, height: 64 },
+      decodedIgnoringExif: { width: 32, height: 64 },
+      decodedAsHtmlImage: { width: 32, height: 64 },
+    })
+    assert.equal(strategy.action, "keep-pixels-strip-exif")
+  })
+
+  it("does not rotate orientation-1 portrait or landscape from aspect ratio", () => {
+    assert.equal(
+      visualPixelStrategy({
+        orientation: 1,
+        stored: { width: 32, height: 64 },
+        decodedIgnoringExif: { width: 32, height: 64 },
+        decodedAsHtmlImage: { width: 32, height: 64 },
+      }).action,
+      "passthrough"
+    )
+    assert.equal(
+      visualPixelStrategy({
+        orientation: 1,
+        stored: { width: 64, height: 32 },
+        decodedIgnoringExif: { width: 64, height: 32 },
+        decodedAsHtmlImage: { width: 64, height: 32 },
+      }).action,
+      "passthrough"
+    )
   })
 })

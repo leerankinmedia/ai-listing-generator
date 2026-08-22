@@ -81,14 +81,25 @@ describe("visual pixel strategy (no double EXIF)", () => {
     assert.equal(strategy.action, "use-display-pixels")
   })
 
-  it("keeps already-visual pixels when display size matches stored (stale EXIF)", () => {
+  it("applies EXIF once when the decoder ignored the tag (phone gallery would apply it)", () => {
     const strategy = visualPixelStrategy({
       orientation: 6,
-      stored: { width: 32, height: 64 },
-      decodedIgnoringExif: { width: 32, height: 64 },
-      decodedAsHtmlImage: { width: 32, height: 64 },
+      stored: { width: 64, height: 32 },
+      decodedIgnoringExif: { width: 64, height: 32 },
+      decodedAsHtmlImage: { width: 64, height: 32 },
     })
-    assert.equal(strategy.action, "keep-pixels-strip-exif")
+    assert.equal(strategy.action, "apply-exif-once")
+  })
+
+  it("does not apply EXIF twice when display pixels already differ from raw", () => {
+    const strategy = visualPixelStrategy({
+      orientation: 3,
+      stored: { width: 40, height: 40 },
+      decodedIgnoringExif: { width: 40, height: 40 },
+      decodedAsHtmlImage: { width: 40, height: 40 },
+      displayPixelsDifferFromRaw: true,
+    })
+    assert.equal(strategy.action, "use-display-pixels")
   })
 
   it("does not rotate orientation-1 portrait or landscape from aspect ratio", () => {

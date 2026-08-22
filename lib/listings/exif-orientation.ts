@@ -286,22 +286,24 @@ export function sizesEqual(
 }
 
 /**
- * How to produce the pixels ListWise already shows, without a second EXIF pass.
+ * How to produce the pixels the phone gallery shows.
  *
- * ListWise previews via HTML `<img>`, which may or may not apply EXIF depending
- * on the browser and whether a previous decoder already baked the pixels.
+ * Android/iOS galleries apply EXIF Orientation once. ListWise must persist
+ * those same pixels (not the raw sensor buffer) and then drop the tag.
  *
- * - `use-display-pixels`: display decoder size differs from stored/raw — the
- *   browser already applied EXIF. Use those pixels; do NOT apply EXIF again.
- * - `keep-pixels-strip-exif`: display matches stored pixels — already visual
- *   (stale EXIF tag). Keep pixels, drop the orientation tag.
+ * - `use-display-pixels`: browser decoder already applied EXIF (size or
+ *   pixels differ from raw). Paint that bitmap 1:1 — do NOT apply EXIF again.
+ * - `apply-exif-once`: decoder ignored EXIF (same size as stored). Apply the
+ *   EXIF transform once so preview matches the phone gallery, then strip the tag.
  * - `passthrough`: orientation 1 / no work.
  *
  * Never rotate because width>height. Never apply EXIF twice.
+ * Never strip EXIF while leaving unrotated sensor pixels — that is what made
+ * ListWise preview disagree with the phone gallery.
  */
 export type VisualPixelStrategy =
   | { action: "passthrough" }
-  | { action: "keep-pixels-strip-exif" }
+  | { action: "apply-exif-once" }
   | { action: "use-display-pixels" }
 
 export function visualPixelStrategy(input: {
@@ -309,6 +311,8 @@ export function visualPixelStrategy(input: {
   stored?: PixelSize | null
   decodedIgnoringExif?: PixelSize | null
   decodedAsHtmlImage?: PixelSize | null
+  /** True when from-image / <img> pixels differ from raw despite same size (e.g. EXIF 3). */
+  displayPixelsDifferFromRaw?: boolean
 }): VisualPixelStrategy {
   const orientation = input.orientation || 1
   const raw = input.decodedIgnoringExif || input.stored
@@ -318,8 +322,12 @@ export function visualPixelStrategy(input: {
     return { action: "use-display-pixels" }
   }
 
+  if (input.displayPixelsDifferFromRaw) {
+    return { action: "use-display-pixels" }
+  }
+
   if (orientation > 1) {
-    return { action: "keep-pixels-strip-exif" }
+    return { action: "apply-exif-once" }
   }
 
   return { action: "passthrough" }

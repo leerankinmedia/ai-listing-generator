@@ -62,8 +62,8 @@ export async function uploadListingOriginalToStorage(input: {
     throw new Error("No photo data available to upload.")
   }
 
-  // Bake EXIF orientation into pixels for every photo (cover and additional)
-  // before the permanent Supabase original is stored.
+  // Bake the phone-gallery visual into pixels for every photo before the
+  // permanent Supabase original is stored. Do not strip EXIF without baking.
   try {
     const { normalizeImageOrientation } = await import(
       "@/lib/listings/image-orientation"

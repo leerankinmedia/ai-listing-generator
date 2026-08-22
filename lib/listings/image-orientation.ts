@@ -1,20 +1,20 @@
 /**
- * Browser orientation bake-in for listing originals.
+ * Browser orientation bake-in at initial upload.
  *
- * ListWise previews photos with HTML `<img>`. Capture THAT painted result
- * (or the stored pixels when `<img>` does not change them) and persist it
- * with orientation=1. Never apply an extra EXIF canvas matrix on top of
- * createImageBitmap({ imageOrientation: 'from-image' }) — that second
- * transform is what rotated already-correct photos on eBay.
+ * The phone gallery is the source of truth: it applies EXIF Orientation once.
+ * ListWise preview must show those same pixels. The previous
+ * keep-pixels-strip-exif path dropped the tag and left sensor pixels, so
+ * jeans/tag photos appeared sideways immediately after upload.
  *
  * Cover and additional photos share this exact path.
  */
 import {
+  applyExifOrientationToCanvas,
   jpegNeedsOrientationBake,
   readJpegExifOrientation,
   readJpegStoredSize,
-  stripJpegExifKeepPixels,
   visualPixelStrategy,
+  visualSizeForOrientation,
 } from "@/lib/listings/exif-orientation"
 
 function listingFileName(fileName: string, preferPng: boolean) {
@@ -79,13 +79,51 @@ function loadHtmlImage(source: Blob): Promise<HTMLImageElement | null> {
   })
 }
 
-function jpegBlobFromBytes(bytes: Uint8Array, fileName: string) {
-  const copy = new Uint8Array(bytes)
-  return {
-    blob: new Blob([copy], { type: "image/jpeg" }),
-    contentType: "image/jpeg",
-    fileName: listingFileName(fileName, false),
+function fingerprintCanvas(
+  source: CanvasImageSource,
+  width: number,
+  height: number
+): string {
+  const canvas = document.createElement("canvas")
+  canvas.width = 8
+  canvas.height = 8
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return ""
+  ctx.drawImage(source, 0, 0, width, height, 0, 0, 8, 8)
+  return canvas.toDataURL()
+}
+
+function drawDisplayPixels(
+  source: CanvasImageSource,
+  width: number,
+  height: number
+): HTMLCanvasElement {
+  const canvas = document.createElement("canvas")
+  canvas.width = Math.max(1, width)
+  canvas.height = Math.max(1, height)
+  const ctx = canvas.getContext("2d")
+  if (!ctx) throw new Error("Could not create canvas for photo orientation")
+  ctx.drawImage(source, 0, 0)
+  return canvas
+}
+
+function drawApplyingExifOnce(
+  source: CanvasImageSource,
+  storedWidth: number,
+  storedHeight: number,
+  orientation: number
+): HTMLCanvasElement {
+  const visual = visualSizeForOrientation(storedWidth, storedHeight, orientation)
+  const canvas = document.createElement("canvas")
+  canvas.width = Math.max(1, visual.width)
+  canvas.height = Math.max(1, visual.height)
+  const ctx = canvas.getContext("2d")
+  if (!ctx) throw new Error("Could not create canvas for photo orientation")
+  if (orientation > 1) {
+    applyExifOrientationToCanvas(ctx, storedWidth, storedHeight, orientation)
   }
+  ctx.drawImage(source, 0, 0)
+  return canvas
 }
 
 export async function normalizeImageOrientation(
@@ -110,7 +148,7 @@ export async function normalizeImageOrientation(
     return passthrough
   }
 
-  const jpegOrientation = readJpegExifOrientation(bytes)
+  const jpegOrientation = readJpegExifOrientation(bytes) || 1
   const jpegSize = readJpegStoredSize(bytes)
   const isHeicLike =
     /heic|heif|avif/i.test(source.type || "") ||
@@ -131,11 +169,36 @@ export async function normalizeImageOrientation(
       ? { width: fromImage.width, height: fromImage.height }
       : null
 
+  let displayPixelsDifferFromRaw = false
+  if (
+    jpegOrientation > 1 &&
+    jpegOrientation <= 4 &&
+    raw &&
+    (fromImage || htmlImage) &&
+    decodedIgnoringExif &&
+    decodedAsHtmlImage &&
+    decodedIgnoringExif.width === decodedAsHtmlImage.width &&
+    decodedIgnoringExif.height === decodedAsHtmlImage.height
+  ) {
+    const rawFp = fingerprintCanvas(raw, raw.width, raw.height)
+    const displayFp = htmlImage
+      ? fingerprintCanvas(
+          htmlImage,
+          htmlImage.naturalWidth,
+          htmlImage.naturalHeight
+        )
+      : fromImage
+        ? fingerprintCanvas(fromImage, fromImage.width, fromImage.height)
+        : rawFp
+    displayPixelsDifferFromRaw = Boolean(rawFp && displayFp && rawFp !== displayFp)
+  }
+
   const strategy = visualPixelStrategy({
-    orientation: jpegOrientation || 1,
+    orientation: jpegOrientation,
     stored: jpegSize,
     decodedIgnoringExif,
     decodedAsHtmlImage,
+    displayPixelsDifferFromRaw,
   })
 
   try {
@@ -145,45 +208,43 @@ export async function normalizeImageOrientation(
       return passthrough
     }
 
-    if (strategy.action === "keep-pixels-strip-exif" && jpegSize) {
+    if (strategy.action === "apply-exif-once") {
+      const storedWidth = raw?.width || jpegSize?.width || 0
+      const storedHeight = raw?.height || jpegSize?.height || 0
+      const rawSource = raw || fromImage || htmlImage
+      if (!rawSource || !storedWidth || !storedHeight) {
+        closeBitmap(raw)
+        closeBitmap(fromImage)
+        return passthrough
+      }
+      const canvas = drawApplyingExifOnce(
+        rawSource,
+        storedWidth,
+        storedHeight,
+        jpegOrientation
+      )
+      const blob = await encodeCanvas(canvas, preferPng)
       closeBitmap(raw)
       closeBitmap(fromImage)
-      const stripped = stripJpegExifKeepPixels(bytes)
-      return jpegBlobFromBytes(stripped, fileName)
+      return {
+        blob,
+        contentType: preferPng ? "image/png" : "image/jpeg",
+        fileName: listingFileName(fileName, preferPng),
+      }
     }
 
-    // Display decoder already applied EXIF (size changed) OR HEIC: paint
-    // the HTMLImageElement / from-image bitmap 1:1. No extra EXIF matrix.
+    const displaySource = htmlImage || fromImage || raw
     const displayWidth =
       decodedAsHtmlImage?.width || fromImage?.width || raw?.width || 0
     const displayHeight =
       decodedAsHtmlImage?.height || fromImage?.height || raw?.height || 0
-    if (!displayWidth || !displayHeight) {
+    if (!displaySource || !displayWidth || !displayHeight) {
       closeBitmap(raw)
       closeBitmap(fromImage)
       return passthrough
     }
 
-    const canvas = document.createElement("canvas")
-    canvas.width = Math.max(1, displayWidth)
-    canvas.height = Math.max(1, displayHeight)
-    const ctx = canvas.getContext("2d")
-    if (!ctx) {
-      closeBitmap(raw)
-      closeBitmap(fromImage)
-      return passthrough
-    }
-    if (htmlImage) {
-      ctx.drawImage(htmlImage, 0, 0)
-    } else if (fromImage) {
-      ctx.drawImage(fromImage, 0, 0)
-    } else if (raw) {
-      ctx.drawImage(raw, 0, 0)
-    } else {
-      closeBitmap(raw)
-      closeBitmap(fromImage)
-      return passthrough
-    }
+    const canvas = drawDisplayPixels(displaySource, displayWidth, displayHeight)
     const blob = await encodeCanvas(canvas, preferPng)
     closeBitmap(raw)
     closeBitmap(fromImage)
@@ -195,9 +256,26 @@ export async function normalizeImageOrientation(
   } catch {
     closeBitmap(raw)
     closeBitmap(fromImage)
-    if (jpegNeedsOrientationBake(bytes)) {
-      const stripped = stripJpegExifKeepPixels(bytes)
-      return jpegBlobFromBytes(stripped, fileName)
+    if (jpegNeedsOrientationBake(bytes) && jpegSize) {
+      const rawSource = raw || fromImage || htmlImage
+      if (rawSource) {
+        try {
+          const canvas = drawApplyingExifOnce(
+            rawSource,
+            jpegSize.width,
+            jpegSize.height,
+            jpegOrientation
+          )
+          const blob = await encodeCanvas(canvas, preferPng)
+          return {
+            blob,
+            contentType: preferPng ? "image/png" : "image/jpeg",
+            fileName: listingFileName(fileName, preferPng),
+          }
+        } catch {
+          /* fall through */
+        }
+      }
     }
     return passthrough
   }

@@ -62,7 +62,8 @@ export async function uploadListingOriginalToStorage(input: {
     throw new Error("No photo data available to upload.")
   }
 
-  // Re-normalize EXIF orientation before durable upload.
+  // Bake EXIF orientation into pixels for every photo (cover and additional)
+  // before the permanent Supabase original is stored.
   try {
     const { normalizeImageOrientation } = await import(
       "@/lib/listings/image-orientation"

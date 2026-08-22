@@ -6,6 +6,7 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  serverExternalPackages: ["sharp"],
   allowedDevOrigins: ["127.0.0.1", "localhost"],
 }
 

@@ -2,6 +2,11 @@ import { createHash } from "crypto"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { ensurePublicImageUrls } from "@/lib/marketplaces/images/ensure-public-urls"
 import { ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
+import {
+  marketplaceImageToDataUrl,
+  normalizeMarketplaceImages,
+  type NormalizedMarketplaceImage,
+} from "@/lib/listings/marketplace-image-normalize"
 
 function redactUrlForLog(url: string): string {
   try {
@@ -154,6 +159,144 @@ function uniquePreserveOrder(urls: string[]): string[] {
   return out
 }
 
+function parseImageDataUrl(dataUrl: string): { contentType: string; buffer: Buffer } {
+  const match = /^data:([^;]+);base64,(.+)$/i.exec(dataUrl)
+  if (!match) {
+    throw new MarketplaceError(
+      "Invalid data-URL image. Re-upload photos and try again.",
+      "image_invalid",
+      400
+    )
+  }
+  return {
+    contentType: match[1],
+    buffer: Buffer.from(match[2], "base64"),
+  }
+}
+
+async function downloadListingPhoto(
+  url: string,
+  index: number
+): Promise<{ buffer: Buffer; contentType: string }> {
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      headers: { Accept: "image/*,*/*;q=0.8" },
+    })
+  } catch {
+    throw new MarketplaceError(
+      index === 0
+        ? "The first listing photo could not be downloaded for orientation-safe hosting."
+        : `Listing photo #${index + 1} could not be downloaded for orientation-safe hosting.`,
+      "ebay_image_download_failed",
+      400
+    )
+  }
+  if (!response.ok) {
+    throw new MarketplaceError(
+      index === 0
+        ? `The first listing photo download failed (HTTP ${response.status}).`
+        : `Listing photo #${index + 1} download failed (HTTP ${response.status}).`,
+      "ebay_image_download_failed",
+      400
+    )
+  }
+  const contentType = (response.headers.get("content-type") || "image/jpeg")
+    .split(";")[0]
+    .trim()
+  if (!contentType.startsWith("image/")) {
+    throw new MarketplaceError(
+      index === 0
+        ? `The first listing photo is not an image (content-type ${contentType}).`
+        : `Listing photo #${index + 1} is not an image (content-type ${contentType}).`,
+      "ebay_image_not_image",
+      400
+    )
+  }
+  const buffer = Buffer.from(await response.arrayBuffer())
+  if (buffer.length < 100) {
+    throw new MarketplaceError(
+      index === 0
+        ? "The first listing photo is too small to publish."
+        : `Listing photo #${index + 1} is too small to publish.`,
+      "ebay_image_too_small",
+      400
+    )
+  }
+  return { buffer, contentType }
+}
+
+/**
+ * Download every listing photo (cover and additional), bake EXIF orientation
+ * into pixels, and return the buffers eBay will receive — same path for
+ * every index, original seller order preserved.
+ */
+export async function normalizeEbayListingPhotoBytes(
+  urls: string[]
+): Promise<
+  Array<{
+    sourceUrl: string
+    keepPublicUrl: string | null
+    normalized: NormalizedMarketplaceImage
+  }>
+> {
+  const sources = urls.map((u) => u.trim()).filter(Boolean)
+  const fetched: Array<{
+    sourceUrl: string
+    keepPublicUrl: string | null
+    buffer: Buffer
+    contentType: string
+  }> = []
+
+  for (let i = 0; i < sources.length; i++) {
+    const url = sources[i]
+    if (url.startsWith("data:")) {
+      const parsed = parseImageDataUrl(url)
+      fetched.push({
+        sourceUrl: url,
+        keepPublicUrl: null,
+        buffer: parsed.buffer,
+        contentType: parsed.contentType,
+      })
+      continue
+    }
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      const downloaded = await downloadListingPhoto(url, i)
+      const keepPublicUrl =
+        url.startsWith("https://") && !isEphemeralOrSignedUrl(url) ? url : null
+      fetched.push({
+        sourceUrl: url,
+        keepPublicUrl,
+        buffer: downloaded.buffer,
+        contentType: downloaded.contentType,
+      })
+      continue
+    }
+    throw new MarketplaceError(
+      i === 0
+        ? "The first listing photo has an unsupported URL scheme."
+        : `Listing photo #${i + 1} has an unsupported URL scheme.`,
+      "ebay_image_unsupported",
+      400
+    )
+  }
+
+  const normalized = await normalizeMarketplaceImages(
+    fetched.map((item) => ({
+      buffer: item.buffer,
+      contentType: item.contentType,
+    }))
+  )
+
+  return fetched.map((item, index) => ({
+    sourceUrl: item.sourceUrl,
+    keepPublicUrl: item.keepPublicUrl,
+    normalized: normalized[index],
+  }))
+}
+
 /**
  * Build the exact product.imageUrls array for createOrReplaceInventoryItem.
  *
@@ -208,68 +351,25 @@ export async function resolveEbayImageUrls(
     }
   }
 
-  // Re-host anything that isn't already a permanent public HTTPS URL
-  // (data URLs, http, signed/expiring https) into stable public storage URLs.
+  // Download every photo, bake EXIF into pixels, then host marketplace-safe
+  // bytes. Cover and additional photos share this path — index 0 is not special.
+  const normalizedPhotos = await normalizeEbayListingPhotoBytes(orderedSources)
   const toHost: string[] = []
-  for (let i = 0; i < orderedSources.length; i++) {
-    const url = orderedSources[i]
-    if (url.startsWith("data:")) {
-      toHost.push(url)
+  for (let i = 0; i < normalizedPhotos.length; i++) {
+    const photo = normalizedPhotos[i]
+    console.info("[ebay/images] orientation bake", {
+      index: i,
+      orientationWas: photo.normalized.orientationWas,
+      changed: photo.normalized.changed,
+      width: photo.normalized.width,
+      height: photo.normalized.height,
+      contentType: photo.normalized.contentType,
+    })
+    if (!photo.normalized.changed && photo.keepPublicUrl) {
+      toHost.push(photo.keepPublicUrl)
       continue
     }
-    if (
-      url.startsWith("https://") &&
-      !isEphemeralOrSignedUrl(url)
-    ) {
-      toHost.push(url)
-      continue
-    }
-    // http or signed https → download bytes and convert to data URL for re-host.
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      let response: Response
-      try {
-        response = await fetch(url, { redirect: "follow" })
-      } catch {
-        throw new MarketplaceError(
-          i === 0
-            ? "The first listing photo could not be downloaded for permanent hosting."
-            : `Listing photo #${i + 1} could not be downloaded for permanent hosting.`,
-          "ebay_image_download_failed",
-          400
-        )
-      }
-      if (!response.ok) {
-        throw new MarketplaceError(
-          i === 0
-            ? `The first listing photo download failed (HTTP ${response.status}).`
-            : `Listing photo #${i + 1} download failed (HTTP ${response.status}).`,
-          "ebay_image_download_failed",
-          400
-        )
-      }
-      const contentType = (response.headers.get("content-type") || "image/jpeg")
-        .split(";")[0]
-        .trim()
-      if (!contentType.startsWith("image/")) {
-        throw new MarketplaceError(
-          i === 0
-            ? `The first listing photo is not an image (content-type ${contentType}).`
-            : `Listing photo #${i + 1} is not an image (content-type ${contentType}).`,
-          "ebay_image_not_image",
-          400
-        )
-      }
-      const buffer = Buffer.from(await response.arrayBuffer())
-      toHost.push(`data:${contentType};base64,${buffer.toString("base64")}`)
-      continue
-    }
-    throw new MarketplaceError(
-      i === 0
-        ? "The first listing photo has an unsupported URL scheme."
-        : `Listing photo #${i + 1} has an unsupported URL scheme.`,
-      "ebay_image_unsupported",
-      400
-    )
+    toHost.push(marketplaceImageToDataUrl(photo.normalized))
   }
 
   let permanent: string[]

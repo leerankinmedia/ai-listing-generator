@@ -1,10 +1,10 @@
 /**
- * JPEG EXIF orientation helpers shared by the browser bake-in path and the
+ * JPEG EXIF orientation helpers shared by the browser upload path and the
  * server marketplace normalizer.
  *
- * Orientation is the EXIF tag (1–8). We never treat the display string or
- * width>height as a reason to rotate: portrait/landscape/tag photos stay as
- * the seller saw them once pixels are physically rotated to match EXIF.
+ * The selected File is authoritative. We never rotate pixels from the EXIF
+ * tag, from width/height, or from portrait/landscape. Leftover Orientation
+ * is stripped so browsers and eBay cannot apply it later.
  */
 
 export type ExifOrientation = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
@@ -164,11 +164,6 @@ export function readJpegExifOrientation(
   return null
 }
 
-export function jpegNeedsOrientationBake(input: Uint8Array | ArrayBuffer): boolean {
-  const orientation = readJpegExifOrientation(input)
-  return orientation !== null && orientation !== 1
-}
-
 /**
  * Map stored pixel (x, y) onto the visual canvas for the given EXIF tag.
  * `out` is RGB or RGBA packed left-to-right, top-to-bottom.
@@ -230,106 +225,36 @@ export function applyExifOrientationToRgb(
   return { data: out, width: visual.width, height: visual.height }
 }
 
-/** Canvas 2D transform that maps stored pixels onto a visual-sized canvas. */
-export function applyExifOrientationToCanvas(
-  ctx: {
-    translate: (x: number, y: number) => void
-    scale: (x: number, y: number) => void
-    rotate: (rad: number) => void
-  },
-  storedWidth: number,
-  storedHeight: number,
-  orientation: number
-) {
-  switch (orientation) {
-    case 2:
-      ctx.translate(storedWidth, 0)
-      ctx.scale(-1, 1)
-      break
-    case 3:
-      ctx.translate(storedWidth, storedHeight)
-      ctx.rotate(Math.PI)
-      break
-    case 4:
-      ctx.translate(0, storedHeight)
-      ctx.scale(1, -1)
-      break
-    case 5:
-      ctx.rotate(0.5 * Math.PI)
-      ctx.scale(1, -1)
-      break
-    case 6:
-      ctx.rotate(0.5 * Math.PI)
-      ctx.translate(0, -storedHeight)
-      break
-    case 7:
-      ctx.rotate(0.5 * Math.PI)
-      ctx.translate(storedWidth, -storedHeight)
-      ctx.scale(-1, 1)
-      break
-    case 8:
-      ctx.rotate(-0.5 * Math.PI)
-      ctx.translate(-storedWidth, 0)
-      break
-    default:
-      break
-  }
-}
-
 export type PixelSize = { width: number; height: number }
 
-export function sizesEqual(
-  a: PixelSize | null | undefined,
-  b: PixelSize | null | undefined
-): boolean {
-  return Boolean(a && b && a.width === b.width && a.height === b.height)
-}
-
 /**
- * How to produce the pixels the phone gallery shows.
+ * Preserve the selected photo's visual orientation.
  *
- * Android/iOS galleries apply EXIF Orientation once. ListWise must persist
- * those same pixels (not the raw sensor buffer) and then drop the tag.
+ * The File the seller picked is authoritative. ListWise must not rotate
+ * pixels from EXIF, HTMLImage display size, or aspect ratio.
  *
- * - `use-display-pixels`: browser decoder already applied EXIF (size or
- *   pixels differ from raw). Paint that bitmap 1:1 — do NOT apply EXIF again.
- * - `apply-exif-once`: decoder ignored EXIF (same size as stored). Apply the
- *   EXIF transform once so preview matches the phone gallery, then strip the tag.
- * - `passthrough`: orientation 1 / no work.
+ * - `strip-exif-keep-pixels`: drop the Orientation tag; keep stored pixels.
+ * - `passthrough`: orientation 1 / nothing to do.
  *
- * Never rotate because width>height. Never apply EXIF twice.
- * Never strip EXIF while leaving unrotated sensor pixels — that is what made
- * ListWise preview disagree with the phone gallery.
+ * `decodedAsHtmlImage` is ignored. A swapped HTMLImage size means the
+ * browser applied leftover EXIF — using those pixels would rotate the
+ * gallery photo.
  */
 export type VisualPixelStrategy =
   | { action: "passthrough" }
-  | { action: "apply-exif-once" }
-  | { action: "use-display-pixels" }
+  | { action: "strip-exif-keep-pixels" }
 
 export function visualPixelStrategy(input: {
   orientation: number
   stored?: PixelSize | null
   decodedIgnoringExif?: PixelSize | null
   decodedAsHtmlImage?: PixelSize | null
-  /** True when from-image / <img> pixels differ from raw despite same size (e.g. EXIF 3). */
   displayPixelsDifferFromRaw?: boolean
 }): VisualPixelStrategy {
   const orientation = input.orientation || 1
-  const raw = input.decodedIgnoringExif || input.stored
-  const display = input.decodedAsHtmlImage
-
-  if (display && raw && !sizesEqual(display, raw)) {
-    return { action: "use-display-pixels" }
-  }
-
-  if (input.displayPixelsDifferFromRaw) {
-    return { action: "use-display-pixels" }
-  }
-
   if (orientation > 1) {
-    return { action: "apply-exif-once" }
+    return { action: "strip-exif-keep-pixels" }
   }
-
   return { action: "passthrough" }
 }
 
@@ -396,7 +321,7 @@ export function stripJpegExifKeepPixels(jpeg: Uint8Array): Uint8Array {
 
 /**
  * Insert or replace a tiny APP1 EXIF Orientation tag after SOI.
- * Used for fixtures; production encode strips EXIF by re-encoding pixels.
+ * Used for fixtures; production strips APP1 without rotating pixels.
  */
 export function jpegWithExifOrientation(
   jpeg: Uint8Array,

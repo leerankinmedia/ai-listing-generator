@@ -229,9 +229,9 @@ async function downloadListingPhoto(
 }
 
 /**
- * Download every listing photo (cover and additional), bake EXIF orientation
- * into pixels, and return the buffers eBay will receive — same path for
- * every index, original seller order preserved.
+ * Download every listing photo (cover and additional), strip leftover EXIF
+ * without rotating pixels, and return the buffers eBay will receive — same
+ * path for every index, original seller order preserved.
  */
 export async function normalizeEbayListingPhotoBytes(
   urls: string[]
@@ -351,13 +351,13 @@ export async function resolveEbayImageUrls(
     }
   }
 
-  // Download every photo, bake EXIF into pixels, then host marketplace-safe
-  // bytes. Cover and additional photos share this path — index 0 is not special.
+  // Download every photo, strip leftover EXIF without rotating, then host
+  // marketplace-safe bytes. Cover and additional photos share this path.
   const normalizedPhotos = await normalizeEbayListingPhotoBytes(orderedSources)
   const toHost: string[] = []
   for (let i = 0; i < normalizedPhotos.length; i++) {
     const photo = normalizedPhotos[i]
-    console.info("[ebay/images] orientation bake", {
+    console.info("[ebay/images] orientation preserve", {
       index: i,
       orientationWas: photo.normalized.orientationWas,
       changed: photo.normalized.changed,

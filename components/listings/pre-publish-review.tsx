@@ -81,7 +81,7 @@ export function PrePublishReviewCard({
           <img
             src={cover.url}
             alt="Cover"
-            className="h-20 w-20 shrink-0 rounded-lg object-cover"
+            className="h-20 w-20 shrink-0 rounded-lg object-cover [image-orientation:none]"
           />
         ) : (
           <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-lg bg-secondary text-xs text-muted-foreground">

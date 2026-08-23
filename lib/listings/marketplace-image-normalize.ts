@@ -1,16 +1,15 @@
 /**
- * Server-side bake of the phone-gallery visual, used when a JPEG still has
- * an Orientation tag (client bake skipped). After a successful upload bake,
- * orientation is 1 and this is a no-op — Generate/eBay must not rotate again.
+ * Preserve selected-photo pixels on the server.
  *
- * Phone galleries apply EXIF once. sharp.rotate() with no angle does the
- * same thing. We never rotate from width/height, and we never apply EXIF
- * twice (orientation 1 is passed through).
+ * Never auto-orient. Never sharp.rotate(). If a leftover EXIF Orientation
+ * tag would make eBay disagree with ListWise, strip the tag without
+ * changing pixels. Cover and additional photos share this path.
  */
 import sharp from "sharp"
 import {
   readJpegExifOrientation,
   readJpegStoredSize,
+  stripJpegExifKeepPixels,
   visualPixelStrategy,
   type ExifOrientation,
 } from "@/lib/listings/exif-orientation"
@@ -22,7 +21,7 @@ export type NormalizedMarketplaceImage = {
   orientationWas: ExifOrientation | 1
   width: number
   height: number
-  strategy: "passthrough" | "apply-exif-once" | "use-display-pixels"
+  strategy: "passthrough" | "strip-exif-keep-pixels"
 }
 
 function contentTypeForFormat(
@@ -35,9 +34,6 @@ function contentTypeForFormat(
   return fallback.startsWith("image/") ? fallback : "image/jpeg"
 }
 
-/**
- * Bake phone-gallery pixels for one photo. Same path for cover and extras.
- */
 export async function normalizeMarketplaceImage(
   input: Buffer,
   contentType = "image/jpeg"
@@ -74,10 +70,6 @@ export async function normalizeMarketplaceImage(
     orientation: orientationWas,
     stored,
     decodedIgnoringExif: stored,
-    // Server has no HTML <img>. If the tag is still present, pixels are the
-    // stored buffer and we apply EXIF once (phone gallery). If the client
-    // already baked, orientation is 1 and we passthrough.
-    decodedAsHtmlImage: stored,
   })
 
   if (strategy.action === "passthrough") {
@@ -92,38 +84,46 @@ export async function normalizeMarketplaceImage(
     }
   }
 
+  if (meta.format === "jpeg" || meta.format === "jpg" || jpegOrientation) {
+    const stripped = Buffer.from(stripJpegExifKeepPixels(input))
+    return {
+      buffer: stripped,
+      contentType: "image/jpeg",
+      changed: true,
+      orientationWas,
+      width: stored.width,
+      height: stored.height,
+      strategy: "strip-exif-keep-pixels",
+    }
+  }
+
   const preferPng = contentType.includes("png") || meta.format === "png"
-  // apply-exif-once: sharp.rotate() with no angle = phone-gallery EXIF bake.
-  const baked = preferPng
+  const encoded = preferPng
     ? await sharp(input, { failOn: "none", autoOrient: false })
-        .rotate()
         .png({ compressionLevel: 6 })
         .toBuffer()
     : await sharp(input, { failOn: "none", autoOrient: false })
-        .rotate()
         .jpeg({
           quality: 95,
           chromaSubsampling: "4:4:4",
           mozjpeg: true,
         })
         .toBuffer()
-
-  const outMeta = await sharp(baked, {
+  const outMeta = await sharp(encoded, {
     failOn: "none",
     autoOrient: false,
   }).metadata()
   return {
-    buffer: baked,
+    buffer: encoded,
     contentType: preferPng ? "image/png" : "image/jpeg",
     changed: true,
     orientationWas,
     width: outMeta.width || stored.width,
     height: outMeta.height || stored.height,
-    strategy: "apply-exif-once",
+    strategy: "strip-exif-keep-pixels",
   }
 }
 
-/** Same normalizer for every index — cover is not a special case. */
 export async function normalizeMarketplaceImages(
   images: Array<{ buffer: Buffer; contentType?: string }>
 ): Promise<NormalizedMarketplaceImage[]> {

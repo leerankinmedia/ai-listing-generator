@@ -134,6 +134,14 @@
     font-family: var(--font-bricolage), var(--font-figtree), system-ui, sans-serif;
     letter-spacing: -0.03em;
   }
+
+  /*
+    Selected listing photos are authoritative. Default browser <img> display
+    honors leftover EXIF Orientation and rotates the gallery photo.
+  */
+  img {
+    image-orientation: none;
+  }
 }
 
 @layer utilities {

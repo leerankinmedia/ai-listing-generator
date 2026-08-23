@@ -102,7 +102,9 @@ export async function createAnalyzeCopyFromBlob(
   source: Blob,
   targetMaxBytes: number = ANALYZE_TARGET_MAX_BYTES
 ): Promise<{ blob: Blob; bytes: number; presetIndex: number; widthHint: number }> {
-  const bitmap = await createImageBitmap(source)
+  const bitmap = await createImageBitmap(source, {
+    imageOrientation: "none",
+  })
   try {
     let lastBlob: Blob | null = null
     let lastPreset = 0
@@ -165,6 +167,7 @@ export async function createAnalyzeCopyFromListingImage(
 
 /**
  * Keep the full-resolution phone photo as the listing image.
+ * Strips leftover EXIF without rotating pixels so preview matches the gallery.
  * Does not resize for AI — analysis creates a separate temporary copy later.
  */
 export async function createListingImageFromFile(

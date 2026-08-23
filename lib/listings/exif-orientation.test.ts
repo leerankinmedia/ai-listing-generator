@@ -2,6 +2,10 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
   applyExifOrientationToRgb,
+  jpegWithExifOrientation,
+  readJpegExifOrientation,
+  readJpegStoredSize,
+  stripJpegExifKeepPixels,
   visualPixelStrategy,
   visualSizeForOrientation,
 } from "@/lib/listings/exif-orientation"
@@ -70,36 +74,34 @@ describe("EXIF orientation mapping", () => {
   })
 })
 
-describe("visual pixel strategy (no double EXIF)", () => {
-  it("does not re-apply EXIF when the HTML <img> decoder already changed size", () => {
+describe("visual pixel strategy (never extra-rotate)", () => {
+  it("does not treat a swapped HTMLImage size as a reason to rotate leftover EXIF", () => {
     const strategy = visualPixelStrategy({
       orientation: 6,
-      stored: { width: 64, height: 32 },
-      decodedIgnoringExif: { width: 64, height: 32 },
-      decodedAsHtmlImage: { width: 32, height: 64 },
-    })
-    assert.equal(strategy.action, "use-display-pixels")
-  })
-
-  it("applies EXIF once when the decoder ignored the tag (phone gallery would apply it)", () => {
-    const strategy = visualPixelStrategy({
-      orientation: 6,
-      stored: { width: 64, height: 32 },
-      decodedIgnoringExif: { width: 64, height: 32 },
+      stored: { width: 32, height: 64 },
+      decodedIgnoringExif: { width: 32, height: 64 },
       decodedAsHtmlImage: { width: 64, height: 32 },
     })
-    assert.equal(strategy.action, "apply-exif-once")
+    assert.equal(strategy.action, "strip-exif-keep-pixels")
   })
 
-  it("does not apply EXIF twice when display pixels already differ from raw", () => {
+  it("strips leftover EXIF without rotating when display matches stored pixels", () => {
     const strategy = visualPixelStrategy({
-      orientation: 3,
-      stored: { width: 40, height: 40 },
-      decodedIgnoringExif: { width: 40, height: 40 },
-      decodedAsHtmlImage: { width: 40, height: 40 },
-      displayPixelsDifferFromRaw: true,
+      orientation: 6,
+      stored: { width: 32, height: 64 },
+      decodedIgnoringExif: { width: 32, height: 64 },
+      decodedAsHtmlImage: { width: 32, height: 64 },
     })
-    assert.equal(strategy.action, "use-display-pixels")
+    assert.equal(strategy.action, "strip-exif-keep-pixels")
+  })
+
+  it("strips EXIF without rotating when there is no browser display decoder", () => {
+    const strategy = visualPixelStrategy({
+      orientation: 6,
+      stored: { width: 32, height: 64 },
+      decodedIgnoringExif: { width: 32, height: 64 },
+    })
+    assert.equal(strategy.action, "strip-exif-keep-pixels")
   })
 
   it("does not rotate orientation-1 portrait or landscape from aspect ratio", () => {
@@ -121,5 +123,22 @@ describe("visual pixel strategy (no double EXIF)", () => {
       }).action,
       "passthrough"
     )
+  })
+})
+
+describe("strip JPEG EXIF without rotating pixels", () => {
+  it("drops leftover Orientation and keeps stored width/height", () => {
+    // Minimal 1x1 JPEG (SOI + SOF0 1x1 + EOI). Dimensions come from SOF0.
+    const jpeg = Uint8Array.from([
+      0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x40, 0x00, 0x20, 0x01,
+      0x01, 0x11, 0x00, 0xff, 0xd9,
+    ])
+    const tagged = jpegWithExifOrientation(jpeg, 6)
+    assert.equal(readJpegExifOrientation(tagged), 6)
+    assert.deepEqual(readJpegStoredSize(tagged), { width: 32, height: 64 })
+
+    const stripped = stripJpegExifKeepPixels(tagged)
+    assert.equal(readJpegExifOrientation(stripped), null)
+    assert.deepEqual(readJpegStoredSize(stripped), { width: 32, height: 64 })
   })
 })

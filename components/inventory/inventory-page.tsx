@@ -387,7 +387,7 @@ export function InventoryPage() {
                       <img
                         src={row.photoUrl}
                         alt=""
-                        className="h-full w-full object-cover"
+                        className="h-full w-full object-cover [image-orientation:none]"
                       />
                     ) : (
                       <div className="flex h-full items-center justify-center">
@@ -446,7 +446,7 @@ export function InventoryPage() {
                             <img
                               src={row.photoUrl}
                               alt=""
-                              className="h-full w-full object-cover"
+                              className="h-full w-full object-cover [image-orientation:none]"
                             />
                           ) : null}
                         </div>

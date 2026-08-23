@@ -5,6 +5,7 @@ import {
   classifyGetItemDetailStatus,
   parseTradingGetItemXml,
   xmlText,
+  buildReviseItemClearSkuXml,
   type ParsedTradingGetItem,
 } from "@/lib/marketplaces/adapters/ebay/trading-parse"
 
@@ -15,6 +16,7 @@ export {
   parseTradingGetItemXml,
   xmlAttr,
   xmlText,
+  buildReviseItemClearSkuXml,
   type ParsedTradingGetItem,
 } from "@/lib/marketplaces/adapters/ebay/trading-parse"
 
@@ -47,6 +49,43 @@ function isRetryableTradingError(message: string, httpStatus: number): boolean {
   return /rate.?limit|call usage|exceeded|try again|internal error|timeout|temporar|busy|518|10007|21919188/i.test(
     message
   )
+}
+
+export async function reviseEbayListingClearSku(input: {
+  accessToken: string
+  itemId: string
+}): Promise<{ ok: boolean; ack: string; error?: string }> {
+  const itemId = input.itemId.trim()
+  if (!itemId) return { ok: false, ack: "Failure", error: "missing itemId" }
+
+  // Newly published listings are sometimes not revisable for a brief moment.
+  await sleep(400)
+
+  let lastError = "ReviseItem failed"
+  let lastAck = ""
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const response = await tradingCall({
+      accessToken: input.accessToken,
+      callName: "ReviseItem",
+      body: buildReviseItemClearSkuXml(itemId),
+    })
+    lastAck = xmlText(response.xml, "Ack") || ""
+    const short = xmlText(response.xml, "ShortMessage")
+    const long = xmlText(response.xml, "LongMessage")
+    lastError = long || short || `Trading ReviseItem HTTP ${response.status}`
+    if (/success|warning/i.test(lastAck)) {
+      console.info("[ebay/sku] cleared listing Custom Label", {
+        itemId,
+        ack: lastAck,
+        attempt,
+      })
+      return { ok: true, ack: lastAck }
+    }
+    if (attempt < 3) {
+      await sleep(400 * attempt)
+    }
+  }
+  return { ok: false, ack: lastAck || "Failure", error: lastError }
 }
 
 async function tradingCall(input: {

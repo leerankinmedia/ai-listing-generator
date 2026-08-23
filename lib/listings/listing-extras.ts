@@ -9,6 +9,7 @@ const OPERATIONAL_EXTRA_KEYS = new Set([
   "quantity",
   "ebaysku",
   "ebayoriginalsku",
+  "ebayinventorysku",
   "ebayquantity",
   "ebaylistingid",
   "ebayofferid",

@@ -259,7 +259,20 @@ async function persistLocationKey(
   connection: StoredMarketplaceConnection,
   merchantLocationKey: string
 ) {
-  const next: StoredMarketplaceConnection = {
+  const next = withLocationMeta(connection, merchantLocationKey)
+  await saveConnection(next)
+  logLocationSafe("saved merchantLocationKey", {
+    merchantLocationKey,
+    source: "verified-via-get-location",
+  })
+  return next
+}
+
+function withLocationMeta(
+  connection: StoredMarketplaceConnection,
+  merchantLocationKey: string
+): StoredMarketplaceConnection {
+  return {
     ...connection,
     meta: {
       ...connection.meta,
@@ -267,12 +280,6 @@ async function persistLocationKey(
     },
     updatedAt: new Date().toISOString(),
   }
-  await saveConnection(next)
-  logLocationSafe("saved merchantLocationKey", {
-    merchantLocationKey,
-    source: "verified-via-get-location",
-  })
-  return next
 }
 
 /**
@@ -287,7 +294,7 @@ async function persistLocationKey(
 export async function ensureEbayMerchantLocationKey(
   accessToken: string,
   connection: StoredMarketplaceConnection,
-  options?: { postalCode?: string | null }
+  options?: { postalCode?: string | null; persistConnection?: boolean }
 ): Promise<{ merchantLocationKey: string; connection: StoredMarketplaceConnection }> {
   const zip = String(options?.postalCode || "")
     .replace(/\D/g, "")
@@ -295,6 +302,7 @@ export async function ensureEbayMerchantLocationKey(
   const merchantLocationKey =
     process.env["EBAY_MERCHANT_LOCATION_KEY"]?.trim() ||
     (zip.length >= 5 ? `listwise-${zip}` : SANDBOX_MERCHANT_LOCATION_KEY)
+  const persistConnection = options?.persistConnection !== false
 
   logLocationSafe("ensure location via get/create (no list required)", {
     merchantLocationKey,
@@ -313,8 +321,10 @@ export async function ensureEbayMerchantLocationKey(
       // Location may already exist (race / prior create) — verify again.
       verified = await verifyEnabledLocationKey(accessToken, merchantLocationKey)
       if (verified) {
-        const next = await persistLocationKey(connection, verified)
-        void listInventoryLocationsOptional(accessToken)
+        const next = persistConnection
+          ? await persistLocationKey(connection, verified)
+          : withLocationMeta(connection, verified)
+        if (persistConnection) void listInventoryLocationsOptional(accessToken)
         return { merchantLocationKey: verified, connection: next }
       }
       throw err instanceof MarketplaceError
@@ -337,10 +347,12 @@ export async function ensureEbayMerchantLocationKey(
     )
   }
 
-  const next = await persistLocationKey(connection, verified)
+  const next = persistConnection
+    ? await persistLocationKey(connection, verified)
+    : withLocationMeta(connection, verified)
 
   // Optional diagnostics only — must not block publish.
-  void listInventoryLocationsOptional(accessToken)
+  if (persistConnection) void listInventoryLocationsOptional(accessToken)
 
   return { merchantLocationKey: verified, connection: next }
 }

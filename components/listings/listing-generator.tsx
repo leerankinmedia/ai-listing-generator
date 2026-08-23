@@ -127,14 +127,22 @@ export function ListingGenerator() {
     setGenerating(true)
 
     try {
+      const generateStarted = Date.now()
       const ordered = [...images].sort(
         (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
       )
 
+      const analyzeUploadStarted = Date.now()
       const imageUrls = await uploadAnalyzeImagesIndividually({
         images: ordered,
       })
+      console.info("[timing]", {
+        flow: "generate",
+        stage: "analyze_copy_upload",
+        ms: Date.now() - analyzeUploadStarted,
+      })
 
+      const generateApiStarted = Date.now()
       const response = await fetch("/api/listings/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -154,7 +162,14 @@ export function ListingGenerator() {
         partial?: boolean
         usageRecorded?: boolean
         usageRecordError?: string
+        timings?: { totalMs?: number; stages?: Record<string, number> }
       }>(response)
+      console.info("[timing]", {
+        flow: "generate",
+        stage: "generate_api",
+        ms: Date.now() - generateApiStarted,
+        server: parsed.ok ? parsed.data.timings : undefined,
+      })
       if (!parsed.ok) {
         throw new Error(parsed.error)
       }
@@ -209,36 +224,53 @@ export function ListingGenerator() {
         throw new Error("Mapped listing title was empty after AI analysis.")
       }
 
-      const hydrated = await hydrateListingEbayAspects(next)
-      next = hydrated.listing
-
-      let defaultsApplied = false
-      try {
-        const prefsRes = await fetch("/api/seller/ebay-defaults", {
-          credentials: "same-origin",
-        })
-        if (prefsRes.ok) {
-          const prefs = (await prefsRes.json()) as {
-            defaults?: unknown
-            ready?: boolean
-          }
-          if (prefs.defaults) {
-            const normalized = normalizeEbaySellerDefaults(prefs.defaults)
-            next = applyEbaySellerDefaultsToListing(next, normalized, {
-              onlyIfUnset: false,
+      const hydrateStarted = Date.now()
+      const [hydrated, defaultsBundle] = await Promise.all([
+        hydrateListingEbayAspects(next),
+        (async () => {
+          try {
+            const prefsRes = await fetch("/api/seller/ebay-defaults", {
+              credentials: "same-origin",
             })
-            defaultsApplied = ebaySellerDefaultsAreReady(normalized)
+            if (prefsRes.ok) {
+              const prefs = (await prefsRes.json()) as {
+                defaults?: unknown
+                ready?: boolean
+              }
+              if (prefs.defaults) {
+                const normalized = normalizeEbaySellerDefaults(prefs.defaults)
+                return {
+                  defaults: normalized,
+                  applied: ebaySellerDefaultsAreReady(normalized),
+                }
+              }
+            }
+          } catch {
+            /* local fallback below */
           }
-        }
-      } catch {
-        const local = readLocalEbaySellerDefaults()
-        if (local?.defaults) {
-          next = applyEbaySellerDefaultsToListing(next, local.defaults, {
-            onlyIfUnset: false,
-          })
-          defaultsApplied = ebaySellerDefaultsAreReady(local.defaults)
-        }
+          const local = readLocalEbaySellerDefaults()
+          if (local?.defaults) {
+            return {
+              defaults: local.defaults,
+              applied: ebaySellerDefaultsAreReady(local.defaults),
+            }
+          }
+          return { defaults: null, applied: false }
+        })(),
+      ])
+      next = hydrated.listing
+      let defaultsApplied = false
+      if (defaultsBundle.defaults) {
+        next = applyEbaySellerDefaultsToListing(next, defaultsBundle.defaults, {
+          onlyIfUnset: false,
+        })
+        defaultsApplied = defaultsBundle.applied
       }
+      console.info("[timing]", {
+        flow: "generate",
+        stage: "taxonomy_aspects_hydration",
+        ms: Date.now() - hydrateStarted,
+      })
 
       setProgressPercent(100)
       setProgressMessage("Preparing your draft")
@@ -257,6 +289,7 @@ export function ListingGenerator() {
 
       let saved: Listing
       try {
+        const persistStarted = Date.now()
         saved = await persistListing({
           ...next,
           images: ordered,
@@ -270,6 +303,16 @@ export function ListingGenerator() {
             updatedAt: new Date().toISOString(),
           })
         }
+        console.info("[timing]", {
+          flow: "generate",
+          stage: "draft_persistence",
+          ms: Date.now() - persistStarted,
+        })
+        console.info("[timing]", {
+          flow: "generate",
+          stage: "total",
+          ms: Date.now() - generateStarted,
+        })
       } catch (persistError) {
         console.error("[listing-generator] persist after generate failed", persistError)
         setListing(next)

@@ -1,6 +1,9 @@
 /**
- * ListWise inventory SKU resolution for eBay Custom Label / Inventory SKU.
- * Never expose internal listing UUIDs as the seller-facing SKU.
+ * Seller Custom Label vs internal Inventory API SKU.
+ *
+ * eBay Inventory requires a SKU as the inventory-item key. That value is
+ * also what Seller Hub shows as Custom Label unless we clear it after
+ * publish. Only a seller-entered (or imported) SKU may appear as Custom Label.
  */
 
 import type { Listing } from "@/lib/types"
@@ -137,12 +140,45 @@ export function ensureListingInventorySku(
   }
 }
 
-/** Server-safe SKU pick for publish (no localStorage allocation). */
+/** Stable Inventory API key derived from the listing id — never a Custom Label. */
+export function derivedInternalInventorySku(listingId: string): string {
+  const compact = listingId.replace(/[^a-zA-Z0-9]/g, "").slice(-8).toUpperCase()
+  return `LW${compact || "ITEM"}`.slice(0, 50)
+}
+
+/**
+ * Seller-facing Custom Label only — never an auto-generated LW hash, even if
+ * an older publish path wrote that hash onto extras.sku.
+ */
+export function sellerFacingCustomLabel(listing: Listing): string | null {
+  const stored = resolveListingSku(listing)
+  if (!stored) return null
+  if (
+    stored.toUpperCase() === derivedInternalInventorySku(listing.id).toUpperCase()
+  ) {
+    return null
+  }
+  return stored
+}
+
+/**
+ * Internal Inventory API key. Uses the seller Custom Label when they entered
+ * one; otherwise a stable hash of the listing id. Never write this onto
+ * extras.sku or treat it as a Custom Label.
+ */
+export function internalInventorySku(listing: Listing): string {
+  const stored = listing.specifics.extras?.ebayInventorySku?.trim()
+  if (stored && isEbayInventoryApiSku(stored)) return stored
+  const seller = sellerFacingCustomLabel(listing)
+  if (seller) return seller
+  return derivedInternalInventorySku(listing.id)
+}
+
+export function shouldClearEbayCustomLabel(listing: Listing): boolean {
+  return sellerFacingCustomLabel(listing) == null
+}
+
+/** Server-safe Inventory API SKU (not a seller Custom Label). */
 export function pickPublishSku(listing: Listing): string {
-  const resolved = resolveListingSku(listing)
-  if (resolved) return resolved
-  // Last resort for server path without a pre-assigned SKU — short hash of id,
-  // prefixed so it is never a raw UUID.
-  const compact = listing.id.replace(/[^a-zA-Z0-9]/g, "").slice(-8).toUpperCase()
-  return `LW${compact || Date.now()}`.slice(0, 50)
+  return internalInventorySku(listing)
 }

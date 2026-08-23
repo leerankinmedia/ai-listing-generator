@@ -20,6 +20,7 @@ import {
   getServerAuthUser,
   isSupabaseConfigured,
 } from "@/lib/supabase/index"
+import { createStageTimer } from "@/lib/observability/stage-timer"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
@@ -166,7 +167,10 @@ async function handleGenerate(request: Request) {
       )
     }
 
-    const images = await resolveAnalyzeImageUrls(imageUrls)
+    const timer = createStageTimer("generate")
+    const images = await timer.stage("image_preparation", () =>
+      resolveAnalyzeImageUrls(imageUrls)
+    )
     const {
       draft,
       model,
@@ -175,9 +179,13 @@ async function handleGenerate(request: Request) {
       imagesFailed,
       warnings,
       partial,
+      timings: generateTimings,
     } = await generateListingFromImages(images, {
       sellerNotes: sellerNotes || undefined,
     })
+    for (const [name, ms] of Object.entries(generateTimings.stages)) {
+      timer.stages[name] = ms
+    }
     imagesAnalyzed = analyzedCount
 
     let usageRecorded = false
@@ -212,6 +220,7 @@ async function handleGenerate(request: Request) {
     // Best-effort cleanup for ephemeral staging URLs.
     void cleanupAnalyzeStagingUrls(imageUrls)
 
+    const timings = timer.done()
     return NextResponse.json({
       draft,
       model,
@@ -222,6 +231,7 @@ async function handleGenerate(request: Request) {
       openaiConfigured: true,
       usageRecorded,
       usageRecordId,
+      timings,
       ...(usageRecordError ? { usageRecordError } : {}),
     })
   } catch (error) {

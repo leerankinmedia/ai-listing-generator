@@ -3,6 +3,7 @@
  * the browser — bypasses Vercel’s 4.5MB body limit). Analysis copies are never
  * used here.
  */
+import { mapPool } from "@/lib/async/map-pool"
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/client"
 import { getOriginalPhoto } from "@/lib/listings/original-photos"
 import type { ListingImage } from "@/lib/types"
@@ -96,40 +97,52 @@ export async function ensureDurableOriginalImageUrls(
 ): Promise<ListingImage[]> {
   if (images.length === 0) return images
 
-  const out: ListingImage[] = []
-  for (const [index, image] of images.entries()) {
+  const pending = images.filter((image) => {
     if (
       isDurableHttpUrl(image.url) &&
       (image.storageStatus === "uploaded" || image.storageStatus === undefined)
     ) {
-      out.push({
+      return false
+    }
+    const original = getOriginalPhoto(image.id)
+    if (!original && isDurableHttpUrl(image.url)) return false
+    return Boolean(original)
+  })
+  if (pending.length > 0) {
+    onProgress?.(
+      `Saving ${pending.length} original photo${pending.length === 1 ? "" : "s"} at full quality…`
+    )
+  }
+
+  return mapPool(images, 3, async (image) => {
+    if (
+      isDurableHttpUrl(image.url) &&
+      (image.storageStatus === "uploaded" || image.storageStatus === undefined)
+    ) {
+      return {
         ...image,
-        storageStatus: "uploaded",
+        storageStatus: "uploaded" as const,
         storageError: undefined,
-      })
-      continue
+      }
     }
 
     const original = getOriginalPhoto(image.id)
     if (!original && isDurableHttpUrl(image.url)) {
-      out.push({
+      return {
         ...image,
-        storageStatus: "uploaded",
+        storageStatus: "uploaded" as const,
         storageError: undefined,
-      })
-      continue
+      }
     }
 
     if (!original) {
-      // No session original (e.g. reloaded draft without durable URL).
-      out.push({
+      return {
         ...image,
         storageStatus: image.storageStatus ?? "error",
         storageError:
           image.storageError ||
           "Photo is missing from storage. Re-upload this photo.",
-      })
-      continue
+      }
     }
 
     if (!isSupabaseConfigured()) {
@@ -137,10 +150,6 @@ export async function ensureDurableOriginalImageUrls(
         "Supabase Storage is not configured. Photos cannot be saved permanently."
       )
     }
-
-    onProgress?.(
-      `Saving original photo ${index + 1} of ${images.length} at full quality…`
-    )
 
     const uploaded = await uploadListingOriginalToStorage({
       imageId: image.id,
@@ -150,14 +159,12 @@ export async function ensureDurableOriginalImageUrls(
       contentType: original.contentType,
     })
 
-    out.push({
+    return {
       ...image,
       url: uploaded.url,
       storagePath: uploaded.storagePath,
-      storageStatus: "uploaded",
+      storageStatus: "uploaded" as const,
       storageError: undefined,
-    })
-  }
-
-  return out
+    }
+  })
 }

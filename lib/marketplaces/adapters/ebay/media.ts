@@ -1,10 +1,10 @@
 import { createHash } from "crypto"
+import { mapPool } from "@/lib/async/map-pool"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
-import { ensurePublicImageUrls } from "@/lib/marketplaces/images/ensure-public-urls"
+import { ensurePublicImageBuffers } from "@/lib/marketplaces/images/ensure-public-urls"
 import { ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
 import {
-  marketplaceImageToDataUrl,
-  normalizeMarketplaceImages,
+  normalizeMarketplaceImage,
   type NormalizedMarketplaceImage,
 } from "@/lib/listings/marketplace-image-normalize"
 
@@ -148,6 +148,21 @@ async function probeImageUrl(url: string, index: number): Promise<ImageProbe> {
   return { ...base, ok: true }
 }
 
+/** True when this URL is our already-baked EXIF-free publish derivative. */
+export function isAlreadyBakedMarketplaceUrl(url: string): boolean {
+  if (!url.startsWith("https://")) return false
+  try {
+    const path = decodeURIComponent(new URL(url).pathname)
+    return (
+      path.includes("/publish/") &&
+      !path.includes("/originals/") &&
+      !path.includes("/analyze/")
+    )
+  } catch {
+    return false
+  }
+}
+
 function uniquePreserveOrder(urls: string[]): string[] {
   const seen = new Set<string>()
   const out: string[] = []
@@ -242,52 +257,29 @@ export async function normalizeEbayListingPhotoBytes(
   }>
 > {
   const sources = urls.map((u) => u.trim()).filter(Boolean)
-  const fetched: Array<{
-    sourceUrl: string
-    buffer: Buffer
-    contentType: string
-  }> = []
-
-  for (let i = 0; i < sources.length; i++) {
-    const url = sources[i]
+  return mapPool(sources, 4, async (url, i) => {
+    let buffer: Buffer
+    let contentType: string
     if (url.startsWith("data:")) {
       const parsed = parseImageDataUrl(url)
-      fetched.push({
-        sourceUrl: url,
-        buffer: parsed.buffer,
-        contentType: parsed.contentType,
-      })
-      continue
-    }
-    if (url.startsWith("http://") || url.startsWith("https://")) {
+      buffer = parsed.buffer
+      contentType = parsed.contentType
+    } else if (url.startsWith("http://") || url.startsWith("https://")) {
       const downloaded = await downloadListingPhoto(url, i)
-      fetched.push({
-        sourceUrl: url,
-        buffer: downloaded.buffer,
-        contentType: downloaded.contentType,
-      })
-      continue
+      buffer = downloaded.buffer
+      contentType = downloaded.contentType
+    } else {
+      throw new MarketplaceError(
+        i === 0
+          ? "The first listing photo has an unsupported URL scheme."
+          : `Listing photo #${i + 1} has an unsupported URL scheme.`,
+        "ebay_image_unsupported",
+        400
+      )
     }
-    throw new MarketplaceError(
-      i === 0
-        ? "The first listing photo has an unsupported URL scheme."
-        : `Listing photo #${i + 1} has an unsupported URL scheme.`,
-      "ebay_image_unsupported",
-      400
-    )
-  }
-
-  const normalized = await normalizeMarketplaceImages(
-    fetched.map((item) => ({
-      buffer: item.buffer,
-      contentType: item.contentType,
-    }))
-  )
-
-  return fetched.map((item, index) => ({
-    sourceUrl: item.sourceUrl,
-    normalized: normalized[index],
-  }))
+    const normalized = await normalizeMarketplaceImage(buffer, contentType)
+    return { sourceUrl: url, normalized }
+  })
 }
 
 /**
@@ -345,39 +337,109 @@ export async function resolveEbayImageUrls(
   }
 
   // Bake ListWise-preview pixels into an EXIF-free derivative. Never send the
-  // original EXIF-dependent stored file to eBay.
-  const normalizedPhotos = await normalizeEbayListingPhotoBytes(orderedSources)
-  const toHost: string[] = []
-  for (let i = 0; i < normalizedPhotos.length; i++) {
-    const photo = normalizedPhotos[i]
-    console.info("[ebay/images] marketplace derivative", {
-      index: i,
-      orientationWas: photo.normalized.orientationWas,
-      changed: photo.normalized.changed,
-      strategy: photo.normalized.strategy,
-      width: photo.normalized.width,
-      height: photo.normalized.height,
-      contentType: photo.normalized.contentType,
-    })
-    toHost.push(marketplaceImageToDataUrl(photo.normalized))
-  }
-
-  let permanent: string[]
-  try {
-    permanent = await ensurePublicImageUrls(toHost)
-  } catch (err) {
-    if (err instanceof MarketplaceError) {
+  // original EXIF-dependent stored file (`originals/`) to eBay. Republish may
+  // reuse an already-baked `/publish/` URL without downloading it again.
+  const bakeStarted = Date.now()
+  const prepared = await mapPool(orderedSources, 4, async (url, i) => {
+    if (isAlreadyBakedMarketplaceUrl(url)) {
+      console.info("[ebay/images] reusing marketplace-safe derivative", {
+        index: i,
+        preview: redactUrlForLog(url),
+      })
+      return { kind: "reuse" as const, url }
+    }
+    let buffer: Buffer
+    let contentType: string
+    if (url.startsWith("data:")) {
+      const parsed = parseImageDataUrl(url)
+      buffer = parsed.buffer
+      contentType = parsed.contentType
+    } else if (url.startsWith("http://") || url.startsWith("https://")) {
+      const downloaded = await downloadListingPhoto(url, i)
+      buffer = downloaded.buffer
+      contentType = downloaded.contentType
+    } else {
       throw new MarketplaceError(
-        `Could not create permanent public HTTPS image URLs: ${err.message}`,
-        err.code,
-        err.status
+        i === 0
+          ? "The first listing photo has an unsupported URL scheme."
+          : `Listing photo #${i + 1} has an unsupported URL scheme.`,
+        "ebay_image_unsupported",
+        400
       )
     }
-    throw err
+    const normalized = await normalizeMarketplaceImage(buffer, contentType)
+    console.info("[ebay/images] marketplace derivative", {
+      index: i,
+      orientationWas: normalized.orientationWas,
+      changed: normalized.changed,
+      strategy: normalized.strategy,
+      width: normalized.width,
+      height: normalized.height,
+      contentType: normalized.contentType,
+    })
+    return {
+      kind: "baked" as const,
+      sourceUrl: url,
+      normalized,
+    }
+  })
+  console.info("[timing]", {
+    flow: "ebay_publish",
+    stage: "image_bake",
+    ms: Date.now() - bakeStarted,
+    reused: prepared.filter((row) => row.kind === "reuse").length,
+    baked: prepared.filter((row) => row.kind === "baked").length,
+  })
+
+  const resultUrls = new Array<string>(prepared.length)
+  const toUpload: Array<{ index: number; buffer: Buffer; contentType: string }> =
+    []
+  for (let i = 0; i < prepared.length; i++) {
+    const row = prepared[i]
+    if (row.kind === "reuse") {
+      resultUrls[i] = row.url
+    } else {
+      toUpload.push({
+        index: i,
+        buffer: row.normalized.buffer,
+        contentType: row.normalized.contentType,
+      })
+    }
   }
 
-  permanent = uniquePreserveOrder(
-    permanent.map((u) => u.trim()).filter(Boolean)
+  const uploadStarted = Date.now()
+  if (toUpload.length > 0) {
+    let uploaded: string[]
+    try {
+      uploaded = await ensurePublicImageBuffers(
+        toUpload.map((row) => ({
+          buffer: row.buffer,
+          contentType: row.contentType,
+        }))
+      )
+    } catch (err) {
+      if (err instanceof MarketplaceError) {
+        throw new MarketplaceError(
+          `Could not create permanent public HTTPS image URLs: ${err.message}`,
+          err.code,
+          err.status
+        )
+      }
+      throw err
+    }
+    for (let j = 0; j < toUpload.length; j++) {
+      resultUrls[toUpload[j].index] = uploaded[j]
+    }
+  }
+  console.info("[timing]", {
+    flow: "ebay_publish",
+    stage: "image_upload",
+    ms: Date.now() - uploadStarted,
+    count: toUpload.length,
+  })
+
+  let permanent = uniquePreserveOrder(
+    resultUrls.map((u) => (u || "").trim()).filter(Boolean)
   ).slice(0, 24)
 
   if (permanent.length !== orderedSources.length) {
@@ -434,10 +496,11 @@ export async function resolveEbayImageUrls(
     })
   }
 
-  const probes: ImageProbe[] = []
-  for (let i = 0; i < payloadUrls.length; i++) {
-    const probe = await probeImageUrl(payloadUrls[i], i)
-    probes.push(probe)
+  const probeStarted = Date.now()
+  const probes: ImageProbe[] = await mapPool(payloadUrls, 4, (url, i) =>
+    probeImageUrl(url, i)
+  )
+  for (const probe of probes) {
     console.info("[ebay/images] TEMP image probe", {
       index: probe.index,
       status: probe.status,
@@ -452,6 +515,7 @@ export async function resolveEbayImageUrls(
     })
 
     if (!probe.ok) {
+      const i = probe.index
       const detail = probe.error || `http_${probe.status}`
       throw new MarketplaceError(
         i === 0
@@ -462,6 +526,12 @@ export async function resolveEbayImageUrls(
       )
     }
   }
+  console.info("[timing]", {
+    flow: "ebay_publish",
+    stage: "image_probe",
+    ms: Date.now() - probeStarted,
+    count: probes.length,
+  })
 
   if (probes.length >= 2) {
     console.info("[ebay/images] TEMP compare index0 vs index1", {

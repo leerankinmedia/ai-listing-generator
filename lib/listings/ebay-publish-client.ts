@@ -19,6 +19,7 @@ import {
   publishResultsIncludeSuccess,
 } from "@/lib/listings/publish-persist"
 import { persistListing } from "@/lib/listings/repository"
+import { saveLocalListing } from "@/lib/listings/local-db"
 import { ensureListingInventorySku } from "@/lib/listings/sku"
 import type { Listing, OneClickPublishResult } from "@/lib/types"
 
@@ -131,6 +132,7 @@ export async function publishListingToEbay(options: {
   if (!options.userId) {
     throw new Error("Sign in required to publish.")
   }
+  const publishStarted = Date.now()
 
   let listingForChecks = ensureListingQuantity(options.listing)
   const localBlockers = collectEbayPublishBlockers(
@@ -141,9 +143,15 @@ export async function publishListingToEbay(options: {
     throw new EbayPublishBlockedError(localBlockers)
   }
 
+  const hydrateStarted = Date.now()
   const hydrated = await hydrateExactEbayAspects(listingForChecks)
   listingForChecks = hydrated.listing
   options.onListingChange?.(listingForChecks)
+  console.info("[timing]", {
+    flow: "ebay_publish",
+    stage: "client_aspects_preview",
+    ms: Date.now() - hydrateStarted,
+  })
   if (hydrated.blockers.length > 0) {
     throw new EbayPublishBlockedError(hydrated.blockers)
   }
@@ -156,10 +164,16 @@ export async function publishListingToEbay(options: {
     ),
   })
 
+  const durableStarted = Date.now()
   const durableImages = await ensureDurableOriginalImageUrls(
     prepared.images,
     options.userId
   )
+  console.info("[timing]", {
+    flow: "ebay_publish",
+    stage: "durable_original_urls",
+    ms: Date.now() - durableStarted,
+  })
   const listingForPublish: Listing = {
     ...prepared,
     images: durableImages,
@@ -168,6 +182,7 @@ export async function publishListingToEbay(options: {
   }
   options.onListingChange?.(listingForPublish)
 
+  const apiStarted = Date.now()
   const response = await fetch("/api/listings/publish", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -182,6 +197,11 @@ export async function publishListingToEbay(options: {
     results?: OneClickPublishResult[]
     listing?: Listing
   }>(response)
+  console.info("[timing]", {
+    flow: "ebay_publish",
+    stage: "publish_api",
+    ms: Date.now() - apiStarted,
+  })
   if (!parsed.ok) {
     throw new Error(parsed.error || "Publish failed")
   }
@@ -198,8 +218,13 @@ export async function publishListingToEbay(options: {
             options.userId
           )
     try {
-      const saved = await persistListing(nextListing)
-      if (saved) nextListing = saved
+      if (parsed.data.listing && typeof parsed.data.listing === "object") {
+        // Server already upserted; keep this device in sync without a second write.
+        await saveLocalListing(nextListing)
+      } else {
+        const saved = await persistListing(nextListing)
+        if (saved) nextListing = saved
+      }
     } catch (persistError) {
       console.error("[publish] client persist after publish failed", persistError)
     }
@@ -215,5 +240,10 @@ export async function publishListingToEbay(options: {
     throw new Error(ebayError.message || "eBay publish failed.")
   }
 
+  console.info("[timing]", {
+    flow: "ebay_publish",
+    stage: "client_total",
+    ms: Date.now() - publishStarted,
+  })
   return { listing: nextListing, results }
 }

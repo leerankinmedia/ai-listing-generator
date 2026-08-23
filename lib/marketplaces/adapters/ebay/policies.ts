@@ -25,6 +25,10 @@ import {
   shippingServiceCodesEquivalent,
 } from "@/lib/marketplaces/adapters/ebay/shipping-service-resolve"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
+import {
+  cacheGet,
+  cacheSet,
+} from "@/lib/marketplaces/adapters/ebay/ebay-cache"
 
 type EbayPolicy = {
   fulfillmentPolicyId?: string
@@ -342,6 +346,60 @@ async function listReturnPolicies(accessToken: string) {
     { method: "GET", step: "getReturnPolicies", headers: accountHeaders() }
   )) as { returnPolicies?: EbayPolicy[] } | null
   return payload?.returnPolicies ?? []
+}
+
+async function getFulfillmentPolicyById(
+  accessToken: string,
+  id: string
+): Promise<EbayFulfillmentPolicyRaw | null> {
+  const { status, data } = await ebayFetchResult(
+    `/sell/account/v1/fulfillment_policy/${encodeURIComponent(id)}`,
+    accessToken,
+    {
+      method: "GET",
+      step: "getFulfillmentPolicy",
+      headers: accountHeaders(),
+      allowHttpError: true,
+    }
+  )
+  if (status >= 400) return null
+  return (data as EbayFulfillmentPolicyRaw) || null
+}
+
+async function getPaymentPolicyById(
+  accessToken: string,
+  id: string
+): Promise<EbayPaymentPolicyRaw | null> {
+  const { status, data } = await ebayFetchResult(
+    `/sell/account/v1/payment_policy/${encodeURIComponent(id)}`,
+    accessToken,
+    {
+      method: "GET",
+      step: "getPaymentPolicy",
+      headers: accountHeaders(),
+      allowHttpError: true,
+    }
+  )
+  if (status >= 400) return null
+  return (data as EbayPaymentPolicyRaw) || null
+}
+
+async function getReturnPolicyById(
+  accessToken: string,
+  id: string
+): Promise<EbayReturnPolicyRaw | null> {
+  const { status, data } = await ebayFetchResult(
+    `/sell/account/v1/return_policy/${encodeURIComponent(id)}`,
+    accessToken,
+    {
+      method: "GET",
+      step: "getReturnPolicy",
+      headers: accountHeaders(),
+      allowHttpError: true,
+    }
+  )
+  if (status >= 400) return null
+  return (data as EbayReturnPolicyRaw) || null
 }
 
 function throwFulfillmentCreateFailed(
@@ -958,8 +1016,6 @@ export async function ensureEbayBusinessPolicyIds(
   accessToken: string,
   options: EnsureEbayPoliciesOptions = {}
 ): Promise<EnsureEbayPoliciesResult> {
-  await ensureBusinessPoliciesOptIn(accessToken)
-
   const shippingMode = defaultEbayShippingMode(options.shippingMode)
   const freeConfirmed = Boolean(options.freeShippingConfirmed)
   const cache = options.policyCache?.marketplaceId
@@ -971,43 +1027,6 @@ export async function ensureEbayBusinessPolicyIds(
         returns: { ...options.policyCache.returns },
       }
     : emptyEbayPolicyCache()
-
-  let fulfillment = await listEbayFulfillmentPolicies(accessToken)
-  let payment = (await listPaymentPolicies(accessToken)) as EbayPaymentPolicyRaw[]
-  let returns = (await listReturnPolicies(accessToken)) as EbayReturnPolicyRaw[]
-
-  logPolicies("listed seller policies", {
-    fulfillmentCount: fulfillment.length,
-    paymentCount: payment.length,
-    returnCount: returns.length,
-    requestedShippingMode: shippingMode,
-    fulfillmentIds: fulfillment
-      .map((p) => p.fulfillmentPolicyId)
-      .filter(Boolean)
-      .join(","),
-  })
-
-  const droppedCacheIds = invalidateUnusableFulfillmentCache(cache, fulfillment)
-  if (droppedCacheIds.length > 0) {
-    logPolicies("invalidated cached fulfillment policies missing logistics", {
-      ids: droppedCacheIds.join(","),
-    })
-  }
-
-  for (const policy of fulfillment) {
-    const summary = summarizeFulfillmentPolicy(policy)
-    if (!summary) continue
-    logPolicies("fulfillment policy shipping settings", {
-      fulfillmentPolicyId: summary.fulfillmentPolicyId,
-      name: summary.name,
-      mode: summary.mode,
-      isFreeShipping: summary.isFreeShipping,
-      costType: summary.costType,
-      costSummary: summary.costSummary,
-      service: summary.serviceCode,
-      handlingDays: summary.handlingDays,
-    })
-  }
 
   const handlingDays =
     typeof options.handlingTimeDays === "number" &&
@@ -1046,6 +1065,121 @@ export async function ensureEbayBusinessPolicyIds(
     returnWindowDays,
     returnShippingPaidBy
   )
+
+  const cachedFulfillmentId = cache.fulfillment[fKey]?.trim()
+  const cachedPaymentId = cache.payment[pKey]?.trim()
+  const cachedReturnId = cache.returns[rKey]?.trim()
+  const verifiedKey =
+    cachedFulfillmentId && cachedPaymentId && cachedReturnId
+      ? `policies-verified:${marketplaceId()}:${fKey}:${pKey}:${rKey}:${cachedFulfillmentId}:${cachedPaymentId}:${cachedReturnId}:${shippingServiceCode}:${allowStandardEnvelope ? "1" : "0"}`
+      : ""
+  if (cachedFulfillmentId && cachedPaymentId && cachedReturnId && verifiedKey) {
+    const recent = cacheGet<EnsureEbayPoliciesResult>(verifiedKey)
+    if (recent?.fulfillmentPolicyId && recent.fulfillmentSummary) {
+      logPolicies("reusing in-process verified policy ids", {
+        fulfillmentPolicyId: recent.fulfillmentPolicyId,
+        paymentPolicyId: recent.paymentPolicyId,
+        returnPolicyId: recent.returnPolicyId,
+        policyService: recent.fulfillmentSummary.serviceCode,
+      })
+      if (recent.fulfillmentSummary.isFreeShipping && !freeConfirmed) {
+        throw new MarketplaceError(
+          "Free shipping requires confirmation before publishing.",
+          "ebay_free_shipping_unconfirmed",
+          400
+        )
+      }
+      return { ...recent, policyCache: cache }
+    }
+    const [fulfillmentPolicy, paymentPolicy, returnPolicy] = await Promise.all([
+      getFulfillmentPolicyById(accessToken, cachedFulfillmentId),
+      getPaymentPolicyById(accessToken, cachedPaymentId),
+      getReturnPolicyById(accessToken, cachedReturnId),
+    ])
+    const summary = fulfillmentPolicy
+      ? summarizeFulfillmentPolicy(fulfillmentPolicy)
+      : null
+    const fulfillmentOk =
+      Boolean(summary) &&
+      fulfillmentPolicyHasUsableLogistics(fulfillmentPolicy!) &&
+      shippingServiceCodesEquivalent(summary?.serviceCode, shippingServiceCode) &&
+      (allowStandardEnvelope || !isStandardEnvelopeService(summary?.serviceCode)) &&
+      !(summary?.isFreeShipping && shippingMode !== "free")
+    const paymentOk =
+      Boolean(paymentPolicy?.paymentPolicyId) &&
+      Boolean(paymentPolicy?.immediatePay) === requireImmediatePayment
+    const returnOk = Boolean(returnPolicy?.returnPolicyId)
+    if (fulfillmentOk && paymentOk && returnOk && summary) {
+      logPolicies("reusing cached seller policy ids without listing catalogs", {
+        fulfillmentPolicyId: summary.fulfillmentPolicyId,
+        paymentPolicyId: cachedPaymentId,
+        returnPolicyId: cachedReturnId,
+        policyService: summary.serviceCode,
+      })
+      if (summary.isFreeShipping && !freeConfirmed) {
+        throw new MarketplaceError(
+          "Free shipping requires confirmation before publishing.",
+          "ebay_free_shipping_unconfirmed",
+          400
+        )
+      }
+      const reused: EnsureEbayPoliciesResult = {
+        fulfillmentPolicyId: summary.fulfillmentPolicyId,
+        paymentPolicyId: cachedPaymentId,
+        returnPolicyId: cachedReturnId,
+        fulfillmentSummary: summary,
+        policyCache: cache,
+      }
+      cacheSet(verifiedKey, reused, 15 * 60 * 1000)
+      return reused
+    }
+    logPolicies("cached policy ids were stale; listing catalogs", {
+      fulfillmentOk,
+      paymentOk,
+      returnOk,
+    })
+  }
+
+  await ensureBusinessPoliciesOptIn(accessToken)
+
+  let [fulfillment, payment, returns] = await Promise.all([
+    listEbayFulfillmentPolicies(accessToken),
+    listPaymentPolicies(accessToken) as Promise<EbayPaymentPolicyRaw[]>,
+    listReturnPolicies(accessToken) as Promise<EbayReturnPolicyRaw[]>,
+  ])
+
+  logPolicies("listed seller policies", {
+    fulfillmentCount: fulfillment.length,
+    paymentCount: payment.length,
+    returnCount: returns.length,
+    requestedShippingMode: shippingMode,
+    fulfillmentIds: fulfillment
+      .map((p) => p.fulfillmentPolicyId)
+      .filter(Boolean)
+      .join(","),
+  })
+
+  const droppedCacheIds = invalidateUnusableFulfillmentCache(cache, fulfillment)
+  if (droppedCacheIds.length > 0) {
+    logPolicies("invalidated cached fulfillment policies missing logistics", {
+      ids: droppedCacheIds.join(","),
+    })
+  }
+
+  for (const policy of fulfillment) {
+    const summary = summarizeFulfillmentPolicy(policy)
+    if (!summary) continue
+    logPolicies("fulfillment policy shipping settings", {
+      fulfillmentPolicyId: summary.fulfillmentPolicyId,
+      name: summary.name,
+      mode: summary.mode,
+      isFreeShipping: summary.isFreeShipping,
+      costType: summary.costType,
+      costSummary: summary.costSummary,
+      service: summary.serviceCode,
+      handlingDays: summary.handlingDays,
+    })
+  }
 
   let selected =
     cachedFulfillment(fulfillment, cache, fKey, shippingServiceCode) ||

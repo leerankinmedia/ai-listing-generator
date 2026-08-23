@@ -1,9 +1,12 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import {
+  derivedInternalInventorySku,
   formatListWiseSku,
   pickPublishSku,
   resolveListingSku,
+  sellerFacingCustomLabel,
+  shouldClearEbayCustomLabel,
   DEFAULT_SKU_SETTINGS,
 } from "@/lib/listings/sku"
 import { enrichEbayTitleTowardLimit } from "@/lib/listings/ebay-title"
@@ -62,6 +65,35 @@ describe("SKU resolution", () => {
     const sku = pickPublishSku(listing)
     assert.ok(!sku.includes("-"))
     assert.match(sku, /^LW/i)
+  })
+
+  it("keeps the Inventory API key internal when the seller did not enter a Custom Label", () => {
+    const listing = baseListing({ specifics: {} })
+    assert.equal(resolveListingSku(listing), null)
+    assert.equal(sellerFacingCustomLabel(listing), null)
+    assert.equal(shouldClearEbayCustomLabel(listing), true)
+    assert.equal(pickPublishSku(listing), derivedInternalInventorySku(listing.id))
+    assert.match(pickPublishSku(listing), /^LW[A-Z0-9]{8}$/)
+  })
+
+  it("does not treat the internal LW+listing-id hash as a seller Custom Label", () => {
+    const listing = baseListing({
+      specifics: {
+        extras: { sku: derivedInternalInventorySku("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") },
+      },
+    })
+    assert.equal(sellerFacingCustomLabel(listing), null)
+    assert.equal(shouldClearEbayCustomLabel(listing), true)
+    assert.equal(pickPublishSku(listing), derivedInternalInventorySku(listing.id))
+  })
+
+  it("uses a seller-entered SKU as both Inventory key and Custom Label", () => {
+    const listing = baseListing({
+      specifics: { extras: { sku: "MYSHELF42" } },
+    })
+    assert.equal(sellerFacingCustomLabel(listing), "MYSHELF42")
+    assert.equal(shouldClearEbayCustomLabel(listing), false)
+    assert.equal(pickPublishSku(listing), "MYSHELF42")
   })
 })
 

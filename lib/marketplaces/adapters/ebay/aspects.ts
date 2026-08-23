@@ -8,6 +8,12 @@ import {
   splitPrimaryColorAndDetails,
 } from "@/lib/marketplaces/adapters/ebay/aspect-normalize"
 import { ebayFetch } from "@/lib/marketplaces/adapters/ebay/client"
+import {
+  cacheGet,
+  cacheSet,
+  EBAY_TAXONOMY_CACHE_TTL_MS,
+  EBAY_TREE_ID_CACHE_TTL_MS,
+} from "@/lib/marketplaces/adapters/ebay/ebay-cache"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import {
   ASPECT_AUTO_FILL_CONFIDENCE,
@@ -61,6 +67,10 @@ function marketplaceId() {
 }
 
 async function getDefaultCategoryTreeId(accessToken: string) {
+  const cacheKey = `aspects-tree:${marketplaceId()}`
+  const cached = cacheGet<string>(cacheKey)
+  if (cached) return cached
+
   const tree = (await ebayFetch(
     `/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${encodeURIComponent(marketplaceId())}`,
     accessToken,
@@ -75,6 +85,7 @@ async function getDefaultCategoryTreeId(accessToken: string) {
       502
     )
   }
+  cacheSet(cacheKey, categoryTreeId, EBAY_TREE_ID_CACHE_TTL_MS)
   return categoryTreeId
 }
 
@@ -83,14 +94,21 @@ export async function fetchEbayItemAspectsForCategory(
   accessToken: string,
   categoryId: string
 ): Promise<EbayAspect[]> {
+  const leaf = categoryId.trim()
+  const cacheKey = `aspects:${marketplaceId()}:${leaf}`
+  const cached = cacheGet<EbayAspect[]>(cacheKey)
+  if (cached) return cached
+
   const categoryTreeId = await getDefaultCategoryTreeId(accessToken)
   const payload = (await ebayFetch(
-    `/commerce/taxonomy/v1/category_tree/${encodeURIComponent(categoryTreeId)}/get_item_aspects_for_category?category_id=${encodeURIComponent(categoryId)}`,
+    `/commerce/taxonomy/v1/category_tree/${encodeURIComponent(categoryTreeId)}/get_item_aspects_for_category?category_id=${encodeURIComponent(leaf)}`,
     accessToken,
     { method: "GET", step: "getItemAspectsForCategory" }
   )) as ItemAspectsResponse | null
 
-  return payload?.aspects ?? []
+  const aspects = payload?.aspects ?? []
+  cacheSet(cacheKey, aspects, EBAY_TAXONOMY_CACHE_TTL_MS)
+  return aspects
 }
 
 function allowedValues(aspect: EbayAspect): string[] {

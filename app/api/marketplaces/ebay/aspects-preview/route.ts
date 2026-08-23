@@ -80,34 +80,35 @@ export async function POST(request: Request) {
       marketplaceId
     )
 
-    const suggestQuery = buildCategorySuggestionQuery({
-      title: listing.title,
-      itemType:
-        listing.fieldConfidence?.itemType?.value ||
-        listing.specifics.extras?.Type ||
-        listing.specifics.style,
-      department: listing.specifics.gender,
-      brand: listing.specifics.brand,
-      keywords: listing.keywords,
-      categoryHint: listing.specifics.category,
-    })
-
-    let suggestions: EbayCategorySuggestion[] = []
-    try {
-      const suggested = await getEbayCategorySuggestions(
-        token.accessToken,
-        suggestQuery || listing.title || "item",
-        { marketplaceId, categoryTreeId: tree.categoryTreeId, limit: 8 }
-      )
-      suggestions = suggested.suggestions
-    } catch {
-      suggestions = []
-    }
-
     const explicitCategoryId =
       (body.categoryId || "").trim() ||
       listing.specifics.ebayCategory?.categoryId?.trim() ||
       ""
+
+    let suggestions: EbayCategorySuggestion[] = []
+    if (!explicitCategoryId) {
+      const suggestQuery = buildCategorySuggestionQuery({
+        title: listing.title,
+        itemType:
+          listing.fieldConfidence?.itemType?.value ||
+          listing.specifics.extras?.Type ||
+          listing.specifics.style,
+        department: listing.specifics.gender,
+        brand: listing.specifics.brand,
+        keywords: listing.keywords,
+        categoryHint: listing.specifics.category,
+      })
+      try {
+        const suggested = await getEbayCategorySuggestions(
+          token.accessToken,
+          suggestQuery || listing.title || "item",
+          { marketplaceId, categoryTreeId: tree.categoryTreeId, limit: 8 }
+        )
+        suggestions = suggested.suggestions
+      } catch {
+        suggestions = []
+      }
+    }
 
     // Prefer saved leaf category; else auto-pick top suggestion so aspects can load.
     const categoryId =
@@ -128,10 +129,17 @@ export async function POST(request: Request) {
       })
     }
 
-    const taxonomyAspects = await fetchEbayItemAspectsForCategory(
-      token.accessToken,
-      categoryId
-    )
+    const [taxonomyAspects, conditionResult] = await Promise.all([
+      fetchEbayItemAspectsForCategory(token.accessToken, categoryId),
+      getItemConditionPoliciesForCategory(
+        token.accessToken,
+        categoryId,
+        marketplaceId
+      ).then((policy) => ({ ok: true as const, policy })).catch((err) => {
+        console.warn("[ebay/aspects-preview] condition policies", err)
+        return { ok: false as const, policy: null }
+      }),
+    ])
     const { inventoryItem } = mapListingToEbayInventory(listing)
     const applied = applyRequiredEbayAspects(
       listing,
@@ -222,12 +230,8 @@ export async function POST(request: Request) {
     }> = []
     let mappedCondition = null as ReturnType<typeof mapAiConditionToPolicy>
     let itemConditionRequired = false
-    try {
-      const policy = await getItemConditionPoliciesForCategory(
-        token.accessToken,
-        categoryId,
-        marketplaceId
-      )
+    if (conditionResult.ok && conditionResult.policy) {
+      const policy = conditionResult.policy
       conditions = policy.conditions
       itemConditionRequired = policy.itemConditionRequired
       mappedCondition = mapAiConditionToPolicy(
@@ -235,8 +239,6 @@ export async function POST(request: Request) {
           listing.fieldConfidence?.condition?.value,
         policy.conditions
       )
-    } catch (err) {
-      console.warn("[ebay/aspects-preview] condition policies", err)
     }
 
     const categoryPath =

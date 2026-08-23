@@ -41,6 +41,7 @@ import {
   type IdentityFields,
   type IdentitySecondPass,
 } from "@/lib/listings/clothing-identity"
+import { createStageTimer, type StageTimings } from "@/lib/observability/stage-timer"
 import type { FieldConfidence, Listing } from "@/lib/types"
 
 type OpenAIClient = ReturnType<typeof createOpenAI>
@@ -871,6 +872,7 @@ export async function generateListingFromImages(
   imagesFailed: FailedVisionImage[]
   warnings: string[]
   partial: boolean
+  timings: StageTimings
 }> {
   if (images.length === 0) {
     throw new ListingEngineError("At least one image is required.", 400)
@@ -880,6 +882,7 @@ export async function generateListingFromImages(
   const model = getListingModel()
   const sellerNotes = options?.sellerNotes?.trim() || undefined
   let usage = emptyTokenUsage()
+  const timer = createStageTimer("generate_ai")
 
   const batches: VisionImage[][] = []
   for (let i = 0; i < images.length; i += VISION_BATCH_SIZE) {
@@ -891,28 +894,30 @@ export async function generateListingFromImages(
   const detections: ImageDetection[] = []
   const imagesFailed: FailedVisionImage[] = []
   const concurrency = 2
-  for (let i = 0; i < batches.length; i += concurrency) {
-    const slice = batches.slice(i, i + concurrency)
-    const results = await Promise.all(
-      slice.map((batch, offset) => {
-        const batchIndex = i + offset
-        const startIndex = batchIndex * VISION_BATCH_SIZE
-        return detectBatch(
-          openai,
-          batch,
-          batchIndex,
-          images.length,
-          startIndex,
-          sellerNotes
-        )
-      })
-    )
-    for (const batchResult of results) {
-      detections.push(...batchResult.images)
-      imagesFailed.push(...batchResult.failed)
-      usage = addTokenUsage(usage, batchResult.usage)
+  await timer.stage("openai_vision", async () => {
+    for (let i = 0; i < batches.length; i += concurrency) {
+      const slice = batches.slice(i, i + concurrency)
+      const results = await Promise.all(
+        slice.map((batch, offset) => {
+          const batchIndex = i + offset
+          const startIndex = batchIndex * VISION_BATCH_SIZE
+          return detectBatch(
+            openai,
+            batch,
+            batchIndex,
+            images.length,
+            startIndex,
+            sellerNotes
+          )
+        })
+      )
+      for (const batchResult of results) {
+        detections.push(...batchResult.images)
+        imagesFailed.push(...batchResult.failed)
+        usage = addTokenUsage(usage, batchResult.usage)
+      }
     }
-  }
+  })
 
   if (detections.length === 0) {
     const failedSummary = imagesFailed
@@ -966,11 +971,13 @@ export async function generateListingFromImages(
   // Second pass when brand/character identity confidence is low.
   if (needsIdentitySecondPass(fields, detections)) {
     try {
-      const second = await recognizeIdentitySecondPass(
-        openai,
-        visionImages,
-        fields,
-        sellerNotes
+      const second = await timer.stage("identity_second_pass", () =>
+        recognizeIdentitySecondPass(
+          openai,
+          visionImages,
+          fields,
+          sellerNotes
+        )
       )
       usage = addTokenUsage(usage, second.usage)
       fields = mergeIdentitySecondPass(fields, second.identity)
@@ -1010,7 +1017,8 @@ export async function generateListingFromImages(
   const extras = identityExtrasFromFields(fields)
   const identityConfidence = identityFieldConfidence(fields)
 
-  const [copyResult, comps] = await Promise.all([
+  const [copyResult, comps] = await timer.stage("copy_and_comps", () =>
+    Promise.all([
     generateCopy(
       openai,
       {
@@ -1062,7 +1070,8 @@ export async function generateListingFromImages(
       theme: fields.theme,
       itemType: fields.itemType,
     }),
-  ])
+    ])
+  )
   usage = addTokenUsage(usage, copyResult.usage)
   usage = addTokenUsage(usage, comps.usage)
   const copy = copyResult.copy
@@ -1196,5 +1205,6 @@ export async function generateListingFromImages(
     imagesFailed,
     warnings,
     partial: imagesFailed.length > 0,
+    timings: timer.done(),
   }
 }

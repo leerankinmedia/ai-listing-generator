@@ -1,6 +1,7 @@
 import "server-only"
 import { createClient } from "@supabase/supabase-js"
 import { randomBytes } from "crypto"
+import { mapPool } from "@/lib/async/map-pool"
 import { getAppBaseUrl } from "@/lib/app-url"
 import { isAllowedAnalyzeImageUrl } from "@/lib/listings/analyze-url"
 import {
@@ -134,8 +135,7 @@ const FETCH_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 export async function resolveAnalyzeImageUrls(
   urls: string[]
 ): Promise<VisionImagePayload[]> {
-  const out: VisionImagePayload[] = []
-  for (const [index, url] of urls.entries()) {
+  return mapPool(urls, 4, async (url, index) => {
     const photoNumber = index + 1
     if (!isAllowedAnalyzeImageUrl(url)) {
       throw new Error(
@@ -151,13 +151,12 @@ export async function resolveAnalyzeImageUrls(
           `Photo ${photoNumber} expired or was uploaded on a different server instance. Re-upload and analyze again (Supabase Storage is required on Vercel).`
         )
       }
-      out.push({
+      return {
         mediaType: staged.contentType,
         data: staged.buffer,
         index: photoNumber,
         sourceUrl: url,
-      })
-      continue
+      }
     }
 
     const response = await fetch(url, {
@@ -182,14 +181,13 @@ export async function resolveAnalyzeImageUrls(
         `Photo ${photoNumber} is too large after upload (${Math.ceil(buffer.byteLength / (1024 * 1024))}MB).`
       )
     }
-    out.push({
+    return {
       mediaType: contentType,
       data: buffer,
       index: photoNumber,
       sourceUrl: url,
-    })
-  }
-  return out
+    }
+  })
 }
 
 export async function cleanupAnalyzeStagingUrls(urls: string[]) {

@@ -16,6 +16,7 @@ import {
 } from "@/lib/marketplaces/adapters/ebay/aspects"
 import { ebayShippingPackageBlockMessage } from "@/lib/listings/publish"
 import { listingShippingIntent } from "@/lib/listings/listing-shipping"
+import { shouldClearEbayCustomLabel } from "@/lib/listings/sku"
 import {
   shippingPackageIsComplete,
   toEbayPackageWeightAndSize,
@@ -29,6 +30,7 @@ import {
   serializeEbayPolicyCache,
 } from "@/lib/marketplaces/adapters/ebay/policies"
 import { applyEbayPromotedListing } from "@/lib/marketplaces/adapters/ebay/promoted-listings"
+import { reviseEbayListingClearSku } from "@/lib/marketplaces/adapters/ebay/trading"
 import {
   conditionIdAllowedForCategory,
   conditionEnumForId,
@@ -46,6 +48,7 @@ import type { MarketplaceAdapter, PublishResult } from "@/lib/marketplaces/adapt
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { saveConnection } from "@/lib/marketplaces/connections/store"
 import { checkpoint } from "@/lib/marketplaces/publish-error"
+import { createStageTimer } from "@/lib/observability/stage-timer"
 
 async function withFreshToken(connection: StoredMarketplaceConnection) {
   if (!connection.expiresAt) return connection
@@ -152,6 +155,34 @@ export const ebayAdapter: MarketplaceAdapter = {
     }
 
     let auth = await withFreshToken(connection)
+    const timer = createStageTimer("ebay_publish")
+
+    const sourceUrls = [...listing.images]
+      .sort((a, b) => {
+        if (a.isPrimary && !b.isPrimary) return -1
+        if (!a.isPrimary && b.isPrimary) return 1
+        return (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
+      })
+      .map((img) => img.url)
+      .filter(Boolean)
+    if (sourceUrls.length === 0) {
+      throw new MarketplaceError(
+        "At least one listing photo is required to publish on eBay.",
+        "ebay_images_required",
+        400
+      )
+    }
+    const cover = listing.images.find((i) => i.isPrimary) || listing.images[0]
+    checkpoint("image_preparation", {
+      photoCount: sourceUrls.length,
+      coverIsIndex0: sourceUrls[0] === cover?.url,
+    })
+
+    // Bake images, resolve policies, and verify location in parallel — none
+    // depend on each other. Persist connection meta once afterward.
+    const imagePromise = timer.stage("marketplace_image_normalization", () =>
+      resolveEbayImageUrls(auth.accessToken, sourceUrls)
+    )
 
     // 1) Seller-owned Business Policies — match explicit shipping mode
     // (default: buyer pays calculated). Never silently use free shipping.
@@ -180,7 +211,8 @@ export const ebayAdapter: MarketplaceAdapter = {
         listing.specifics.shippingPackage
       ),
     })
-    const policies = await ensureEbayBusinessPolicyIds(auth.accessToken, {
+    const policiesPromise = timer.stage("fulfillment_payment_return_policies", () =>
+      ensureEbayBusinessPolicyIds(auth.accessToken, {
       shippingMode,
       freeShippingConfirmed: shippingIntent.freeShippingConfirmed,
       flatShippingAmount: shippingIntent.flatAmount ?? undefined,
@@ -199,15 +231,41 @@ export const ebayAdapter: MarketplaceAdapter = {
       returnShippingPaidBy: shippingIntent.returnShippingPaidBy,
       requireImmediatePayment: Boolean(listing.specifics.requireImmediatePayment),
       policyCache: parseEbayPolicyCache(auth.meta?.ebayPolicyCache),
-    })
+      })
+    )
+    const locationPromise = timer.stage("merchant_location", () =>
+      ensureEbayMerchantLocationKey(auth.accessToken, auth, {
+        postalCode: shippingIntent.itemLocationZip,
+        persistConnection: false,
+      })
+    )
+
+    const [imageUrls, policies, locationResult] = await Promise.all([
+      imagePromise,
+      policiesPromise,
+      locationPromise,
+    ])
+    const merchantLocationKey = locationResult.merchantLocationKey
     const nextPolicyCache = serializeEbayPolicyCache(policies.policyCache)
-    if (auth.meta?.ebayPolicyCache !== nextPolicyCache) {
-      auth = {
+    const nextMeta = {
+      ...auth.meta,
+      ...locationResult.connection.meta,
+      ebayPolicyCache: nextPolicyCache,
+      merchantLocationKey,
+    }
+    let withLocation = auth
+    if (
+      auth.meta?.ebayPolicyCache !== nextPolicyCache ||
+      auth.meta?.merchantLocationKey !== merchantLocationKey
+    ) {
+      withLocation = {
         ...auth,
-        meta: { ...auth.meta, ebayPolicyCache: nextPolicyCache },
+        meta: nextMeta,
         updatedAt: new Date().toISOString(),
       }
-      await saveConnection(auth)
+      await saveConnection(withLocation)
+    } else {
+      withLocation = { ...auth, meta: nextMeta }
     }
     console.info("[ebay/shipping] publish using fulfillment policy", {
       shippingMode,
@@ -216,43 +274,6 @@ export const ebayAdapter: MarketplaceAdapter = {
       shippingService: shippingIntent.shippingServiceCode,
       policy: policies.fulfillmentSummary,
     })
-
-    // 2) ENABLED inventory location with postalCode + country; persist verified key.
-    const { merchantLocationKey, connection: withLocation } =
-      await ensureEbayMerchantLocationKey(auth.accessToken, auth, {
-        postalCode: shippingIntent.itemLocationZip,
-      })
-
-    const sourceUrls = [...listing.images]
-      .sort((a, b) => {
-        if (a.isPrimary && !b.isPrimary) return -1
-        if (!a.isPrimary && b.isPrimary) return 1
-        return (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
-      })
-      .map((img) => img.url)
-      .filter(Boolean)
-    if (sourceUrls.length === 0) {
-      throw new MarketplaceError(
-        "At least one listing photo is required to publish on eBay.",
-        "ebay_images_required",
-        400
-      )
-    }
-    const cover = listing.images.find((i) => i.isPrimary) || listing.images[0]
-    checkpoint("image_preparation", {
-      photoCount: sourceUrls.length,
-      coverIsIndex0: sourceUrls[0] === cover?.url,
-    })
-    console.info("[ebay/images] ListWise gallery order before resolve", {
-      count: sourceUrls.length,
-      coverUrlPreview: cover?.url?.slice(0, 96) || null,
-      index0IsCover: sourceUrls[0] === cover?.url,
-      order: sourceUrls.map((url, index) => ({
-        index,
-        preview: url.slice(0, 64),
-      })),
-    })
-    const imageUrls = await resolveEbayImageUrls(withLocation.accessToken, sourceUrls)
     if (imageUrls[0] && sourceUrls[0]) {
       console.info("[ebay/images] verified cover is eBay image 1", {
         listwiseCoverMatchesPayload0: true,
@@ -327,10 +348,12 @@ export const ebayAdapter: MarketplaceAdapter = {
         keywords: listing.keywords,
         categoryHint: listing.specifics.category,
       })
-      const suggested = await getEbayCategorySuggestions(
-        withLocation.accessToken,
-        query || listing.title,
-        { marketplaceId, limit: 1 }
+      const suggested = await timer.stage("ebay_category_lookup", () =>
+        getEbayCategorySuggestions(
+          withLocation.accessToken,
+          query || listing.title,
+          { marketplaceId, limit: 1 }
+        )
       )
       const first = suggested.suggestions[0]
       if (!first?.categoryId) {
@@ -346,10 +369,21 @@ export const ebayAdapter: MarketplaceAdapter = {
       categoryTreeId = suggested.categoryTreeId
     }
 
-    const categoryNode = await getEbayCategoryNode(
-      withLocation.accessToken,
-      categoryId,
-      { categoryTreeId: categoryTreeId || undefined, marketplaceId }
+    const [categoryNode, conditionPolicy, taxonomyAspects] = await timer.stage(
+      "taxonomy_aspects_hydration",
+      () =>
+        Promise.all([
+          getEbayCategoryNode(withLocation.accessToken, categoryId, {
+            categoryTreeId: categoryTreeId || undefined,
+            marketplaceId,
+          }),
+          getItemConditionPoliciesForCategory(
+            withLocation.accessToken,
+            categoryId,
+            marketplaceId
+          ),
+          fetchEbayItemAspectsForCategory(withLocation.accessToken, categoryId),
+        ])
     )
     if (categoryNode && !categoryNode.leafCategory) {
       throw new MarketplaceError(
@@ -360,12 +394,6 @@ export const ebayAdapter: MarketplaceAdapter = {
     }
     if (categoryNode?.categoryName) categoryName = categoryNode.categoryName
 
-    // 3b) Condition policies for THIS category only — never reuse another category's ID.
-    const conditionPolicy = await getItemConditionPoliciesForCategory(
-      withLocation.accessToken,
-      categoryId,
-      marketplaceId
-    )
     const validConditionIds = conditionPolicy.conditions.map((c) => c.conditionId)
 
     let selectedConditionId =
@@ -449,11 +477,6 @@ export const ebayAdapter: MarketplaceAdapter = {
       itemConditionRequired: conditionPolicy.itemConditionRequired,
     })
 
-    // 4) Required item aspects for this leaf category — before inventory write
-    const taxonomyAspects = await fetchEbayItemAspectsForCategory(
-      withLocation.accessToken,
-      categoryId
-    )
     const { aspects, missingRequired, resolvedFields } = applyRequiredEbayAspects(
       listing,
       taxonomyAspects,
@@ -500,11 +523,13 @@ export const ebayAdapter: MarketplaceAdapter = {
 
     // 5) Create/replace inventory item (sanitize + log + one 25001 retry)
     checkpoint("inventory_item", { sku })
-    const replaced = await createOrReplaceEbayInventoryItem({
-      accessToken: withLocation.accessToken,
-      sku,
-      inventoryItem,
-    })
+    const replaced = await timer.stage("inventory_item_put", () =>
+      createOrReplaceEbayInventoryItem({
+        accessToken: withLocation.accessToken,
+        sku,
+        inventoryItem,
+      })
+    )
     const publishSku = replaced.sku
 
     const offer = mapListingToEbayOffer(
@@ -557,17 +582,36 @@ export const ebayAdapter: MarketplaceAdapter = {
       )
     }
 
-    const offerId = await resolveOfferId(withLocation.accessToken, publishSku, offer)
+    const offerId = await timer.stage("offer_create", () =>
+      resolveOfferId(withLocation.accessToken, publishSku, offer)
+    )
 
     // 7) Publish offer
     checkpoint("publish_offer", { sku: publishSku, offerId })
-    const published = (await ebayFetch(
-      `/sell/inventory/v1/offer/${offerId}/publish`,
-      withLocation.accessToken,
-      { method: "POST", body: "{}", step: "publishOffer" }
-    )) as { listingId?: string }
+    const published = await timer.stage("publish_offer", () =>
+      ebayFetch(
+        `/sell/inventory/v1/offer/${offerId}/publish`,
+        withLocation.accessToken,
+        { method: "POST", body: "{}", step: "publishOffer" }
+      )
+    ) as { listingId?: string }
 
     const listingId = published.listingId
+    if (listingId && shouldClearEbayCustomLabel(listing)) {
+      const cleared = await timer.stage("clear_custom_label", () =>
+        reviseEbayListingClearSku({
+          accessToken: withLocation.accessToken,
+          itemId: listingId,
+        })
+      )
+      if (!cleared.ok) {
+        console.warn("[ebay/sku] listing Custom Label could not be cleared", {
+          itemId: listingId,
+          error: cleared.error,
+        })
+      }
+    }
+
     // Item browse URL follows API/auth env (EBAY_ENVIRONMENT), not marketplaceId or browser host.
     const site =
       ebayEnv() === "sandbox"
@@ -638,6 +682,7 @@ export const ebayAdapter: MarketplaceAdapter = {
       }
     }
 
+    timer.done()
     return {
       ok: true,
       externalUrl: itemUrl,

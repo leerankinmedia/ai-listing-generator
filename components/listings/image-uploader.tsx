@@ -453,9 +453,16 @@ export function ImageUploader({
           )
         }
 
+        const persistStarted = Date.now()
         // Immediately persist every original to Supabase Storage.
         await mapPool(next, UPLOAD_CONCURRENCY, async (image) => {
           await persistOriginal(image.id)
+        })
+        console.info("[timing]", {
+          flow: "upload",
+          stage: "original_photo_persistence",
+          ms: Date.now() - persistStarted,
+          count: next.length,
         })
       } catch {
         setError("Could not process one or more images.")

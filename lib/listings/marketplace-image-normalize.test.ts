@@ -12,7 +12,10 @@ import {
   normalizeMarketplaceImage,
   normalizeMarketplaceImages,
 } from "@/lib/listings/marketplace-image-normalize"
-import { normalizeEbayListingPhotoBytes } from "@/lib/marketplaces/adapters/ebay/media"
+import {
+  normalizeEbayListingPhotoBytes,
+  isAlreadyBakedMarketplaceUrl,
+} from "@/lib/marketplaces/adapters/ebay/media"
 
 const RED = { r: 220, g: 16, b: 16 }
 const BLUE = { r: 16, g: 16, b: 220 }
@@ -126,16 +129,18 @@ async function ingestBytes(source: Buffer): Promise<Buffer> {
 describe("upload preview must not override picker orientation", () => {
   it("sends eBay only the baked derivative, never the original HTTPS URL", () => {
     const src = readFileSync("lib/marketplaces/adapters/ebay/media.ts", "utf8")
-    assert.match(src, /marketplaceImageToDataUrl\(photo\.normalized\)/)
+    assert.match(src, /normalizeMarketplaceImage/)
+    assert.match(src, /isAlreadyBakedMarketplaceUrl/)
+    assert.match(
+      src,
+      /Bake ListWise-preview pixels into an EXIF-free derivative/
+    )
     assert.equal(
       /keepPublicUrl/.test(src),
       false,
       "eBay must not reuse the original public URL of an EXIF-dependent file"
     )
-    assert.match(
-      src,
-      /Bake ListWise-preview pixels into an EXIF-free derivative/
-    )
+    assert.match(src, /\/originals\//)
   })
 
   it("does not statically import sharp into the publish module graph", () => {
@@ -305,5 +310,35 @@ describe("orientation-1 photos are not rotated from aspect ratio", () => {
         label
       )
     }
+  })
+})
+
+describe("marketplace derivative URL reuse", () => {
+  it("reuses baked /publish/ URLs and never originals or analyze copies", () => {
+    assert.equal(
+      isAlreadyBakedMarketplaceUrl(
+        "https://abc.supabase.co/storage/v1/object/public/listing-images/publish/123.jpg"
+      ),
+      true
+    )
+    assert.equal(
+      isAlreadyBakedMarketplaceUrl(
+        "https://abc.supabase.co/storage/v1/object/public/listing-images/u1/publish/123.jpg"
+      ),
+      true
+    )
+    assert.equal(
+      isAlreadyBakedMarketplaceUrl(
+        "https://abc.supabase.co/storage/v1/object/public/listing-images/u1/originals/photo.jpg"
+      ),
+      false
+    )
+    assert.equal(
+      isAlreadyBakedMarketplaceUrl(
+        "https://abc.supabase.co/storage/v1/object/public/listing-images/u1/analyze/photo.jpg"
+      ),
+      false
+    )
+    assert.equal(isAlreadyBakedMarketplaceUrl("data:image/jpeg;base64,aaa"), false)
   })
 })

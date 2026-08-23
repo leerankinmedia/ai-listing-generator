@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js"
+import { mapPool } from "@/lib/async/map-pool"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { getAppBaseUrl } from "@/lib/marketplaces/connections/crypto"
 import {
@@ -42,15 +43,18 @@ function supabaseStorageConfigured() {
   )
 }
 
-async function uploadToSupabase(dataUrl: string, index: number): Promise<string> {
+async function uploadBufferToSupabase(
+  buffer: Buffer,
+  contentType: string,
+  index: number
+): Promise<string> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim()
   const bucket = listingImagesBucket()
-  const parsed = parseDataUrl(dataUrl)
-  const ext = parsed.contentType.includes("png")
+  const ext = contentType.includes("png")
     ? "png"
-    : parsed.contentType.includes("webp")
+    : contentType.includes("webp")
       ? "webp"
       : "jpg"
 
@@ -76,8 +80,8 @@ async function uploadToSupabase(dataUrl: string, index: number): Promise<string>
   const supabase = createClient(url, serviceKey || anonKey!, {
     auth: { persistSession: false, autoRefreshToken: false },
   })
-  const { error } = await supabase.storage.from(bucket).upload(path, parsed.buffer, {
-    contentType: parsed.contentType,
+  const { error } = await supabase.storage.from(bucket).upload(path, buffer, {
+    contentType,
     upsert: false,
   })
   if (error) {
@@ -98,6 +102,50 @@ async function uploadToSupabase(dataUrl: string, index: number): Promise<string>
   return data.publicUrl
 }
 
+async function uploadToSupabase(dataUrl: string, index: number): Promise<string> {
+  const parsed = parseDataUrl(dataUrl)
+  return uploadBufferToSupabase(parsed.buffer, parsed.contentType, index)
+}
+
+function stagingOrThrow(contentType: string, buffer: Buffer): string {
+  const appUrl = getAppBaseUrl()
+  if (
+    appUrl.includes("localhost") ||
+    appUrl.includes("127.0.0.1") ||
+    !process.env.NEXT_PUBLIC_APP_URL
+  ) {
+    throw new MarketplaceError(
+      "Marketplace publishing needs publicly reachable image URLs. Set SUPABASE_SERVICE_ROLE_KEY on Vercel (uses existing bucket listing-images from migration 003; optional override SUPABASE_STORAGE_BUCKET).",
+      "public_images_required",
+      400
+    )
+  }
+  const id = putStagingImage({ contentType, buffer })
+  return `${appUrl}/api/media/staging/${id}`
+}
+
+/**
+ * Upload already-baked image buffers (no data-URL round trip).
+ */
+export async function ensurePublicImageBuffers(
+  images: Array<{ buffer: Buffer; contentType: string }>
+): Promise<string[]> {
+  const out = await mapPool(images, 4, async (image, i) => {
+    if (supabaseStorageConfigured()) {
+      return uploadBufferToSupabase(image.buffer, image.contentType, i)
+    }
+    return stagingOrThrow(image.contentType, image.buffer)
+  })
+  if (out.length === 0) {
+    throw new MarketplaceError(
+      "At least one listing photo is required.",
+      "images_required",
+      400
+    )
+  }
+  return out
+}
+
 /**
  * Ensure listing images are publicly fetchable http(s) URLs for marketplaces
  * that cannot accept data URLs (Vinted, Whatnot, eBay, etc.).
@@ -107,12 +155,9 @@ async function uploadToSupabase(dataUrl: string, index: number): Promise<string>
  * 2. Short-lived local staging served at /api/media/staging/:id
  */
 export async function ensurePublicImageUrls(urls: string[]): Promise<string[]> {
-  const out: string[] = []
-  for (let i = 0; i < urls.length; i++) {
-    const url = urls[i]
+  const out = await mapPool(urls, 4, async (url, i) => {
     if (url.startsWith("http://") || url.startsWith("https://")) {
-      out.push(url)
-      continue
+      return url
     }
     if (!url.startsWith("data:")) {
       throw new MarketplaceError(
@@ -123,27 +168,12 @@ export async function ensurePublicImageUrls(urls: string[]): Promise<string[]> {
     }
 
     if (supabaseStorageConfigured()) {
-      out.push(await uploadToSupabase(url, i))
-      continue
-    }
-
-    const appUrl = getAppBaseUrl()
-    if (
-      appUrl.includes("localhost") ||
-      appUrl.includes("127.0.0.1") ||
-      !process.env.NEXT_PUBLIC_APP_URL
-    ) {
-      throw new MarketplaceError(
-        "Marketplace publishing needs publicly reachable image URLs. Set SUPABASE_SERVICE_ROLE_KEY on Vercel (uses existing bucket listing-images from migration 003; optional override SUPABASE_STORAGE_BUCKET).",
-        "public_images_required",
-        400
-      )
+      return uploadToSupabase(url, i)
     }
 
     const parsed = parseDataUrl(url)
-    const id = putStagingImage(parsed)
-    out.push(`${appUrl}/api/media/staging/${id}`)
-  }
+    return stagingOrThrow(parsed.contentType, parsed.buffer)
+  })
 
   if (out.length === 0) {
     throw new MarketplaceError(

@@ -25,6 +25,28 @@ export function decodeXmlEntities(value: string): string {
     .replace(/&apos;/g, "'")
 }
 
+function escapeXml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;")
+}
+
+/** Clear seller-facing Custom Label (Item.SKU) without deleting the inventory item. */
+export function buildReviseItemClearSkuXml(itemId: string): string {
+  const id = escapeXml(itemId.trim())
+  return `<?xml version="1.0" encoding="utf-8"?>
+<ReviseItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ErrorLanguage>en_US</ErrorLanguage>
+  <Item>
+    <ItemID>${id}</ItemID>
+  </Item>
+  <DeletedField>Item.SKU</DeletedField>
+</ReviseItemRequest>`
+}
+
 export type ParsedTradingGetItem = {
   ebayListingId: string
   title: string

@@ -6,6 +6,7 @@ import {
   parsePictureUrls,
   parseTradingGetItemXml,
   xmlText,
+  buildReviseItemClearSkuXml,
 } from "@/lib/marketplaces/adapters/ebay/trading-parse"
 
 describe("Trading GetItem XML parsing", () => {
@@ -140,5 +141,19 @@ describe("Trading GetItem XML parsing", () => {
     assert.equal(detail.shippingService, "USPSPriority")
     assert.equal(detail.imageUrls.length, 3)
     assert.equal(classifyGetItemDetailStatus(detail), "full")
+  })
+})
+
+describe("ReviseItem Custom Label clear", () => {
+  it("deletes Item.SKU without removing the listing", () => {
+    const xml = buildReviseItemClearSkuXml("111222333444")
+    assert.match(xml, /<ItemID>111222333444<\/ItemID>/)
+    assert.match(xml, /<DeletedField>Item\.SKU<\/DeletedField>/)
+    assert.doesNotMatch(xml, /<SKU>/)
+  })
+
+  it("escapes XML in the item id", () => {
+    const xml = buildReviseItemClearSkuXml("<oops>")
+    assert.match(xml, /<ItemID>&lt;oops&gt;<\/ItemID>/)
   })
 })

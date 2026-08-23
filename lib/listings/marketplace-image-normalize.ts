@@ -15,6 +15,7 @@ import {
   readJpegStoredSize,
   type ExifOrientation,
 } from "@/lib/listings/exif-orientation"
+import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 
 export type NormalizedMarketplaceImage = {
   buffer: Buffer
@@ -24,6 +25,23 @@ export type NormalizedMarketplaceImage = {
   width: number
   height: number
   strategy: "passthrough" | "bake-display-pixels"
+}
+
+export function sharpBakeError(error: unknown): MarketplaceError {
+  if (error instanceof MarketplaceError) return error
+  console.error("[ebay/images] sharp bake failed", error)
+  const raw = error instanceof Error ? error.message : String(error)
+  const loadFailed =
+    /Cannot find module ['"]sharp['"]|Failed to load external module sharp|Could not load the "sharp" module|ERR_DLOPEN_FAILED|libvips-cpp\.so/i.test(
+      raw
+    )
+  return new MarketplaceError(
+    loadFailed
+      ? "Could not bake ListWise-preview pixels for eBay. The image converter failed to load on this server, so photos were not sent."
+      : "Could not bake ListWise-preview pixels for eBay. Photos were not sent.",
+    "ebay_image_normalize_unavailable",
+    500
+  )
 }
 
 function orientationOf(
@@ -50,15 +68,6 @@ export async function normalizeMarketplaceImage(
 ): Promise<NormalizedMarketplaceImage> {
   const jpegOrientation = readJpegExifOrientation(input)
   const jpegSize = readJpegStoredSize(input)
-  const fallback: NormalizedMarketplaceImage = {
-    buffer: input,
-    contentType,
-    changed: false,
-    orientationWas: jpegOrientation ?? 1,
-    width: jpegSize?.width || 0,
-    height: jpegSize?.height || 0,
-    strategy: "passthrough",
-  }
 
   try {
     const { default: sharp } = await import("sharp")
@@ -98,13 +107,7 @@ export async function normalizeMarketplaceImage(
       strategy: "bake-display-pixels",
     }
   } catch (error) {
-    if ((jpegOrientation ?? 1) > 1) {
-      const reason = error instanceof Error ? error.message : "bake failed"
-      throw new Error(
-        `Could not bake ListWise-preview pixels for eBay (${reason}).`
-      )
-    }
-    return fallback
+    throw sharpBakeError(error)
   }
 }
 

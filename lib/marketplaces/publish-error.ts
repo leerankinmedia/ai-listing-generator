@@ -39,9 +39,27 @@ export function currentPublishTrace(): PublishTrace {
 }
 
 export function errorMessageOf(error: unknown): string {
-  if (error instanceof MarketplaceError) return error.message
-  if (error instanceof Error && error.message.trim()) return error.message
+  if (error instanceof MarketplaceError) return sanitizePublishErrorMessage(error.message)
+  if (error instanceof Error && error.message.trim()) {
+    return sanitizePublishErrorMessage(error.message)
+  }
   return "Publish failed."
+}
+
+/**
+ * Sharp's linux-x64 load failure includes a multi-page "Possible solutions"
+ * dump (npm install --os=linux, optional platform packages, etc.). Never send
+ * that to the ListWise UI. Full error stays in server logs.
+ */
+export function sanitizePublishErrorMessage(message: string): string {
+  const dump =
+    /Possible solutions:|npm install --os=|npm install --include=optional|Ensure optional dependencies|platform-specific dependencies|linux-x64 runtime|ERR_DLOPEN_FAILED|libvips-cpp\.so/i.test(
+      message
+    )
+  if (dump) {
+    return "Could not bake ListWise-preview pixels for eBay. The image converter failed to load on this server, so photos were not sent."
+  }
+  return message
 }
 
 export function publishFailureBody(error: unknown): {

@@ -17,6 +17,10 @@ import { hydrateListingEbayAspects } from "@/lib/listings/hydrate-ebay-aspects"
 import { createEmptyListing, withImages } from "@/lib/listings/local-db"
 import { mapDraftToListingFields } from "@/lib/listings/map-draft"
 import { persistListing } from "@/lib/listings/repository"
+import {
+  logGenerateTimings,
+  mergeGenerateStages,
+} from "@/lib/observability/generate-timings"
 import { ensureListingQuantity } from "@/lib/listings/review-draft"
 import { MAX_LISTING_IMAGES } from "@/lib/listings/schema"
 import type { GeneratedListingOutput } from "@/lib/listings/schema"
@@ -132,14 +136,19 @@ export function ListingGenerator() {
         (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
       )
 
-      const analyzeUploadStarted = Date.now()
-      const imageUrls = await uploadAnalyzeImagesIndividually({
+      const analyzeUpload = await uploadAnalyzeImagesIndividually({
         images: ordered,
+      })
+      const imageUrls = analyzeUpload.urls
+      console.info("[timing]", {
+        flow: "generate",
+        stage: "photo_analysis_preparation",
+        ms: analyzeUpload.timings.photo_analysis_preparation,
       })
       console.info("[timing]", {
         flow: "generate",
-        stage: "analyze_copy_upload",
-        ms: Date.now() - analyzeUploadStarted,
+        stage: "analysis_image_upload",
+        ms: analyzeUpload.timings.analysis_image_upload,
       })
 
       const generateApiStarted = Date.now()
@@ -190,6 +199,7 @@ export function ListingGenerator() {
       setProgressPercent(92)
       setProgressMessage("Adding item details")
 
+      const mappingStarted = Date.now()
       const mapped = mapDraftToListingFields(draft)
       const base = createEmptyListing(user.id)
       let next = withImages(base, ordered, {
@@ -219,6 +229,12 @@ export function ListingGenerator() {
         },
       })
       next = ensureListingQuantity(next)
+      const draftMappingMs = Date.now() - mappingStarted
+      console.info("[timing]", {
+        flow: "generate",
+        stage: "draft_mapping",
+        ms: draftMappingMs,
+      })
 
       if (!next.title.trim()) {
         throw new Error("Mapped listing title was empty after AI analysis.")
@@ -270,6 +286,7 @@ export function ListingGenerator() {
         flow: "generate",
         stage: "taxonomy_aspects_hydration",
         ms: Date.now() - hydrateStarted,
+        ebay: hydrated.timings,
       })
 
       setProgressPercent(100)
@@ -303,16 +320,43 @@ export function ListingGenerator() {
             updatedAt: new Date().toISOString(),
           })
         }
+        const persistMs = Date.now() - persistStarted
         console.info("[timing]", {
           flow: "generate",
-          stage: "draft_persistence",
-          ms: Date.now() - persistStarted,
+          stage: "database_save",
+          ms: persistMs,
         })
+        const redirectStarted = Date.now()
+        writeUploadSession(user.id, {
+          images: saved.images.length > 0 ? saved.images : ordered,
+          sellerNotes,
+          listingId: saved.id,
+        })
+        router.replace(`/dashboard/listings/${saved.id}`)
+        const redirectMs = Date.now() - redirectStarted
         console.info("[timing]", {
           flow: "generate",
-          stage: "total",
-          ms: Date.now() - generateStarted,
+          stage: "redirect_to_review",
+          ms: redirectMs,
         })
+        const totalMs = Date.now() - generateStarted
+        const stages = mergeGenerateStages(
+          analyzeUpload.timings,
+          parsed.ok ? parsed.data.timings?.stages : undefined,
+          hydrated.timings,
+          {
+            draft_mapping: draftMappingMs,
+            database_save: persistMs,
+            redirect_to_review: redirectMs,
+            total: totalMs,
+          }
+        )
+        logGenerateTimings(stages, {
+          model: payload.model,
+          imagesAnalyzed: payload.imagesAnalyzed,
+          photoCount: ordered.length,
+        })
+        return
       } catch (persistError) {
         console.error("[listing-generator] persist after generate failed", persistError)
         setListing(next)
@@ -323,12 +367,6 @@ export function ListingGenerator() {
         setStep("review")
         return
       }
-      writeUploadSession(user.id, {
-        images: saved.images.length > 0 ? saved.images : ordered,
-        sellerNotes,
-        listingId: saved.id,
-      })
-      router.replace(`/dashboard/listings/${saved.id}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generation failed")
     } finally {

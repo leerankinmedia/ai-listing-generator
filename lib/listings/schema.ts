@@ -12,9 +12,13 @@ export const VISION_BATCH_SIZE = 4
  * through the Analyze Photos AI upload path.
  */
 export const ANALYZE_UPLOAD_MAX_BYTES = 4 * 1024 * 1024
-/** Preferred analysis copy size band (high-quality JPEG ~1600–2000px). */
-export const ANALYZE_COPY_TARGET_MAX_BYTES = 1024 * 1024
-export const ANALYZE_COPY_TARGET_MIN_BYTES = 500 * 1024
+/**
+ * Analysis copies only. OpenAI Vision downscales to ~768px tiles, so 2000px
+ * originals waste upload time and tokens. 1280px still reads tags/labels.
+ * Full-resolution listing originals are stored separately and never resized.
+ */
+export const ANALYZE_COPY_TARGET_MAX_BYTES = 400 * 1024
+export const ANALYZE_COPY_TARGET_MIN_BYTES = 120 * 1024
 
 export const conditionEnum = z.enum([
   "New with tags",

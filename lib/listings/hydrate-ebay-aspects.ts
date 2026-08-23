@@ -21,6 +21,7 @@ export type HydrateEbayAspectsResult = {
   summary: AiEmployeeAspectSummary
   ok: boolean
   skippedReason?: string
+  timings?: Record<string, number>
 }
 
 /**
@@ -79,6 +80,7 @@ export async function hydrateListingEbayAspects(
         conditionName: string
         conditionEnum: string
       } | null
+      timings?: Record<string, number>
     }
 
     const formFields = json.formFields || []
@@ -163,7 +165,13 @@ export async function hydrateListingEbayAspects(
     }
 
     const summary = summarizeAiEmployeeAspects(formFields, next)
-    return { listing: next, formFields, summary, ok: true }
+    return {
+      listing: next,
+      formFields,
+      summary,
+      ok: true,
+      timings: json.timings,
+    }
   } catch {
     return {
       listing,

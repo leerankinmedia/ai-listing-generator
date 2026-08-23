@@ -12,23 +12,21 @@ import type { ListingImage } from "@/lib/types"
 /** Display / listing originals are never downscaled for AI. */
 export { ANALYZE_UPLOAD_MAX_BYTES, ANALYZE_COPY_TARGET_MAX_BYTES }
 
-/** Analysis copies: longest side 1600–2000px, high JPEG quality, ~0.5–1MB. */
+/** Analysis copies: longest side ≤1280px, ~120–400KB JPEG. */
 export const ANALYZE_TARGET_MAX_BYTES = ANALYZE_COPY_TARGET_MAX_BYTES
-export const ANALYZE_TARGET_MIN_BYTES = 500 * 1024
+export const ANALYZE_TARGET_MIN_BYTES = 120 * 1024
 
 /**
- * High-quality analysis presets. Prefer shrinking dimensions before crushing quality.
- * Longest side stays in the 1600–2000px range whenever possible.
+ * Analysis-only presets. Prefer shrinking dimensions before crushing quality.
+ * Longest side stays ≤1280px so Vision still reads tags without huge uploads.
  */
 const ANALYZE_COPY_PRESETS: Array<{ maxDimension: number; quality: number }> = [
-  { maxDimension: 2000, quality: 0.92 },
-  { maxDimension: 1900, quality: 0.9 },
-  { maxDimension: 1800, quality: 0.88 },
-  { maxDimension: 1700, quality: 0.86 },
-  { maxDimension: 1600, quality: 0.85 },
-  { maxDimension: 1600, quality: 0.8 },
-  { maxDimension: 1600, quality: 0.74 },
-  { maxDimension: 1600, quality: 0.68 },
+  { maxDimension: 1280, quality: 0.84 },
+  { maxDimension: 1280, quality: 0.8 },
+  { maxDimension: 1152, quality: 0.78 },
+  { maxDimension: 1024, quality: 0.76 },
+  { maxDimension: 1024, quality: 0.7 },
+  { maxDimension: 960, quality: 0.68 },
 ]
 
 export function dataUrlToBlob(dataUrl: string): Blob {

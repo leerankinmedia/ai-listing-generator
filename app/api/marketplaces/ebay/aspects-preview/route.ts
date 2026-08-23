@@ -75,10 +75,13 @@ export async function POST(request: Request) {
 
     const listing = body.listing
     const marketplaceId = ebayMarketplaceId()
+    const timings: Record<string, number> = {}
+    const treeStarted = Date.now()
     const tree = await getEbayDefaultCategoryTreeId(
       token.accessToken,
       marketplaceId
     )
+    timings.ebay_category_lookup = Date.now() - treeStarted
 
     const explicitCategoryId =
       (body.categoryId || "").trim() ||
@@ -99,11 +102,14 @@ export async function POST(request: Request) {
         categoryHint: listing.specifics.category,
       })
       try {
+        const suggestStarted = Date.now()
         const suggested = await getEbayCategorySuggestions(
           token.accessToken,
           suggestQuery || listing.title || "item",
           { marketplaceId, categoryTreeId: tree.categoryTreeId, limit: 8 }
         )
+        timings.ebay_category_lookup =
+          (timings.ebay_category_lookup || 0) + (Date.now() - suggestStarted)
         suggestions = suggested.suggestions
       } catch {
         suggestions = []
@@ -126,19 +132,33 @@ export async function POST(request: Request) {
         conditions: [],
         mappedCondition: null,
         needsCategorySelection: true,
+        timings,
       })
     }
 
+    const aspectsStarted = Date.now()
+    const conditionStarted = Date.now()
     const [taxonomyAspects, conditionResult] = await Promise.all([
-      fetchEbayItemAspectsForCategory(token.accessToken, categoryId),
+      fetchEbayItemAspectsForCategory(token.accessToken, categoryId).then(
+        (aspects) => {
+          timings.ebay_item_specifics_lookup = Date.now() - aspectsStarted
+          return aspects
+        }
+      ),
       getItemConditionPoliciesForCategory(
         token.accessToken,
         categoryId,
         marketplaceId
-      ).then((policy) => ({ ok: true as const, policy })).catch((err) => {
-        console.warn("[ebay/aspects-preview] condition policies", err)
-        return { ok: false as const, policy: null }
-      }),
+      )
+        .then((policy) => {
+          timings.ebay_condition_lookup = Date.now() - conditionStarted
+          return { ok: true as const, policy }
+        })
+        .catch((err) => {
+          timings.ebay_condition_lookup = Date.now() - conditionStarted
+          console.warn("[ebay/aspects-preview] condition policies", err)
+          return { ok: false as const, policy: null }
+        }),
     ])
     const { inventoryItem } = mapListingToEbayInventory(listing)
     const applied = applyRequiredEbayAspects(
@@ -277,6 +297,7 @@ export async function POST(request: Request) {
       aspectsPreview: Object.fromEntries(
         Object.entries(applied.aspects).map(([k, v]) => [k, v[0]])
       ),
+      timings,
     })
   } catch (error) {
     console.error("[ebay/aspects-preview]", error)

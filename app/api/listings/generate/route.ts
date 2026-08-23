@@ -168,7 +168,7 @@ async function handleGenerate(request: Request) {
     }
 
     const timer = createStageTimer("generate")
-    const images = await timer.stage("image_preparation", () =>
+    const images = await timer.stage("analysis_image_fetch", () =>
       resolveAnalyzeImageUrls(imageUrls)
     )
     const {

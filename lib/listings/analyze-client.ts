@@ -21,6 +21,7 @@ async function uploadOneAnalyzeCopy(input: {
   image: ListingImage
   index: number
   total: number
+  prepared?: { blob: Blob; bytes: number }
   onProgress?: (label: string) => void
 }): Promise<AnalyzeUploadResult> {
   if (
@@ -33,12 +34,9 @@ async function uploadOneAnalyzeCopy(input: {
     )
   }
 
-  input.onProgress?.(
-    `Preparing analysis copy ${input.index + 1} of ${input.total}…`
-  )
-
-  // Temporary compressed copy only — original listing photo is not modified.
-  const { blob, bytes } = await createAnalyzeCopyFromListingImage(input.image)
+  const prepared =
+    input.prepared || (await createAnalyzeCopyFromListingImage(input.image))
+  const { blob, bytes } = prepared
 
   input.onProgress?.(
     `Uploading analysis copy ${input.index + 1} of ${input.total} (${Math.round(bytes / 1024)}KB)…`
@@ -112,12 +110,17 @@ async function mapPool<T, R>(
  * Upload temporary analysis copies for every listing photo (never drops / never
  * replaces originals). Returns analysis URLs in original order.
  */
+export type AnalyzeUploadTimings = {
+  photo_analysis_preparation: number
+  analysis_image_upload: number
+}
+
 export async function uploadAnalyzeImagesIndividually(input: {
   images: ListingImage[]
   /** @deprecated use `images` — kept for transition */
   dataUrls?: string[]
   onProgress?: (label: string) => void
-}): Promise<string[]> {
+}): Promise<{ urls: string[]; timings: AnalyzeUploadTimings }> {
   const images =
     input.images?.length > 0
       ? input.images
@@ -142,20 +145,44 @@ export async function uploadAnalyzeImagesIndividually(input: {
   }
 
   let completed = 0
+  let prepareMs = 0
+  let uploadMs = 0
   const uploaded = await mapPool(
     images,
     UPLOAD_CONCURRENCY,
     async (image, index) => {
+      const prepareStarted = Date.now()
+      input.onProgress?.(
+        `Preparing analysis copy ${index + 1} of ${images.length}…`
+      )
+      if (
+        image.storageStatus !== "uploaded" ||
+        !/^https?:\/\//i.test(image.url) ||
+        /\/api\/media\/staging\//i.test(image.url)
+      ) {
+        throw new Error(
+          `Photo ${index + 1} is not saved to cloud storage yet. Wait for Saved status, then analyze again.`
+        )
+      }
+      const { blob, bytes } = await createAnalyzeCopyFromListingImage(image)
+      prepareMs += Date.now() - prepareStarted
+
+      const uploadStarted = Date.now()
+      input.onProgress?.(
+        `Uploading analysis copy ${index + 1} of ${images.length} (${Math.round(bytes / 1024)}KB)…`
+      )
       const result = await uploadOneAnalyzeCopy({
         image,
         index,
         total: images.length,
+        prepared: { blob, bytes },
         onProgress: (label) => {
           input.onProgress?.(
             `${label} (${completed}/${images.length} done)`
           )
         },
       })
+      uploadMs += Date.now() - uploadStarted
       completed += 1
       input.onProgress?.(
         `Uploaded ${completed} of ${images.length} analysis copies…`
@@ -164,5 +191,11 @@ export async function uploadAnalyzeImagesIndividually(input: {
     }
   )
 
-  return uploaded.map((row) => row.url)
+  return {
+    urls: uploaded.map((row) => row.url),
+    timings: {
+      photo_analysis_preparation: prepareMs,
+      analysis_image_upload: uploadMs,
+    },
+  }
 }

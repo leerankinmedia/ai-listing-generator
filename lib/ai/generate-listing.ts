@@ -51,6 +51,20 @@ function listingModel(openai: OpenAIClient) {
   return openai.chat(getListingModel())
 }
 
+type GenerateTimer = ReturnType<typeof createStageTimer>
+
+let activeGenerateTimer: GenerateTimer | null = null
+
+async function timedGenerateObject<T>(work: () => Promise<T>): Promise<T> {
+  const requestStarted = Date.now()
+  const result = await work()
+  activeGenerateTimer?.mark("openai_request", Date.now() - requestStarted)
+  const parseStarted = Date.now()
+  void (result as { object?: unknown }).object
+  activeGenerateTimer?.mark("openai_parse", Date.now() - parseStarted)
+  return result
+}
+
 export class ListingEngineError extends Error {
   status: number
   constructor(message: string, status = 500) {
@@ -218,12 +232,14 @@ For flaws: use "None visible" unless a defect is clearly and strongly evidenced 
     },
   ]
 
-  const result = await generateObject({
-    model: listingModel(openai),
-    schema: imageBatchDetectionSchema,
-    system: DETECT_SYSTEM,
-    messages: [{ role: "user", content }],
-  })
+  const result = await timedGenerateObject(() =>
+    generateObject({
+      model: listingModel(openai),
+      schema: imageBatchDetectionSchema,
+      system: DETECT_SYSTEM,
+      messages: [{ role: "user", content }],
+    })
+  )
 
   const detection = result.object.images[0]
   if (!detection) {
@@ -271,12 +287,14 @@ For flaws: use "None visible" unless a defect is clearly and strongly evidenced 
   }
 
   try {
-    const result = await generateObject({
-      model: listingModel(openai),
-      schema: imageBatchDetectionSchema,
-      system: DETECT_SYSTEM,
-      messages: [{ role: "user", content }],
-    })
+    const result = await timedGenerateObject(() =>
+      generateObject({
+        model: listingModel(openai),
+        schema: imageBatchDetectionSchema,
+        system: DETECT_SYSTEM,
+        messages: [{ role: "user", content }],
+      })
+    )
 
     if (!result.object.images.length) {
       throw new ListingEngineError(
@@ -582,12 +600,14 @@ Example: Looney Tunes tag + Tweety embroidery → brand/licensedProperty Looney 
     })
   }
 
-  const result = await generateObject({
-    model: listingModel(openai),
-    schema: identitySecondPassSchema,
-    system: IDENTITY_SECOND_PASS_SYSTEM,
-    messages: [{ role: "user", content }],
-  })
+  const result = await timedGenerateObject(() =>
+    generateObject({
+      model: listingModel(openai),
+      schema: identitySecondPassSchema,
+      system: IDENTITY_SECOND_PASS_SYSTEM,
+      messages: [{ role: "user", content }],
+    })
+  )
 
   return {
     identity: toIdentitySecondPass(result.object),
@@ -695,15 +715,19 @@ function sanitizeApparelTitle(title: string): string {
 async function generateCopy(
   openai: OpenAIClient,
   fields: Record<string, FieldConfidence>,
-  sampleImages: VisionImage[],
   totalImages: number,
   sellerNotes?: string
 ): Promise<{ copy: ListingCopy; usage: TokenUsage }> {
   const searchColor = titleSearchColor(fields.color?.value)
-  const content: ContentPart[] = [
-    {
-      type: "text",
-      text: `Create an eBay SEO title, eBay-ready description, keywords, and eBay category suggestion for this clothing item.
+  const result = await timedGenerateObject(() =>
+    generateObject({
+      model: listingModel(openai),
+      schema: listingCopySchema,
+      system: COPY_SYSTEM,
+      messages: [
+        {
+          role: "user",
+          content: `Create an eBay SEO title, eBay-ready description, keywords, and eBay category suggestion for this clothing item.
 
 Title must follow this apparel priority (omit unknowns; target near 80 chars):
 Brand/franchise → character/collection/graphic → gender/department → pattern (when searchable, e.g. Gingham) or normalized color → item type/style → size.
@@ -718,23 +742,12 @@ Do not put material percentages such as "100% Cotton" in the title — keep thos
 Verified attributes (with confidence) — include character, theme, features, and itemType when present.
 Keep accent details (stitching, trim) in description/pattern/style, not in Color.
 ${JSON.stringify(fields, null, 2)}
-Total photos in listing: ${totalImages}. Sample photos attached for visual context.${sellerContextBlock(sellerNotes)}`,
-    },
-  ]
-  for (const image of sampleImages.slice(0, 4)) {
-    content.push({
-      type: "image",
-      image: image.data,
-      mediaType: image.mediaType,
+Total photos in listing: ${totalImages}.
+Write from these verified attributes only — do not invent details that are not listed.${sellerContextBlock(sellerNotes)}`,
+        },
+      ],
     })
-  }
-
-  const result = await generateObject({
-    model: listingModel(openai),
-    schema: listingCopySchema,
-    system: COPY_SYSTEM,
-    messages: [{ role: "user", content }],
-  })
+  )
   const copy = result.object
   copy.title.value = sanitizeApparelTitle(copy.title.value)
   // Prefer filling toward 80 chars with real attributes when the model undershot.
@@ -807,7 +820,8 @@ export async function estimateSoldComps(
   openai: OpenAIClient,
   fields: Record<string, FieldConfidence>
 ): Promise<{ comps: CompsEstimate; usage: TokenUsage }> {
-  const result = await generateObject({
+  const result = await timedGenerateObject(() =>
+    generateObject({
     model: listingModel(openai),
     schema: compsEstimateSchema,
     system: COMPS_SYSTEM,
@@ -821,6 +835,7 @@ Return a realistic USD sold range and suggested list price for a typical 7–21 
       },
     ],
   })
+  )
   return { comps: result.object, usage: usageFromResult(result) }
 }
 
@@ -883,7 +898,8 @@ export async function generateListingFromImages(
   const sellerNotes = options?.sellerNotes?.trim() || undefined
   let usage = emptyTokenUsage()
   const timer = createStageTimer("generate_ai")
-
+  activeGenerateTimer = timer
+  try {
   const batches: VisionImage[][] = []
   for (let i = 0; i < images.length; i += VISION_BATCH_SIZE) {
     batches.push(images.slice(i, i + VISION_BATCH_SIZE))
@@ -1051,7 +1067,6 @@ export async function generateListingFromImages(
         model: fields.model,
         productLine: fields.productLine,
       },
-      visionImages,
       detections.length,
       sellerNotes
     ),
@@ -1206,5 +1221,8 @@ export async function generateListingFromImages(
     warnings,
     partial: imagesFailed.length > 0,
     timings: timer.done(),
+  }
+  } finally {
+    activeGenerateTimer = null
   }
 }

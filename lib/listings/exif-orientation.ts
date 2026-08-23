@@ -228,33 +228,18 @@ export function applyExifOrientationToRgb(
 export type PixelSize = { width: number; height: number }
 
 /**
- * Preserve the selected photo's visual orientation.
- *
- * The File the seller picked is authoritative. ListWise must not rotate
- * pixels from EXIF, HTMLImage display size, or aspect ratio.
- *
- * - `strip-exif-keep-pixels`: drop the Orientation tag; keep stored pixels.
- * - `passthrough`: orientation 1 / nothing to do.
- *
- * `decodedAsHtmlImage` is ignored. A swapped HTMLImage size means the
- * browser applied leftover EXIF — using those pixels would rotate the
- * gallery photo.
+ * The selected File is authoritative. Never rotate, bake, or strip based on
+ * EXIF, HTMLImage size, or aspect ratio. Production paths must passthrough.
  */
-export type VisualPixelStrategy =
-  | { action: "passthrough" }
-  | { action: "strip-exif-keep-pixels" }
+export type VisualPixelStrategy = { action: "passthrough" }
 
-export function visualPixelStrategy(input: {
+export function visualPixelStrategy(_input: {
   orientation: number
   stored?: PixelSize | null
   decodedIgnoringExif?: PixelSize | null
   decodedAsHtmlImage?: PixelSize | null
   displayPixelsDifferFromRaw?: boolean
 }): VisualPixelStrategy {
-  const orientation = input.orientation || 1
-  if (orientation > 1) {
-    return { action: "strip-exif-keep-pixels" }
-  }
   return { action: "passthrough" }
 }
 

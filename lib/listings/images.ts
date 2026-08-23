@@ -102,9 +102,7 @@ export async function createAnalyzeCopyFromBlob(
   source: Blob,
   targetMaxBytes: number = ANALYZE_TARGET_MAX_BYTES
 ): Promise<{ blob: Blob; bytes: number; presetIndex: number; widthHint: number }> {
-  const bitmap = await createImageBitmap(source, {
-    imageOrientation: "none",
-  })
+  const bitmap = await createImageBitmap(source)
   try {
     let lastBlob: Blob | null = null
     let lastPreset = 0
@@ -167,7 +165,7 @@ export async function createAnalyzeCopyFromListingImage(
 
 /**
  * Keep the full-resolution phone photo as the listing image.
- * Strips leftover EXIF without rotating pixels so preview matches the gallery.
+ * The selected File is used as-is so preview matches the phone/file picker.
  * Does not resize for AI — analysis creates a separate temporary copy later.
  */
 export async function createListingImageFromFile(
@@ -179,15 +177,7 @@ export async function createListingImageFromFile(
     throw new Error("Please choose image files only.")
   }
   const id = createImageId()
-  const { normalizeImageOrientation } = await import(
-    "@/lib/listings/image-orientation"
-  )
-  const oriented = await normalizeImageOrientation(file, file.name || "photo.jpg")
-  const objectUrl = registerOriginalPhoto(
-    id,
-    oriented.blob,
-    oriented.fileName
-  )
+  const objectUrl = registerOriginalPhoto(id, file, file.name || "photo.jpg")
   return {
     id,
     url: objectUrl,

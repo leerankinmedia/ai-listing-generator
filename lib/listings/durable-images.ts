@@ -62,19 +62,6 @@ export async function uploadListingOriginalToStorage(input: {
     throw new Error("No photo data available to upload.")
   }
 
-  // Capture the browser-displayed pixels and strip EXIF. Do not rotate.
-  try {
-    const { normalizeImageOrientation } = await import(
-      "@/lib/listings/image-orientation"
-    )
-    const oriented = await normalizeImageOrientation(uploadBlob, fileName)
-    uploadBlob = oriented.blob
-    contentType = oriented.contentType
-    fileName = oriented.fileName
-  } catch {
-    /* keep source blob */
-  }
-
   const supabase = createClient()
   const ext = extensionFor(contentType, fileName)
   const path = `${input.userId}/originals/${input.imageId}.${ext}`

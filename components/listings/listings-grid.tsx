@@ -119,7 +119,7 @@ export function ListingsGrid() {
                     <img
                       src={cover.url}
                       alt={listing.title}
-                      className="h-full w-full object-cover [image-orientation:none] transition-transform duration-300 group-hover:scale-[1.02]"
+                      className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
                     />
                   ) : (
                     <div className="flex h-full items-center justify-center text-muted-foreground">

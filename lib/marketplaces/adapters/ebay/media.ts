@@ -229,9 +229,9 @@ async function downloadListingPhoto(
 }
 
 /**
- * Download every listing photo (cover and additional), strip leftover EXIF
- * without rotating pixels, and return the buffers eBay will receive — same
- * path for every index, original seller order preserved.
+ * Download every listing photo (cover and additional) and return the same
+ * bytes ListWise already shows. No orientation transform. Original seller
+ * order is preserved.
  */
 export async function normalizeEbayListingPhotoBytes(
   urls: string[]
@@ -351,8 +351,8 @@ export async function resolveEbayImageUrls(
     }
   }
 
-  // Download every photo, strip leftover EXIF without rotating, then host
-  // marketplace-safe bytes. Cover and additional photos share this path.
+  // Pass every photo through unchanged. Cover and additional photos share
+  // this path. Do not rotate, auto-orient, or strip EXIF.
   const normalizedPhotos = await normalizeEbayListingPhotoBytes(orderedSources)
   const toHost: string[] = []
   for (let i = 0; i < normalizedPhotos.length; i++) {

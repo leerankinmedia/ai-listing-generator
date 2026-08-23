@@ -132,7 +132,7 @@ function SortablePhoto({
       <img
         src={image.url}
         alt={`Product photo ${index + 1}`}
-        className="pointer-events-none h-full w-full object-cover [image-orientation:none]"
+        className="pointer-events-none h-full w-full object-cover"
         draggable={false}
       />
       <span
@@ -239,7 +239,7 @@ function PhotoPreview({
       <img
         src={image.url}
         alt={`Dragging photo ${index + 1}`}
-        className="h-full w-full object-cover [image-orientation:none]"
+        className="h-full w-full object-cover"
         draggable={false}
       />
       {isCover && (

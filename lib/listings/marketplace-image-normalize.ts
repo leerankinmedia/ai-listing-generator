@@ -1,13 +1,14 @@
 /**
- * Marketplace image path: pass the selected photo through unchanged.
+ * eBay/marketplace derivative only. ListWise originals are never mutated.
  *
- * No rotate(), autoOrient(), EXIF bake, or EXIF strip. Cover and additional
- * photos share this path. Display matches the phone/file picker because the
- * original bytes (including any Orientation tag) are preserved.
+ * Bake the pixels that ListWise already displays (browser honors EXIF) into
+ * a fresh JPEG/PNG with Orientation 1 and no leftover orientation metadata,
+ * so eBay cannot rotate the photo again. Do not guess 90/180/270 from
+ * width/height — sharp.rotate() with no angle applies the file's EXIF the
+ * same way an <img> does.
  *
- * Sharp is loaded lazily and only for optional width/height metadata. A
- * missing native sharp binary must not fail the /api/listings/publish module
- * graph (that previously returned a Next.js HTML 500 page).
+ * Sharp is loaded lazily so a missing native binary cannot 500 the publish
+ * route at module init.
  */
 import {
   readJpegExifOrientation,
@@ -22,17 +23,25 @@ export type NormalizedMarketplaceImage = {
   orientationWas: ExifOrientation | 1
   width: number
   height: number
-  strategy: "passthrough"
+  strategy: "passthrough" | "bake-display-pixels"
 }
 
-function contentTypeForFormat(
-  format: string | undefined,
-  fallback: string
-): string {
-  if (format === "png") return "image/png"
-  if (format === "webp") return "image/webp"
-  if (format === "jpeg" || format === "jpg") return "image/jpeg"
-  return fallback.startsWith("image/") ? fallback : "image/jpeg"
+function orientationOf(
+  jpegOrientation: ExifOrientation | null,
+  metaOrientation: number | undefined
+): ExifOrientation | 1 {
+  if (jpegOrientation && jpegOrientation >= 1 && jpegOrientation <= 8) {
+    return jpegOrientation
+  }
+  if (
+    metaOrientation &&
+    Number.isInteger(metaOrientation) &&
+    metaOrientation >= 1 &&
+    metaOrientation <= 8
+  ) {
+    return metaOrientation as ExifOrientation
+  }
+  return 1
 }
 
 export async function normalizeMarketplaceImage(
@@ -41,28 +50,61 @@ export async function normalizeMarketplaceImage(
 ): Promise<NormalizedMarketplaceImage> {
   const jpegOrientation = readJpegExifOrientation(input)
   const jpegSize = readJpegStoredSize(input)
-
-  let width = jpegSize?.width || 0
-  let height = jpegSize?.height || 0
-  let format: string | undefined
-  try {
-    const { default: sharp } = await import("sharp")
-    const meta = await sharp(input, { failOn: "none", autoOrient: false }).metadata()
-    width = width || meta.width || 0
-    height = height || meta.height || 0
-    format = meta.format
-  } catch {
-    /* keep JPEG SOF size — never fail publish because sharp is unavailable */
-  }
-
-  return {
+  const fallback: NormalizedMarketplaceImage = {
     buffer: input,
-    contentType: contentTypeForFormat(format, contentType),
+    contentType,
     changed: false,
     orientationWas: jpegOrientation ?? 1,
-    width,
-    height,
+    width: jpegSize?.width || 0,
+    height: jpegSize?.height || 0,
     strategy: "passthrough",
+  }
+
+  try {
+    const { default: sharp } = await import("sharp")
+    const meta = await sharp(input, {
+      failOn: "none",
+      autoOrient: false,
+    }).metadata()
+    const orientationWas = orientationOf(jpegOrientation, meta.orientation)
+    const preferPng = contentType.includes("png") || meta.format === "png"
+
+    // No-argument rotate() applies EXIF like ListWise <img>, then the encode
+    // drops metadata so eBay sees baked pixels with orientation 1.
+    const bakeOptions = { failOn: "none" as const, autoOrient: false }
+    const baked = preferPng
+      ? await sharp(input, bakeOptions).rotate().png().toBuffer()
+      : await sharp(input, bakeOptions)
+          .rotate()
+          .jpeg({
+            quality: 95,
+            chromaSubsampling: "4:4:4",
+            mozjpeg: true,
+          })
+          .toBuffer()
+
+    const outMeta = await sharp(baked, {
+      failOn: "none",
+      autoOrient: false,
+    }).metadata()
+
+    return {
+      buffer: baked,
+      contentType: preferPng ? "image/png" : "image/jpeg",
+      changed: true,
+      orientationWas,
+      width: outMeta.width || jpegSize?.width || 0,
+      height: outMeta.height || jpegSize?.height || 0,
+      strategy: "bake-display-pixels",
+    }
+  } catch (error) {
+    if ((jpegOrientation ?? 1) > 1) {
+      const reason = error instanceof Error ? error.message : "bake failed"
+      throw new Error(
+        `Could not bake ListWise-preview pixels for eBay (${reason}).`
+      )
+    }
+    return fallback
   }
 }
 

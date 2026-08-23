@@ -124,6 +124,20 @@ async function ingestBytes(source: Buffer): Promise<Buffer> {
 }
 
 describe("upload preview must not override picker orientation", () => {
+  it("sends eBay only the baked derivative, never the original HTTPS URL", () => {
+    const src = readFileSync("lib/marketplaces/adapters/ebay/media.ts", "utf8")
+    assert.match(src, /marketplaceImageToDataUrl\(photo\.normalized\)/)
+    assert.equal(
+      /keepPublicUrl/.test(src),
+      false,
+      "eBay must not reuse the original public URL of an EXIF-dependent file"
+    )
+    assert.match(
+      src,
+      /Bake ListWise-preview pixels into an EXIF-free derivative/
+    )
+  })
+
   it("does not statically import sharp into the publish module graph", () => {
     const src = readFileSync("lib/listings/marketplace-image-normalize.ts", "utf8")
     assert.equal(
@@ -153,43 +167,79 @@ describe("upload preview must not override picker orientation", () => {
   })
 })
 
-describe("picker-upright camera JPEG (EXIF 6) through the whole pipeline", () => {
+/** How eBay sees a JPEG if it ignores EXIF (raw stored pixels). Test-only. */
+async function ebayIgnoredExifDisplay(buffer: Buffer): Promise<{
+  width: number
+  height: number
+  top: Rgb
+  bottom: Rgb
+}> {
+  const { data, info } = await sharp(buffer, { autoOrient: false })
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+  const channels = info.channels
+  const topI = 0
+  const bottomI = (info.height - 1) * info.width * channels
+  return {
+    width: info.width,
+    height: info.height,
+    top: { r: data[topI], g: data[topI + 1], b: data[topI + 2] },
+    bottom: {
+      r: data[bottomI],
+      g: data[bottomI + 1],
+      b: data[bottomI + 2],
+    },
+  }
+}
+
+describe("ListWise original stays EXIF-dependent; eBay gets a baked derivative", () => {
   const originalFetch = globalThis.fetch
 
   afterEach(() => {
     globalThis.fetch = originalFetch
   })
 
-  it("source, ListWise ingest, stored, and eBay-bound bytes all render the same way", async () => {
-    // Stored 64×32 landscape, red on the LEFT. EXIF 6 = 90° CW → picker
-    // shows 32×64 portrait with red at the TOP — the jeans-upright case.
+  it("Samsung/Android EXIF 6: ListWise preview matches eBay bytes with EXIF ignored", async () => {
+    // Stored 64×32 landscape, red on the LEFT. EXIF 6 = 90° CW → ListWise
+    // <img> shows 32×64 portrait with red at the TOP. eBay was showing the
+    // landscape matrix because it ignored/reapplied EXIF differently.
     const source = await jpegFromRgb(64, 32, paintLeftRight(64, 32), 6)
     assert.equal(readJpegExifOrientation(source), 6)
     assert.deepEqual(readJpegStoredSize(source), { width: 64, height: 32 })
 
-    const picker = await pickerDisplay(source)
-    assert.equal(picker.width, 32, "picker visual width")
-    assert.equal(picker.height, 64, "picker visual height")
-    assertColor(picker.top, RED, "picker visual top")
-    assertColor(picker.bottom, BLUE, "picker visual bottom")
+    const listwise = await pickerDisplay(source)
+    assert.equal(listwise.width, 32)
+    assert.equal(listwise.height, 64)
+    assertColor(listwise.top, RED, "ListWise visual top")
+    assertColor(listwise.bottom, BLUE, "ListWise visual bottom")
 
     const ingested = await ingestBytes(source)
-    assert.equal(readJpegExifOrientation(ingested), 6, "ingest must keep EXIF")
+    assert.equal(readJpegExifOrientation(ingested), 6, "original ingest keeps EXIF")
     assert.deepEqual(readJpegStoredSize(ingested), { width: 64, height: 32 })
-    assertSamePickerDisplay(await pickerDisplay(ingested), picker, "ingest")
+    assertSamePickerDisplay(await pickerDisplay(ingested), listwise, "ingest")
 
-    const stored = await normalizeMarketplaceImage(ingested, "image/jpeg")
-    assert.equal(stored.changed, false)
-    assert.equal(stored.strategy, "passthrough")
-    assert.equal(readJpegExifOrientation(stored.buffer), 6, "storage must keep EXIF")
-    assert.equal(stored.width, 64)
-    assert.equal(stored.height, 32)
-    assertSamePickerDisplay(await pickerDisplay(stored.buffer), picker, "stored")
+    const originalCopy = Buffer.from(ingested)
+    const derivative = await normalizeMarketplaceImage(ingested, "image/jpeg")
+    assert.deepEqual(
+      Buffer.from(ingested),
+      originalCopy,
+      "stored original bytes must stay untouched"
+    )
+    assert.equal(derivative.strategy, "bake-display-pixels")
+    assert.equal(derivative.changed, true)
+    assert.equal(derivative.orientationWas, 6)
+    assert.equal(readJpegExifOrientation(derivative.buffer), null)
+    assert.equal(derivative.width, 32)
+    assert.equal(derivative.height, 64)
+
+    const ebaySees = await ebayIgnoredExifDisplay(derivative.buffer)
+    assertSamePickerDisplay(ebaySees, listwise, "eBay EXIF-ignored vs ListWise")
 
     const url = "https://cdn.listwise.test/listing-images/u/originals/jeans.jpg"
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       if (String(input) !== url) return new Response("missing", { status: 404 })
-      return new Response(stored.buffer, {
+      return new Response(ingested, {
         status: 200,
         headers: { "content-type": "image/jpeg" },
       })
@@ -197,16 +247,16 @@ describe("picker-upright camera JPEG (EXIF 6) through the whole pipeline", () =>
 
     const prepared = await normalizeEbayListingPhotoBytes([url])
     assert.equal(prepared.length, 1)
-    assert.equal(prepared[0].normalized.changed, false)
-    assert.equal(readJpegExifOrientation(prepared[0].normalized.buffer), 6)
+    assert.equal(prepared[0].normalized.strategy, "bake-display-pixels")
+    assert.equal(readJpegExifOrientation(prepared[0].normalized.buffer) ?? 1, 1)
     assertSamePickerDisplay(
-      await pickerDisplay(prepared[0].normalized.buffer),
-      picker,
-      "ebay"
+      await ebayIgnoredExifDisplay(prepared[0].normalized.buffer),
+      listwise,
+      "eBay handoff"
     )
   })
 
-  it("keeps every mixed-gallery photo's picker display, including EXIF 3/8", async () => {
+  it("bakes all 6 mixed-gallery photos so EXIF-ignored decode matches ListWise", async () => {
     const files = [
       await jpegFromRgb(64, 40, paintTopBottom(64, 40), 1),
       await jpegFromRgb(64, 32, paintLeftRight(64, 32), 6),
@@ -215,22 +265,23 @@ describe("picker-upright camera JPEG (EXIF 6) through the whole pipeline", () =>
       await jpegFromRgb(40, 40, paintTopBottom(40, 40), 1),
       await jpegFromRgb(48, 72, paintTopBottom(48, 72), 1),
     ]
-    const pickers = await Promise.all(files.map((file) => pickerDisplay(file)))
+    const listwise = await Promise.all(files.map((file) => pickerDisplay(file)))
     const ingested = await Promise.all(files.map((file) => ingestBytes(file)))
-    const stored = await normalizeMarketplaceImages(
+    const derivatives = await normalizeMarketplaceImages(
       ingested.map((buffer) => ({ buffer, contentType: "image/jpeg" }))
     )
-    assert.equal(stored.length, 6)
-    for (const [index, image] of stored.entries()) {
-      assert.equal(image.changed, false, `photo ${index} unchanged`)
+    assert.equal(derivatives.length, 6)
+    for (const [index, image] of derivatives.entries()) {
+      assert.equal(image.strategy, "bake-display-pixels", `photo ${index}`)
+      assert.equal(readJpegExifOrientation(image.buffer), null, `photo ${index} EXIF`)
       assert.equal(
-        readJpegExifOrientation(image.buffer) ?? 1,
+        readJpegExifOrientation(ingested[index]) ?? 1,
         readJpegExifOrientation(files[index]) ?? 1,
-        `photo ${index} EXIF kept`
+        `photo ${index} original EXIF preserved`
       )
       assertSamePickerDisplay(
-        await pickerDisplay(image.buffer),
-        pickers[index],
+        await ebayIgnoredExifDisplay(image.buffer),
+        listwise[index],
         `photo ${index}`
       )
     }
@@ -238,18 +289,21 @@ describe("picker-upright camera JPEG (EXIF 6) through the whole pipeline", () =>
 })
 
 describe("orientation-1 photos are not rotated from aspect ratio", () => {
-  it("keeps portrait and landscape stored size and picker display", async () => {
+  it("keeps portrait and landscape visual size after the eBay bake", async () => {
     const portrait = await jpegFromRgb(32, 64, paintTopBottom(32, 64), 1)
     const landscape = await jpegFromRgb(64, 32, paintTopBottom(64, 32), 1)
     for (const [label, source] of [
       ["portrait", portrait],
       ["landscape", landscape],
     ] as const) {
-      const picker = await pickerDisplay(source)
+      const listwise = await pickerDisplay(source)
       const out = await normalizeMarketplaceImage(source, "image/jpeg")
-      assert.equal(out.changed, false, label)
       assert.equal(readJpegExifOrientation(out.buffer) ?? 1, 1, label)
-      assertSamePickerDisplay(await pickerDisplay(out.buffer), picker, label)
+      assertSamePickerDisplay(
+        await ebayIgnoredExifDisplay(out.buffer),
+        listwise,
+        label
+      )
     }
   })
 })

@@ -229,23 +229,21 @@ async function downloadListingPhoto(
 }
 
 /**
- * Download every listing photo (cover and additional) and return the same
- * bytes ListWise already shows. No orientation transform. Original seller
- * order is preserved.
+ * Download every listing photo (cover and additional) and bake a
+ * marketplace-safe derivative that matches the ListWise preview. Original
+ * stored files are not modified. Seller order is preserved.
  */
 export async function normalizeEbayListingPhotoBytes(
   urls: string[]
 ): Promise<
   Array<{
     sourceUrl: string
-    keepPublicUrl: string | null
     normalized: NormalizedMarketplaceImage
   }>
 > {
   const sources = urls.map((u) => u.trim()).filter(Boolean)
   const fetched: Array<{
     sourceUrl: string
-    keepPublicUrl: string | null
     buffer: Buffer
     contentType: string
   }> = []
@@ -256,7 +254,6 @@ export async function normalizeEbayListingPhotoBytes(
       const parsed = parseImageDataUrl(url)
       fetched.push({
         sourceUrl: url,
-        keepPublicUrl: null,
         buffer: parsed.buffer,
         contentType: parsed.contentType,
       })
@@ -264,11 +261,8 @@ export async function normalizeEbayListingPhotoBytes(
     }
     if (url.startsWith("http://") || url.startsWith("https://")) {
       const downloaded = await downloadListingPhoto(url, i)
-      const keepPublicUrl =
-        url.startsWith("https://") && !isEphemeralOrSignedUrl(url) ? url : null
       fetched.push({
         sourceUrl: url,
-        keepPublicUrl,
         buffer: downloaded.buffer,
         contentType: downloaded.contentType,
       })
@@ -292,7 +286,6 @@ export async function normalizeEbayListingPhotoBytes(
 
   return fetched.map((item, index) => ({
     sourceUrl: item.sourceUrl,
-    keepPublicUrl: item.keepPublicUrl,
     normalized: normalized[index],
   }))
 }
@@ -351,24 +344,21 @@ export async function resolveEbayImageUrls(
     }
   }
 
-  // Pass every photo through unchanged. Cover and additional photos share
-  // this path. Do not rotate, auto-orient, or strip EXIF.
+  // Bake ListWise-preview pixels into an EXIF-free derivative. Never send the
+  // original EXIF-dependent stored file to eBay.
   const normalizedPhotos = await normalizeEbayListingPhotoBytes(orderedSources)
   const toHost: string[] = []
   for (let i = 0; i < normalizedPhotos.length; i++) {
     const photo = normalizedPhotos[i]
-    console.info("[ebay/images] orientation preserve", {
+    console.info("[ebay/images] marketplace derivative", {
       index: i,
       orientationWas: photo.normalized.orientationWas,
       changed: photo.normalized.changed,
+      strategy: photo.normalized.strategy,
       width: photo.normalized.width,
       height: photo.normalized.height,
       contentType: photo.normalized.contentType,
     })
-    if (!photo.normalized.changed && photo.keepPublicUrl) {
-      toHost.push(photo.keepPublicUrl)
-      continue
-    }
     toHost.push(marketplaceImageToDataUrl(photo.normalized))
   }
 

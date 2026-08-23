@@ -130,7 +130,7 @@ function stagingOrThrow(contentType: string, buffer: Buffer): string {
 export async function ensurePublicImageBuffers(
   images: Array<{ buffer: Buffer; contentType: string }>
 ): Promise<string[]> {
-  const out = await mapPool(images, 4, async (image, i) => {
+  const out = await mapPool(images, 1, async (image, i) => {
     if (supabaseStorageConfigured()) {
       return uploadBufferToSupabase(image.buffer, image.contentType, i)
     }
@@ -155,7 +155,7 @@ export async function ensurePublicImageBuffers(
  * 2. Short-lived local staging served at /api/media/staging/:id
  */
 export async function ensurePublicImageUrls(urls: string[]): Promise<string[]> {
-  const out = await mapPool(urls, 4, async (url, i) => {
+  const out = await mapPool(urls, 1, async (url, i) => {
     if (url.startsWith("http://") || url.startsWith("https://")) {
       return url
     }

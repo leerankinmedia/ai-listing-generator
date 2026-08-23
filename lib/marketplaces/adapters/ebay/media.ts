@@ -258,7 +258,8 @@ export async function normalizeEbayListingPhotoBytes(
   }>
 > {
   const sources = urls.map((u) => u.trim()).filter(Boolean)
-  return mapPool(sources, 4, async (url, i) => {
+  // One Sharp job at a time — parallel bake OOMs the Vercel publish function.
+  return mapPool(sources, 1, async (url, i) => {
     let buffer: Buffer
     let contentType: string
     if (url.startsWith("data:")) {
@@ -345,7 +346,8 @@ export async function resolveEbayImageUrls(
     event: "bake_start",
     photoCount: orderedSources.length,
   })
-  const prepared = await mapPool(orderedSources, 4, async (url, i) => {
+  // Sequential bake: never run multiple Sharp jobs at once.
+  const prepared = await mapPool(orderedSources, 1, async (url, i) => {
     checkpoint("image_normalization", {
       event: "bake_photo",
       index: i,
@@ -514,7 +516,7 @@ export async function resolveEbayImageUrls(
 
   const probeStarted = Date.now()
   checkpoint("image_urls", { event: "probe_start", count: payloadUrls.length })
-  const probes: ImageProbe[] = await mapPool(payloadUrls, 4, (url, i) =>
+  const probes: ImageProbe[] = await mapPool(payloadUrls, 1, (url, i) =>
     probeImageUrl(url, i)
   )
   for (const probe of probes) {

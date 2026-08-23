@@ -16,13 +16,11 @@ import {
 } from "@/lib/marketplaces/adapters/ebay/aspects"
 import { ebayShippingPackageBlockMessage } from "@/lib/listings/publish"
 import { listingShippingIntent } from "@/lib/listings/listing-shipping"
-import { shouldClearEbayCustomLabel } from "@/lib/listings/sku"
 import {
   shippingPackageIsComplete,
   toEbayPackageWeightAndSize,
 } from "@/lib/listings/shipping-package"
 import { ensureEbayMerchantLocationKey } from "@/lib/marketplaces/adapters/ebay/location"
-import { awaitAll } from "@/lib/async/map-pool"
 import { resolveEbayImageUrls } from "@/lib/marketplaces/adapters/ebay/media"
 import { isEbayConfigured, refreshEbayToken, ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
 import {
@@ -31,7 +29,6 @@ import {
   serializeEbayPolicyCache,
 } from "@/lib/marketplaces/adapters/ebay/policies"
 import { applyEbayPromotedListing } from "@/lib/marketplaces/adapters/ebay/promoted-listings"
-import { reviseEbayListingClearSku } from "@/lib/marketplaces/adapters/ebay/trading"
 import {
   conditionIdAllowedForCategory,
   conditionEnumForId,
@@ -180,32 +177,9 @@ export const ebayAdapter: MarketplaceAdapter = {
       coverIsIndex0: sourceUrls[0] === cover?.url,
     })
 
-    // Bake images, resolve policies, and verify location in parallel — none
-    // depend on each other. Persist connection meta once afterward.
-    const imagePromise = timer
-      .stage("marketplace_image_normalization", () =>
-        resolveEbayImageUrls(auth.accessToken, sourceUrls)
-      )
-      .then(
-        (urls) => {
-          checkpoint("image_urls", {
-            event: "normalized",
-            photoCount: urls.length,
-          })
-          return urls
-        },
-        (error: unknown) => {
-          checkpoint("image_normalization", {
-            event: "error",
-            message:
-              error instanceof Error ? error.message.slice(0, 180) : "image_failed",
-          })
-          throw error
-        }
-      )
-
-    // 1) Seller-owned Business Policies — match explicit shipping mode
-    // (default: buyer pays calculated). Never silently use free shipping.
+    // Sequential publish order from the last successful eBay listing:
+    // policies → merchant location → image bake/upload/probe.
+    // Do not overlap Sharp work with other publish stages.
     const shippingIntent = listingShippingIntent(listing)
     const shippingMode = shippingIntent.mode
     checkpoint("policy_resolution", {
@@ -232,8 +206,9 @@ export const ebayAdapter: MarketplaceAdapter = {
         listing.specifics.shippingPackage
       ),
     })
-    const policiesPromise = timer
-      .stage("fulfillment_payment_return_policies", () =>
+    const policies = await timer.stage(
+      "fulfillment_payment_return_policies",
+      () =>
         ensureEbayBusinessPolicyIds(auth.accessToken, {
           shippingMode,
           freeShippingConfirmed: shippingIntent.freeShippingConfirmed,
@@ -256,65 +231,46 @@ export const ebayAdapter: MarketplaceAdapter = {
           ),
           policyCache: parseEbayPolicyCache(auth.meta?.ebayPolicyCache),
         })
-      )
-      .then(
-        (resolved) => {
-          checkpoint("policy_resolution", {
-            event: "ok",
-            shippingMode,
-          })
-          return resolved
-        },
-        (error: unknown) => {
-          checkpoint("policy_resolution", {
-            event: "error",
-            message:
-              error instanceof Error
-                ? error.message.slice(0, 180)
-                : "policy_failed",
-          })
-          throw error
-        }
-      )
-    const locationPromise = timer.stage("merchant_location", () =>
-      ensureEbayMerchantLocationKey(auth.accessToken, auth, {
-        postalCode: shippingIntent.itemLocationZip,
-        persistConnection: false,
-      })
     )
+    checkpoint("policy_resolution", {
+      event: "ok",
+      shippingMode,
+    })
+    const nextPolicyCache = serializeEbayPolicyCache(policies.policyCache)
+    if (auth.meta?.ebayPolicyCache !== nextPolicyCache) {
+      auth = {
+        ...auth,
+        meta: { ...auth.meta, ebayPolicyCache: nextPolicyCache },
+        updatedAt: new Date().toISOString(),
+      }
+      await saveConnection(auth)
+    }
 
-    const [imageUrls, policies, locationResult] = await awaitAll([
-      imagePromise,
-      policiesPromise,
-      locationPromise,
-    ])
+    const { merchantLocationKey, connection: withLocation } =
+      await timer.stage("merchant_location", () =>
+        ensureEbayMerchantLocationKey(auth.accessToken, auth, {
+          postalCode: shippingIntent.itemLocationZip,
+        })
+      )
+
+    let imageUrls: string[]
+    try {
+      imageUrls = await timer.stage("marketplace_image_normalization", () =>
+        resolveEbayImageUrls(withLocation.accessToken, sourceUrls)
+      )
+    } catch (error) {
+      checkpoint("image_normalization", {
+        event: "error",
+        message:
+          error instanceof Error ? error.message.slice(0, 180) : "image_failed",
+      })
+      throw error
+    }
     checkpoint("image_urls", {
       event: "ok",
       photoCount: imageUrls.length,
       coverPresent: imageUrls[0] ? 1 : 0,
     })
-    const merchantLocationKey = locationResult.merchantLocationKey
-    const nextPolicyCache = serializeEbayPolicyCache(policies.policyCache)
-    const nextMeta = {
-      ...auth.meta,
-      ...locationResult.connection.meta,
-      ebayPolicyCache: nextPolicyCache,
-      merchantLocationKey,
-    }
-    let withLocation = auth
-    if (
-      auth.meta?.ebayPolicyCache !== nextPolicyCache ||
-      auth.meta?.merchantLocationKey !== merchantLocationKey
-    ) {
-      withLocation = {
-        ...auth,
-        meta: nextMeta,
-        updatedAt: new Date().toISOString(),
-      }
-      await saveConnection(withLocation)
-    } else {
-      withLocation = { ...auth, meta: nextMeta }
-    }
     console.info("[ebay/shipping] publish using fulfillment policy", {
       shippingMode,
       freeShippingConfirmed: shippingIntent.freeShippingConfirmed,
@@ -654,39 +610,13 @@ export const ebayAdapter: MarketplaceAdapter = {
       offerId,
       hasListingId: Boolean(listingId),
     })
-    if (listingId && shouldClearEbayCustomLabel(listing)) {
-      try {
-        const cleared = await timer.stage("clear_custom_label", () =>
-          Promise.race([
-            reviseEbayListingClearSku({
-              accessToken: withLocation.accessToken,
-              itemId: listingId,
-            }),
-            new Promise<{ ok: false; ack: string; error: string }>((resolve) => {
-              setTimeout(
-                () =>
-                  resolve({
-                    ok: false,
-                    ack: "Timeout",
-                    error: "ReviseItem timed out",
-                  }),
-                5000
-              )
-            }),
-          ])
-        )
-        if (!cleared.ok) {
-          console.warn("[ebay/sku] listing Custom Label could not be cleared", {
-            itemId: listingId,
-            error: cleared.error,
-          })
-        }
-      } catch (clearError) {
-        console.warn(
-          "[ebay/sku] Custom Label clear threw; listing stays live",
-          clearError instanceof Error ? clearError.stack : clearError
-        )
-      }
+    // Post-publish Trading ReviseItem Custom Label cleanup is temporarily
+    // disabled. A random Inventory SKU as Custom Label is acceptable until
+    // publish is reliable again.
+    if (listingId) {
+      console.info("[ebay/sku] Custom Label cleanup skipped", {
+        itemId: listingId,
+      })
     }
 
     // Item browse URL follows API/auth env (EBAY_ENVIRONMENT), not marketplaceId or browser host.

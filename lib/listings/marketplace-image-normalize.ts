@@ -4,8 +4,11 @@
  * No rotate(), autoOrient(), EXIF bake, or EXIF strip. Cover and additional
  * photos share this path. Display matches the phone/file picker because the
  * original bytes (including any Orientation tag) are preserved.
+ *
+ * Sharp is loaded lazily and only for optional width/height metadata. A
+ * missing native sharp binary must not fail the /api/listings/publish module
+ * graph (that previously returned a Next.js HTML 500 page).
  */
-import sharp from "sharp"
 import {
   readJpegExifOrientation,
   readJpegStoredSize,
@@ -43,12 +46,13 @@ export async function normalizeMarketplaceImage(
   let height = jpegSize?.height || 0
   let format: string | undefined
   try {
+    const { default: sharp } = await import("sharp")
     const meta = await sharp(input, { failOn: "none", autoOrient: false }).metadata()
     width = width || meta.width || 0
     height = height || meta.height || 0
     format = meta.format
   } catch {
-    /* keep JPEG SOF size when sharp cannot read the buffer */
+    /* keep JPEG SOF size — never fail publish because sharp is unavailable */
   }
 
   return {

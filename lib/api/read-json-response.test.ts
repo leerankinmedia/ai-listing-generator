@@ -40,4 +40,29 @@ describe("readApiJsonResponse", () => {
       /HTTP 413: Request Entity Too Large/
     )
   })
+
+  it("does not dump a Next.js HTML 500 document into the UI", () => {
+    const html = `<!DOCTYPE html><html><head><title>500: Internal Server Error</title></head><body>Application error</body></html>`
+    const message = formatNonJsonApiError(500, html)
+    assert.match(message, /HTTP 500/)
+    assert.match(message, /HTML error page/)
+    assert.equal(message.includes("<!DOCTYPE"), false)
+  })
+
+  it("includes publish stage from JSON error bodies", async () => {
+    const response = new Response(
+      JSON.stringify({
+        error: "Could not load the sharp module",
+        stage: "image_preparation",
+        details: {},
+      }),
+      { status: 500, headers: { "content-type": "application/json" } }
+    )
+    const result = await readApiJsonResponse(response)
+    assert.equal(result.ok, false)
+    if (!result.ok) {
+      assert.match(result.error, /sharp/)
+      assert.match(result.error, /image_preparation/)
+    }
+  })
 })

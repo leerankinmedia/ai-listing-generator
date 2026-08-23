@@ -8,6 +8,7 @@ import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { getConnection, isPhase5Marketplace } from "@/lib/marketplaces/connections/store"
 import { listingCanPublishTo } from "@/lib/listings/publish"
 import { getMarketplace } from "@/lib/marketplaces"
+import { checkpoint } from "@/lib/marketplaces/publish-error"
 
 /**
  * Production publish orchestration.
@@ -66,6 +67,11 @@ export async function publishListingOneClick(
         continue
       }
 
+      checkpoint("publish_request", {
+        marketplaceId,
+        listingId: listing.id,
+        photoCount: listing.images?.length ?? 0,
+      })
       const published = await adapter.publish(listing, connection)
       if (!published.ok || !published.listingRef) {
         results.push({
@@ -102,6 +108,10 @@ export async function publishListingOneClick(
           : error instanceof Error
             ? error.message
             : "Publish failed."
+      console.error("[publish] adapter failed", {
+        marketplaceId,
+        message,
+      })
       results.push({
         marketplaceId,
         ok: false,

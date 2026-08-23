@@ -124,6 +124,16 @@ async function ingestBytes(source: Buffer): Promise<Buffer> {
 }
 
 describe("upload preview must not override picker orientation", () => {
+  it("does not statically import sharp into the publish module graph", () => {
+    const src = readFileSync("lib/listings/marketplace-image-normalize.ts", "utf8")
+    assert.equal(
+      /^\s*import\s+sharp\s+from\s+["']sharp["']/m.test(src),
+      false,
+      "top-level sharp import 500s /api/listings/publish as HTML when the native binary is missing"
+    )
+    assert.match(src, /import\(["']sharp["']\)/)
+  })
+
   it("does not force image-orientation: none on listing photos", () => {
     const css = readFileSync("app/globals.css", "utf8")
     assert.equal(css.includes("image-orientation"), false)

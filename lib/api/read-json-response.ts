@@ -35,11 +35,14 @@ export function formatNonJsonApiError(
   status: number,
   rawText: string
 ): string {
-  const snippet = rawText.replace(/\s+/g, " ").trim().slice(0, 280)
-  if (!snippet) {
+  const trimmed = rawText.replace(/\s+/g, " ").trim()
+  if (!trimmed) {
     return `Request failed with HTTP ${status} and an empty non-JSON response.`
   }
-  return `Request failed with HTTP ${status}: ${snippet}`
+  if (/^<!DOCTYPE/i.test(trimmed) || /<html[\s>]/i.test(trimmed)) {
+    return `Publish failed with HTTP ${status}: the server returned an HTML error page instead of JSON. Check Vercel logs for the first exception at this request.`
+  }
+  return `Request failed with HTTP ${status}: ${trimmed.slice(0, 280)}`
 }
 
 /**
@@ -72,13 +75,17 @@ export async function readApiJsonResponse<T = Record<string, unknown>>(
         (typeof record.error === "string" && record.error) ||
         (typeof record.message === "string" && record.message) ||
         formatNonJsonApiError(response.status, rawText)
+      const stage =
+        typeof record.stage === "string" && record.stage.trim()
+          ? record.stage.trim()
+          : ""
       return {
         ok: false,
         status: response.status,
         contentType,
         data,
         rawText,
-        error: message,
+        error: stage ? `${message} (stage: ${stage})` : message,
       }
     }
     return {

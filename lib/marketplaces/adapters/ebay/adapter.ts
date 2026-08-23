@@ -45,6 +45,7 @@ import {
 import type { MarketplaceAdapter, PublishResult } from "@/lib/marketplaces/adapters/types"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 import { saveConnection } from "@/lib/marketplaces/connections/store"
+import { checkpoint } from "@/lib/marketplaces/publish-error"
 
 async function withFreshToken(connection: StoredMarketplaceConnection) {
   if (!connection.expiresAt) return connection
@@ -156,6 +157,10 @@ export const ebayAdapter: MarketplaceAdapter = {
     // (default: buyer pays calculated). Never silently use free shipping.
     const shippingIntent = listingShippingIntent(listing)
     const shippingMode = shippingIntent.mode
+    checkpoint("fulfillment_policy", {
+      shippingMode,
+      shippingService: shippingIntent.shippingServiceCode,
+    })
     console.info("[ebay/shipping] listing snapshot for fulfillment policy", {
       deliveryMethod: shippingIntent.deliveryMethod,
       shippingMode,
@@ -234,6 +239,10 @@ export const ebayAdapter: MarketplaceAdapter = {
       )
     }
     const cover = listing.images.find((i) => i.isPrimary) || listing.images[0]
+    checkpoint("image_preparation", {
+      photoCount: sourceUrls.length,
+      coverIsIndex0: sourceUrls[0] === cover?.url,
+    })
     console.info("[ebay/images] ListWise gallery order before resolve", {
       count: sourceUrls.length,
       coverUrlPreview: cover?.url?.slice(0, 96) || null,
@@ -490,6 +499,7 @@ export const ebayAdapter: MarketplaceAdapter = {
     })
 
     // 5) Create/replace inventory item (sanitize + log + one 25001 retry)
+    checkpoint("inventory_item", { sku })
     const replaced = await createOrReplaceEbayInventoryItem({
       accessToken: withLocation.accessToken,
       sku,
@@ -519,6 +529,11 @@ export const ebayAdapter: MarketplaceAdapter = {
     })
 
     // 6) Create (or update existing) offer with the verified location key
+    checkpoint("offer", {
+      sku: publishSku,
+      categoryId,
+      fulfillmentPolicyId: policies.fulfillmentPolicyId,
+    })
     console.info("[ebay/publish] pre-publishOffer validation", {
       marketplaceId,
       categoryTreeId: categoryTreeId || null,
@@ -545,6 +560,7 @@ export const ebayAdapter: MarketplaceAdapter = {
     const offerId = await resolveOfferId(withLocation.accessToken, publishSku, offer)
 
     // 7) Publish offer
+    checkpoint("publish_offer", { sku: publishSku, offerId })
     const published = (await ebayFetch(
       `/sell/inventory/v1/offer/${offerId}/publish`,
       withLocation.accessToken,

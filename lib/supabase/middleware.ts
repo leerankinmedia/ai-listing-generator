@@ -34,6 +34,20 @@ export async function updateSession(request: NextRequest) {
   })
 
   // getUser() validates JWT and may rotate cookies via setAll above.
-  await supabase.auth.getUser()
+  // Never throw from middleware on API routes — that becomes a Next.js HTML 500
+  // before /api/listings/publish can return JSON.
+  try {
+    await supabase.auth.getUser()
+  } catch (error) {
+    console.error("[middleware] getUser failed", {
+      path: request.nextUrl.pathname,
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+    })
+    if (request.nextUrl.pathname.startsWith("/api/")) {
+      return supabaseResponse
+    }
+    throw error
+  }
   return supabaseResponse
 }

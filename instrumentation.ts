@@ -2,6 +2,24 @@
  * Log unhandled request errors so Vercel shows the real exception, not only
  * the Next.js HTML 500 document the browser receives.
  */
+export async function register() {
+  if (process.env.NEXT_RUNTIME === "edge") return
+  process.on("unhandledRejection", (reason) => {
+    console.error("[instrumentation] unhandledRejection", {
+      name: reason instanceof Error ? reason.name : typeof reason,
+      message: reason instanceof Error ? reason.message : String(reason),
+      stack: reason instanceof Error ? reason.stack : undefined,
+    })
+  })
+  process.on("uncaughtException", (error) => {
+    console.error("[instrumentation] uncaughtException", {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    })
+  })
+}
+
 export async function onRequestError(
   error: unknown,
   request: { path?: string; method?: string },

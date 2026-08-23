@@ -5,33 +5,57 @@
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
 
 export const PUBLISH_STAGES = [
-  "publish_request",
-  "image_preparation",
+  "request/auth",
+  "listing_load",
+  "image_normalization",
+  "image_urls",
+  "policy_resolution",
   "inventory_item",
-  "fulfillment_policy",
-  "offer",
+  "offer_create",
   "publish_offer",
+  "post_publish_save",
 ] as const
 
 export type PublishStage = (typeof PUBLISH_STAGES)[number]
+
+const STAGE_ALIASES: Record<string, PublishStage> = {
+  publish_request: "request/auth",
+  image_preparation: "image_normalization",
+  fulfillment_policy: "policy_resolution",
+  offer: "offer_create",
+}
 
 export type PublishTrace = {
   stage: PublishStage
   details: Record<string, unknown>
 }
 
-let trace: PublishTrace = { stage: "publish_request", details: {} }
+let trace: PublishTrace = { stage: "request/auth", details: {} }
 
 export function resetPublishTrace() {
-  trace = { stage: "publish_request", details: {} }
+  trace = { stage: "request/auth", details: {} }
 }
 
 export function checkpoint(
-  stage: PublishStage,
+  stage: PublishStage | keyof typeof STAGE_ALIASES,
   details: Record<string, unknown> = {}
 ) {
-  trace = { stage, details }
-  console.info("[ebay/publish] checkpoint", { stage, ...details })
+  const mapped = (STAGE_ALIASES[stage] || stage) as PublishStage
+  const safeDetails: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(details)) {
+    if (
+      value === null ||
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      safeDetails[key] = value
+    } else if (Array.isArray(value)) {
+      safeDetails[key] = value.length
+    }
+  }
+  trace = { stage: mapped, details: safeDetails }
+  console.info("[publish-stage]", { stage: mapped, ...safeDetails })
 }
 
 export function currentPublishTrace(): PublishTrace {

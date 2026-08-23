@@ -174,22 +174,42 @@ export const ebayAdapter: MarketplaceAdapter = {
       )
     }
     const cover = listing.images.find((i) => i.isPrimary) || listing.images[0]
-    checkpoint("image_preparation", {
+    checkpoint("image_normalization", {
+      event: "start",
       photoCount: sourceUrls.length,
       coverIsIndex0: sourceUrls[0] === cover?.url,
     })
 
     // Bake images, resolve policies, and verify location in parallel — none
     // depend on each other. Persist connection meta once afterward.
-    const imagePromise = timer.stage("marketplace_image_normalization", () =>
-      resolveEbayImageUrls(auth.accessToken, sourceUrls)
-    )
+    const imagePromise = timer
+      .stage("marketplace_image_normalization", () =>
+        resolveEbayImageUrls(auth.accessToken, sourceUrls)
+      )
+      .then(
+        (urls) => {
+          checkpoint("image_urls", {
+            event: "normalized",
+            photoCount: urls.length,
+          })
+          return urls
+        },
+        (error: unknown) => {
+          checkpoint("image_normalization", {
+            event: "error",
+            message:
+              error instanceof Error ? error.message.slice(0, 180) : "image_failed",
+          })
+          throw error
+        }
+      )
 
     // 1) Seller-owned Business Policies — match explicit shipping mode
     // (default: buyer pays calculated). Never silently use free shipping.
     const shippingIntent = listingShippingIntent(listing)
     const shippingMode = shippingIntent.mode
-    checkpoint("fulfillment_policy", {
+    checkpoint("policy_resolution", {
+      event: "start",
       shippingMode,
       shippingService: shippingIntent.shippingServiceCode,
     })
@@ -212,28 +232,50 @@ export const ebayAdapter: MarketplaceAdapter = {
         listing.specifics.shippingPackage
       ),
     })
-    const policiesPromise = timer.stage("fulfillment_payment_return_policies", () =>
-      ensureEbayBusinessPolicyIds(auth.accessToken, {
-      shippingMode,
-      freeShippingConfirmed: shippingIntent.freeShippingConfirmed,
-      flatShippingAmount: shippingIntent.flatAmount ?? undefined,
-      handlingTimeDays: shippingIntent.handlingTimeDays,
-      shippingServiceCode: shippingIntent.shippingServiceCode,
-      categoryId: listing.specifics.ebayCategory?.categoryId,
-      categoryName: listing.specifics.ebayCategory?.categoryName,
-      categoryPath: listing.specifics.ebayCategory?.categoryPath,
-      listingCategory: listing.specifics.category,
-      listingTitle: listing.title,
-      listingPrice: listing.price,
-      listingCurrency: listing.currency,
-      shippingPackage: listing.specifics.shippingPackage || null,
-      returnsAccepted: shippingIntent.returnsAccepted,
-      returnWindowDays: shippingIntent.returnWindowDays,
-      returnShippingPaidBy: shippingIntent.returnShippingPaidBy,
-      requireImmediatePayment: Boolean(listing.specifics.requireImmediatePayment),
-      policyCache: parseEbayPolicyCache(auth.meta?.ebayPolicyCache),
-      })
-    )
+    const policiesPromise = timer
+      .stage("fulfillment_payment_return_policies", () =>
+        ensureEbayBusinessPolicyIds(auth.accessToken, {
+          shippingMode,
+          freeShippingConfirmed: shippingIntent.freeShippingConfirmed,
+          flatShippingAmount: shippingIntent.flatAmount ?? undefined,
+          handlingTimeDays: shippingIntent.handlingTimeDays,
+          shippingServiceCode: shippingIntent.shippingServiceCode,
+          categoryId: listing.specifics.ebayCategory?.categoryId,
+          categoryName: listing.specifics.ebayCategory?.categoryName,
+          categoryPath: listing.specifics.ebayCategory?.categoryPath,
+          listingCategory: listing.specifics.category,
+          listingTitle: listing.title,
+          listingPrice: listing.price,
+          listingCurrency: listing.currency,
+          shippingPackage: listing.specifics.shippingPackage || null,
+          returnsAccepted: shippingIntent.returnsAccepted,
+          returnWindowDays: shippingIntent.returnWindowDays,
+          returnShippingPaidBy: shippingIntent.returnShippingPaidBy,
+          requireImmediatePayment: Boolean(
+            listing.specifics.requireImmediatePayment
+          ),
+          policyCache: parseEbayPolicyCache(auth.meta?.ebayPolicyCache),
+        })
+      )
+      .then(
+        (resolved) => {
+          checkpoint("policy_resolution", {
+            event: "ok",
+            shippingMode,
+          })
+          return resolved
+        },
+        (error: unknown) => {
+          checkpoint("policy_resolution", {
+            event: "error",
+            message:
+              error instanceof Error
+                ? error.message.slice(0, 180)
+                : "policy_failed",
+          })
+          throw error
+        }
+      )
     const locationPromise = timer.stage("merchant_location", () =>
       ensureEbayMerchantLocationKey(auth.accessToken, auth, {
         postalCode: shippingIntent.itemLocationZip,
@@ -246,6 +288,11 @@ export const ebayAdapter: MarketplaceAdapter = {
       policiesPromise,
       locationPromise,
     ])
+    checkpoint("image_urls", {
+      event: "ok",
+      photoCount: imageUrls.length,
+      coverPresent: imageUrls[0] ? 1 : 0,
+    })
     const merchantLocationKey = locationResult.merchantLocationKey
     const nextPolicyCache = serializeEbayPolicyCache(policies.policyCache)
     const nextMeta = {
@@ -523,7 +570,7 @@ export const ebayAdapter: MarketplaceAdapter = {
     })
 
     // 5) Create/replace inventory item (sanitize + log + one 25001 retry)
-    checkpoint("inventory_item", { sku })
+    checkpoint("inventory_item", { event: "start", sku })
     const replaced = await timer.stage("inventory_item_put", () =>
       createOrReplaceEbayInventoryItem({
         accessToken: withLocation.accessToken,
@@ -532,6 +579,7 @@ export const ebayAdapter: MarketplaceAdapter = {
       })
     )
     const publishSku = replaced.sku
+    checkpoint("inventory_item", { event: "ok", sku: publishSku })
 
     const offer = mapListingToEbayOffer(
       {
@@ -555,7 +603,8 @@ export const ebayAdapter: MarketplaceAdapter = {
     })
 
     // 6) Create (or update existing) offer with the verified location key
-    checkpoint("offer", {
+    checkpoint("offer_create", {
+      event: "start",
       sku: publishSku,
       categoryId,
       fulfillmentPolicyId: policies.fulfillmentPolicyId,
@@ -586,9 +635,10 @@ export const ebayAdapter: MarketplaceAdapter = {
     const offerId = await timer.stage("offer_create", () =>
       resolveOfferId(withLocation.accessToken, publishSku, offer)
     )
+    checkpoint("offer_create", { event: "ok", sku: publishSku, offerId })
 
     // 7) Publish offer
-    checkpoint("publish_offer", { sku: publishSku, offerId })
+    checkpoint("publish_offer", { event: "start", sku: publishSku, offerId })
     const published = await timer.stage("publish_offer", () =>
       ebayFetch(
         `/sell/inventory/v1/offer/${offerId}/publish`,
@@ -598,6 +648,12 @@ export const ebayAdapter: MarketplaceAdapter = {
     ) as { listingId?: string }
 
     const listingId = published.listingId
+    checkpoint("publish_offer", {
+      event: listingId ? "ok" : "error",
+      sku: publishSku,
+      offerId,
+      hasListingId: Boolean(listingId),
+    })
     if (listingId && shouldClearEbayCustomLabel(listing)) {
       try {
         const cleared = await timer.stage("clear_custom_label", () =>

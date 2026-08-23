@@ -87,7 +87,7 @@ function redirectPreservingQuery(request: NextRequest, pathname: string) {
  * subscription status is trialing or active. BILLING_ENFORCEMENT does not
  * gate those paid features (it only reserves account-wide redirect behavior).
  */
-export async function middleware(request: NextRequest) {
+async function runMiddleware(request: NextRequest) {
   const { pathname, searchParams } = request.nextUrl
 
   // Temporary safe diagnostics for the eBay OAuth round-trip.
@@ -160,6 +160,34 @@ export async function middleware(request: NextRequest) {
   // Auth requirement for /dashboard is handled by page-level client checks.
   // Do not hard-redirect for missing subscriptions (preview-first trial flow).
   return response
+}
+
+export async function middleware(request: NextRequest) {
+  try {
+    return await runMiddleware(request)
+  } catch (error) {
+    console.error("[middleware] unhandled exception", {
+      path: request.nextUrl.pathname,
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    })
+    if (request.nextUrl.pathname.startsWith("/api/")) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Request failed before the API handler started.",
+          code: "middleware_exception",
+          stage: "request/auth",
+        },
+        {
+          status: 500,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        }
+      )
+    }
+    throw error
+  }
 }
 
 export const config = {

@@ -42,10 +42,11 @@ describe("readApiJsonResponse", () => {
   })
 
   it("does not dump a Next.js HTML 500 document into the UI", () => {
-    const html = `<!DOCTYPE html><html><head><title>500: Internal Server Error</title></head><body>Application error</body></html>`
+    const html = `<!DOCTYPE html><html><head><title>500: Internal Server Error</title></head><body>FUNCTION_INVOCATION_FAILED Application error</body></html>`
     const message = formatNonJsonApiError(500, html)
     assert.match(message, /HTTP 500/)
     assert.match(message, /HTML error page/)
+    assert.match(message, /FUNCTION_INVOCATION_FAILED/)
     assert.equal(message.includes("<!DOCTYPE"), false)
   })
 

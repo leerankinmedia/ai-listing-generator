@@ -40,7 +40,13 @@ export function formatNonJsonApiError(
     return `Request failed with HTTP ${status} and an empty non-JSON response.`
   }
   if (/^<!DOCTYPE/i.test(trimmed) || /<html[\s>]/i.test(trimmed)) {
-    return `Publish failed with HTTP ${status}: the server returned an HTML error page instead of JSON. Check Vercel logs for the first exception at this request.`
+    const platform = trimmed.match(
+      /FUNCTION_INVOCATION_(?:FAILED|TIMEOUT)|A server error has occurred|Request Entity Too Large/i
+    )
+    const hint = platform
+      ? ` Vercel platform code: ${platform[0]}.`
+      : ""
+    return `Publish failed with HTTP ${status}: the server returned an HTML error page instead of JSON.${hint} Check Vercel logs for the first exception and the last [publish-stage] line at this request.`
   }
   return `Request failed with HTTP ${status}: ${trimmed.slice(0, 280)}`
 }

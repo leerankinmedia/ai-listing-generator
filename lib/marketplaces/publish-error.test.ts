@@ -11,11 +11,11 @@ import {
 describe("publish JSON failure payload", () => {
   it("includes the last checkpoint stage instead of an HTML page", () => {
     resetPublishTrace()
-    checkpoint("image_preparation", { photoCount: 6 })
+    checkpoint("image_normalization", { photoCount: 6 })
     const body = publishFailureBody(
       new Error("Could not load the sharp module using the linux-x64 runtime")
     )
-    assert.equal(body.stage, "image_preparation")
+    assert.equal(body.stage, "image_normalization")
     assert.equal(body.details.photoCount, 6)
     assert.match(body.error, /sharp|image converter/i)
     assert.equal(typeof body.error, "string")
@@ -40,11 +40,11 @@ ERR_DLOPEN_FAILED: libvips-cpp.so.8.18.3: cannot open shared object file`
 
   it("surfaces MarketplaceError code in details", () => {
     resetPublishTrace()
-    checkpoint("offer", { sku: "LW1" })
+    checkpoint("offer_create", { sku: "LW1" })
     const body = publishFailureBody(
       new MarketplaceError("eBay rejected the offer.", "ebay_offer_rejected", 400)
     )
-    assert.equal(body.stage, "offer")
+    assert.equal(body.stage, "offer_create")
     assert.equal(body.details.code, "ebay_offer_rejected")
     assert.equal(body.error, "eBay rejected the offer.")
   })
@@ -53,16 +53,30 @@ ERR_DLOPEN_FAILED: libvips-cpp.so.8.18.3: cannot open shared object file`
 describe("publish route always returns JSON", () => {
   it("builds a JSON-serializable ok:false payload with stack logged separately", () => {
     resetPublishTrace()
-    checkpoint("publish_request", { path: "/api/listings/publish" })
+    checkpoint("request/auth", { path: "/api/listings/publish" })
     const body = publishFailureBody(new Error("boom"))
     const wire = {
       ok: false,
       error: body.error,
       code: body.details.code || "publish_failed",
       details: body.details,
+      stage: body.stage,
     }
     assert.doesNotThrow(() => JSON.stringify(wire))
     assert.equal(JSON.parse(JSON.stringify(wire)).ok, false)
     assert.equal(JSON.parse(JSON.stringify(wire)).error, "boom")
+    assert.equal(JSON.parse(JSON.stringify(wire)).stage, "request/auth")
+  })
+
+  it("maps legacy checkpoint names onto the production stage list", () => {
+    resetPublishTrace()
+    checkpoint("publish_request", { path: "/api/listings/publish" })
+    assert.equal(publishFailureBody(new Error("x")).stage, "request/auth")
+    checkpoint("image_preparation", { photoCount: 2 })
+    assert.equal(publishFailureBody(new Error("x")).stage, "image_normalization")
+    checkpoint("fulfillment_policy", { shippingMode: "calculated" })
+    assert.equal(publishFailureBody(new Error("x")).stage, "policy_resolution")
+    checkpoint("offer", { sku: "LW1" })
+    assert.equal(publishFailureBody(new Error("x")).stage, "offer_create")
   })
 })

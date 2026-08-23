@@ -7,6 +7,7 @@ import {
 import { upsertSupabaseListingServer } from "@/lib/listings/supabase-repo"
 import {
   checkpoint,
+  currentPublishTrace,
   publishFailureBody,
   resetPublishTrace,
 } from "@/lib/marketplaces/publish-error"
@@ -73,6 +74,7 @@ function publishErrorJson(error: unknown, status = 500) {
         error: "Publish failed.",
         code: "publish_failed",
         details: fallback instanceof Error ? fallback.message : "unknown",
+        stage: currentPublishTrace().stage,
       },
       500
     )
@@ -87,7 +89,7 @@ function publishErrorJson(error: unknown, status = 500) {
  */
 export async function POST(request: Request) {
   resetPublishTrace()
-  checkpoint("publish_request", { path: "/api/listings/publish" })
+  checkpoint("request/auth", { event: "start", path: "/api/listings/publish" })
   try {
     const user = await getServerAuthUser()
     if (!user) {
@@ -97,11 +99,12 @@ export async function POST(request: Request) {
           error: "Unauthorized.",
           code: "unauthorized",
           details: { code: "unauthorized" },
-          stage: "publish_request",
+          stage: "request/auth",
         },
         401
       )
     }
+    checkpoint("request/auth", { event: "ok", authenticated: true })
 
     const access = await checkSubscriptionAccess(user.id, user.email)
     if (!access.allowed) {
@@ -111,7 +114,7 @@ export async function POST(request: Request) {
           error: "Start your 7-day free trial to unlock this feature.",
           code: "subscription_required",
           details: { code: "subscription_required" },
-          stage: "publish_request",
+          stage: "request/auth",
         },
         402
       )
@@ -130,7 +133,7 @@ export async function POST(request: Request) {
           error: "Publish request body must be JSON.",
           code: "invalid_json",
           details: { code: "invalid_json" },
-          stage: "publish_request",
+          stage: "request/auth",
         },
         400
       )
@@ -143,13 +146,14 @@ export async function POST(request: Request) {
           error: "listing and marketplaceIds are required.",
           code: "missing_listing",
           details: { code: "missing_listing" },
-          stage: "publish_request",
+          stage: "listing_load",
         },
         400
       )
     }
 
-    checkpoint("publish_request", {
+    checkpoint("listing_load", {
+      event: "start",
       listingId: body.listing.id,
       marketplaceIds: body.marketplaceIds,
       photoCount: body.listing.images?.length ?? 0,
@@ -163,9 +167,25 @@ export async function POST(request: Request) {
 
     // Dynamic import keeps native sharp out of the route module graph. A failed
     // sharp load used to 500 this endpoint as a Next.js HTML document.
-    const { publishListingOneClick } = await import(
-      "@/lib/marketplaces/publish-service"
-    )
+    let publishListingOneClick: typeof import("@/lib/marketplaces/publish-service").publishListingOneClick
+    try {
+      ;({ publishListingOneClick } = await import(
+        "@/lib/marketplaces/publish-service"
+      ))
+    } catch (loadError) {
+      checkpoint("listing_load", {
+        event: "error",
+        reason: "publish_service_import",
+        message:
+          loadError instanceof Error ? loadError.message.slice(0, 180) : "import_failed",
+      })
+      console.error(
+        "[publish] failed to load publish-service",
+        loadError instanceof Error ? loadError.stack : loadError
+      )
+      throw loadError
+    }
+    checkpoint("listing_load", { event: "ok", listingId: listingForUser.id })
 
     const results = await publishListingOneClick(
       listingForUser,
@@ -174,6 +194,10 @@ export async function POST(request: Request) {
 
     let savedListing: Listing | null = null
     if (publishResultsIncludeSuccess(results)) {
+      checkpoint("post_publish_save", {
+        event: "start",
+        listingId: listingForUser.id,
+      })
       const next = applyPublishResultsToListing(
         listingForUser,
         results,
@@ -191,12 +215,24 @@ export async function POST(request: Request) {
               .map((m) => `${m.marketplaceId}:${m.externalId || "none"}`)
               .join(","),
           })
+          checkpoint("post_publish_save", {
+            event: "ok",
+            listingId: savedListing.id,
+          })
         } catch (persistError) {
+          checkpoint("post_publish_save", {
+            event: "error",
+            message:
+              persistError instanceof Error
+                ? persistError.message.slice(0, 180)
+                : "persist_failed",
+          })
           console.error("[publish] failed to upsert listed listing", persistError)
           savedListing = next
         }
       } else {
         savedListing = next
+        checkpoint("post_publish_save", { event: "ok", persisted: false })
       }
     }
 

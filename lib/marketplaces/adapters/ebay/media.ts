@@ -1,6 +1,7 @@
 import { createHash } from "crypto"
 import { mapPool } from "@/lib/async/map-pool"
 import { MarketplaceError } from "@/lib/marketplaces/adapters/types"
+import { checkpoint } from "@/lib/marketplaces/publish-error"
 import { ensurePublicImageBuffers } from "@/lib/marketplaces/images/ensure-public-urls"
 import { ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
 import {
@@ -340,7 +341,16 @@ export async function resolveEbayImageUrls(
   // original EXIF-dependent stored file (`originals/`) to eBay. Republish may
   // reuse an already-baked `/publish/` URL without downloading it again.
   const bakeStarted = Date.now()
+  checkpoint("image_normalization", {
+    event: "bake_start",
+    photoCount: orderedSources.length,
+  })
   const prepared = await mapPool(orderedSources, 4, async (url, i) => {
+    checkpoint("image_normalization", {
+      event: "bake_photo",
+      index: i,
+      reuse: isAlreadyBakedMarketplaceUrl(url),
+    })
     if (isAlreadyBakedMarketplaceUrl(url)) {
       console.info("[ebay/images] reusing marketplace-safe derivative", {
         index: i,
@@ -390,6 +400,11 @@ export async function resolveEbayImageUrls(
     reused: prepared.filter((row) => row.kind === "reuse").length,
     baked: prepared.filter((row) => row.kind === "baked").length,
   })
+  checkpoint("image_normalization", {
+    event: "bake_ok",
+    reused: prepared.filter((row) => row.kind === "reuse").length,
+    baked: prepared.filter((row) => row.kind === "baked").length,
+  })
 
   const resultUrls = new Array<string>(prepared.length)
   const toUpload: Array<{ index: number; buffer: Buffer; contentType: string }> =
@@ -408,6 +423,7 @@ export async function resolveEbayImageUrls(
   }
 
   const uploadStarted = Date.now()
+  checkpoint("image_urls", { event: "upload_start", count: toUpload.length })
   if (toUpload.length > 0) {
     let uploaded: string[]
     try {
@@ -497,6 +513,7 @@ export async function resolveEbayImageUrls(
   }
 
   const probeStarted = Date.now()
+  checkpoint("image_urls", { event: "probe_start", count: payloadUrls.length })
   const probes: ImageProbe[] = await mapPool(payloadUrls, 4, (url, i) =>
     probeImageUrl(url, i)
   )

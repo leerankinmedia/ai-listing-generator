@@ -271,6 +271,8 @@ export interface OneClickPublishResult {
   ok: boolean
   status: "published" | "queued" | "skipped" | "error"
   message: string
+  /** Last publish stage when ok is false — never rely on an HTML 500 page. */
+  stage?: string
   listingRef?: MarketplaceListingRef
   /** eBay (and similar) required item specifics the seller must fill before retry */
   requiredFields?: Array<{

@@ -12,10 +12,15 @@ export async function GET() {
     process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ||
     null
 
-  let sharp: { ok: true; versions: unknown } | { ok: false; error: string }
+  let sharp: { ok: true; sharp: string; vips: string } | { ok: false; error: string }
   try {
     const { default: sharpModule } = await import("sharp")
-    sharp = { ok: true, versions: sharpModule.versions }
+    const versions = sharpModule.versions as { sharp?: string; vips?: string }
+    sharp = {
+      ok: true,
+      sharp: String(versions.sharp || "0.35.3"),
+      vips: String(versions.vips || ""),
+    }
   } catch {
     sharp = {
       ok: false,

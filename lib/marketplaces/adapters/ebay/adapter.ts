@@ -22,6 +22,7 @@ import {
   toEbayPackageWeightAndSize,
 } from "@/lib/listings/shipping-package"
 import { ensureEbayMerchantLocationKey } from "@/lib/marketplaces/adapters/ebay/location"
+import { awaitAll } from "@/lib/async/map-pool"
 import { resolveEbayImageUrls } from "@/lib/marketplaces/adapters/ebay/media"
 import { isEbayConfigured, refreshEbayToken, ebayEnv } from "@/lib/marketplaces/adapters/ebay/oauth"
 import {
@@ -240,7 +241,7 @@ export const ebayAdapter: MarketplaceAdapter = {
       })
     )
 
-    const [imageUrls, policies, locationResult] = await Promise.all([
+    const [imageUrls, policies, locationResult] = await awaitAll([
       imagePromise,
       policiesPromise,
       locationPromise,
@@ -598,17 +599,37 @@ export const ebayAdapter: MarketplaceAdapter = {
 
     const listingId = published.listingId
     if (listingId && shouldClearEbayCustomLabel(listing)) {
-      const cleared = await timer.stage("clear_custom_label", () =>
-        reviseEbayListingClearSku({
-          accessToken: withLocation.accessToken,
-          itemId: listingId,
-        })
-      )
-      if (!cleared.ok) {
-        console.warn("[ebay/sku] listing Custom Label could not be cleared", {
-          itemId: listingId,
-          error: cleared.error,
-        })
+      try {
+        const cleared = await timer.stage("clear_custom_label", () =>
+          Promise.race([
+            reviseEbayListingClearSku({
+              accessToken: withLocation.accessToken,
+              itemId: listingId,
+            }),
+            new Promise<{ ok: false; ack: string; error: string }>((resolve) => {
+              setTimeout(
+                () =>
+                  resolve({
+                    ok: false,
+                    ack: "Timeout",
+                    error: "ReviseItem timed out",
+                  }),
+                5000
+              )
+            }),
+          ])
+        )
+        if (!cleared.ok) {
+          console.warn("[ebay/sku] listing Custom Label could not be cleared", {
+            itemId: listingId,
+            error: cleared.error,
+          })
+        }
+      } catch (clearError) {
+        console.warn(
+          "[ebay/sku] Custom Label clear threw; listing stays live",
+          clearError instanceof Error ? clearError.stack : clearError
+        )
       }
     }
 

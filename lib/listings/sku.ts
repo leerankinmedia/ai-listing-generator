@@ -74,7 +74,7 @@ export function allocateNextListWiseSku(): string {
  * Prefer imported eBay SKU / saved ListWise SKU. Never use listing UUID.
  */
 export function resolveListingSku(listing: Listing): string | null {
-  const extras = listing.specifics.extras || {}
+  const extras = listing.specifics?.extras || {}
   const candidates = [
     extras.ebayOriginalSku,
     extras.ebaySku,
@@ -102,7 +102,7 @@ export function ensureListingInventorySku(
 ): Listing {
   const existing = resolveListingSku(listing)
   if (existing) {
-    const extras = { ...(listing.specifics.extras || {}) }
+    const extras = { ...(listing.specifics?.extras || {}) }
     if (extras.sku !== existing) {
       extras.sku = existing
       return {
@@ -167,7 +167,7 @@ export function sellerFacingCustomLabel(listing: Listing): string | null {
  * extras.sku or treat it as a Custom Label.
  */
 export function internalInventorySku(listing: Listing): string {
-  const stored = listing.specifics.extras?.ebayInventorySku?.trim()
+  const stored = listing.specifics?.extras?.ebayInventorySku?.trim()
   if (stored && isEbayInventoryApiSku(stored)) return stored
   const seller = sellerFacingCustomLabel(listing)
   if (seller) return seller

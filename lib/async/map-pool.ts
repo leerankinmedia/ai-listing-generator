@@ -1,3 +1,16 @@
+/**
+ * Await every promise. Attach a no-op rejection handler first so a sibling
+ * failure cannot become an unhandledRejection (Vercel turns those into HTML 500s).
+ */
+export async function awaitAll<T extends readonly unknown[]>(
+  promises: [...{ [K in keyof T]: Promise<T[K]> }]
+): Promise<T> {
+  for (const promise of promises) {
+    void promise.catch(() => undefined)
+  }
+  return Promise.all(promises) as Promise<T>
+}
+
 /** Bounded parallel map that preserves input order. */
 export async function mapPool<T, R>(
   items: readonly T[],
@@ -17,6 +30,6 @@ export async function mapPool<T, R>(
     }
   }
 
-  await Promise.all(Array.from({ length: limit }, () => worker()))
-  return out
+  const workers = Array.from({ length: limit }, () => worker())
+  return awaitAll(workers).then(() => out)
 }

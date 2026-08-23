@@ -18,4 +18,26 @@ describe("mapPool", () => {
     const out = await mapPool([], 4, async (n: number) => n)
     assert.deepEqual(out, [])
   })
+
+  it("does not leave sibling rejections unhandled", async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason)
+    }
+    process.on("unhandledRejection", onUnhandled)
+    try {
+      await assert.rejects(
+        mapPool([1, 2, 3], 3, async (n) => {
+          if (n !== 1) throw new Error(`fail-${n}`)
+          await new Promise((resolve) => setTimeout(resolve, 20))
+          return n
+        }),
+        /fail-/
+      )
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      assert.equal(unhandled.length, 0)
+    } finally {
+      process.off("unhandledRejection", onUnhandled)
+    }
+  })
 })

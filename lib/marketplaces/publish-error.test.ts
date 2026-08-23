@@ -49,3 +49,20 @@ ERR_DLOPEN_FAILED: libvips-cpp.so.8.18.3: cannot open shared object file`
     assert.equal(body.error, "eBay rejected the offer.")
   })
 })
+
+describe("publish route always returns JSON", () => {
+  it("builds a JSON-serializable ok:false payload with stack logged separately", () => {
+    resetPublishTrace()
+    checkpoint("publish_request", { path: "/api/listings/publish" })
+    const body = publishFailureBody(new Error("boom"))
+    const wire = {
+      ok: false,
+      error: body.error,
+      code: body.details.code || "publish_failed",
+      details: body.details,
+    }
+    assert.doesNotThrow(() => JSON.stringify(wire))
+    assert.equal(JSON.parse(JSON.stringify(wire)).ok, false)
+    assert.equal(JSON.parse(JSON.stringify(wire)).error, "boom")
+  })
+})

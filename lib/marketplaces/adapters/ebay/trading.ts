@@ -63,26 +63,34 @@ export async function reviseEbayListingClearSku(input: {
 
   let lastError = "ReviseItem failed"
   let lastAck = ""
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const response = await tradingCall({
-      accessToken: input.accessToken,
-      callName: "ReviseItem",
-      body: buildReviseItemClearSkuXml(itemId),
-    })
-    lastAck = xmlText(response.xml, "Ack") || ""
-    const short = xmlText(response.xml, "ShortMessage")
-    const long = xmlText(response.xml, "LongMessage")
-    lastError = long || short || `Trading ReviseItem HTTP ${response.status}`
-    if (/success|warning/i.test(lastAck)) {
-      console.info("[ebay/sku] cleared listing Custom Label", {
-        itemId,
-        ack: lastAck,
-        attempt,
+  try {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const response = await tradingCall({
+        accessToken: input.accessToken,
+        callName: "ReviseItem",
+        body: buildReviseItemClearSkuXml(itemId),
       })
-      return { ok: true, ack: lastAck }
+      lastAck = xmlText(response.xml, "Ack") || ""
+      const short = xmlText(response.xml, "ShortMessage")
+      const long = xmlText(response.xml, "LongMessage")
+      lastError = long || short || `Trading ReviseItem HTTP ${response.status}`
+      if (/success|warning/i.test(lastAck)) {
+        console.info("[ebay/sku] cleared listing Custom Label", {
+          itemId,
+          ack: lastAck,
+          attempt,
+        })
+        return { ok: true, ack: lastAck }
+      }
+      if (attempt < 3) {
+        await sleep(400 * attempt)
+      }
     }
-    if (attempt < 3) {
-      await sleep(400 * attempt)
+  } catch (error) {
+    return {
+      ok: false,
+      ack: lastAck || "Failure",
+      error: error instanceof Error ? error.message : "ReviseItem failed",
     }
   }
   return { ok: false, ack: lastAck || "Failure", error: lastError }

@@ -26,6 +26,10 @@ describe("Vercel / Next.js Sharp runtime for eBay bake", () => {
       assert.match(src, /export const runtime = ["']nodejs["']/, path)
       assert.equal(src.includes('runtime = "edge"'), false, path)
     }
+    const publish = readFileSync("app/api/listings/publish/route.ts", "utf8")
+    assert.match(publish, /ok:\s*false/)
+    assert.match(publish, /content-type": "application\/json/)
+    assert.match(publish, /publishErrorJson/)
   })
 
   it("does not fall back to the original EXIF file when Sharp fails", () => {

@@ -20,11 +20,70 @@ import type { Listing, MarketplaceId } from "@/lib/types"
 export const runtime = "nodejs"
 export const maxDuration = 300
 
+function publishJson(body: unknown, status = 200) {
+  try {
+    return new NextResponse(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    })
+  } catch (error) {
+    console.error("[publish] response serialize failed", error)
+    return new NextResponse(
+      JSON.stringify({
+        ok: false,
+        error: "Publish failed.",
+        code: "publish_response_unserializable",
+        details:
+          error instanceof Error ? error.message : "Could not serialize response.",
+      }),
+      {
+        status: 500,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }
+    )
+  }
+}
+
+function publishErrorJson(error: unknown, status = 500) {
+  try {
+    if (error instanceof Error && error.stack) {
+      console.error("[publish] exception stack", error.stack)
+    } else {
+      console.error("[publish] exception", error)
+    }
+    const payload = publishFailureBody(error)
+    const code =
+      (typeof payload.details.code === "string" && payload.details.code) ||
+      "publish_failed"
+    return publishJson(
+      {
+        ok: false,
+        error: payload.error,
+        code,
+        details: payload.details,
+        stage: payload.stage,
+      },
+      status
+    )
+  } catch (fallback) {
+    console.error("[publish] error payload failed", fallback, error)
+    return publishJson(
+      {
+        ok: false,
+        error: "Publish failed.",
+        code: "publish_failed",
+        details: fallback instanceof Error ? fallback.message : "unknown",
+      },
+      500
+    )
+  }
+}
+
 /**
  * One-click multi-marketplace publish endpoint.
  * Only publishes through real adapters for connected marketplaces.
  * On success, upserts the listing (status listed + marketplace refs) for the auth user.
- * Failures always return JSON { error, stage, details } — never a Next.js HTML page.
+ * Failures always return JSON — never a Next.js HTML page.
  */
 export async function POST(request: Request) {
   resetPublishTrace()
@@ -32,26 +91,29 @@ export async function POST(request: Request) {
   try {
     const user = await getServerAuthUser()
     if (!user) {
-      return NextResponse.json(
+      return publishJson(
         {
+          ok: false,
           error: "Unauthorized.",
-          stage: "publish_request",
+          code: "unauthorized",
           details: { code: "unauthorized" },
+          stage: "publish_request",
         },
-        { status: 401 }
+        401
       )
     }
 
     const access = await checkSubscriptionAccess(user.id, user.email)
     if (!access.allowed) {
-      return NextResponse.json(
+      return publishJson(
         {
+          ok: false,
           error: "Start your 7-day free trial to unlock this feature.",
           code: "subscription_required",
-          stage: "publish_request",
           details: { code: "subscription_required" },
+          stage: "publish_request",
         },
-        { status: 402 }
+        402
       )
     }
 
@@ -62,24 +124,28 @@ export async function POST(request: Request) {
         marketplaceIds?: MarketplaceId[]
       }
     } catch {
-      return NextResponse.json(
+      return publishJson(
         {
+          ok: false,
           error: "Publish request body must be JSON.",
-          stage: "publish_request",
+          code: "invalid_json",
           details: { code: "invalid_json" },
+          stage: "publish_request",
         },
-        { status: 400 }
+        400
       )
     }
 
     if (!body.listing || !body.marketplaceIds?.length) {
-      return NextResponse.json(
+      return publishJson(
         {
+          ok: false,
           error: "listing and marketplaceIds are required.",
-          stage: "publish_request",
+          code: "missing_listing",
           details: { code: "missing_listing" },
+          stage: "publish_request",
         },
-        { status: 400 }
+        400
       )
     }
 
@@ -134,10 +200,9 @@ export async function POST(request: Request) {
       }
     }
 
-    return NextResponse.json({ results, listing: savedListing })
+    return publishJson({ ok: true, results, listing: savedListing })
   } catch (error) {
-    const payload = publishFailureBody(error)
-    console.error("[publish] failed", payload, error)
-    return NextResponse.json(payload, { status: 500 })
+    console.error("[publish] failed", error)
+    return publishErrorJson(error, 500)
   }
 }
